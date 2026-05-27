@@ -25,4 +25,5 @@ ln -sfn "$PROJECT_DIR/config/vide-nvim" "$XDG_CONFIG_HOME/vide-nvim"
 ln -sfn "$PROJECT_DIR/config/yazi" "$XDG_CONFIG_HOME/yazi"
 
 # Start WezTerm running Neovim, passing all command line arguments
-exec wezterm start -- nvim "$@"
+exec wezterm start --always-new-process -- nvim "$@"
+
