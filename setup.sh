@@ -89,15 +89,35 @@ chmod +x "$SOURCE_DIR/bin/vide"
 chmod +x "$SOURCE_DIR/bin/vide-open"
 
 # 8. Check and install JetBrainsMono Nerd Font
-if command -v fc-list &>/dev/null && ! fc-list : family | grep -iq "JetBrainsMono"; then
-    echo -e "${BLUE}JetBrainsMono Nerd Font not found. Downloading font...${NC}"
-    FONT_DIR="$HOME/.local/share/fonts/vide"
-    mkdir -p "$FONT_DIR"
-    curl -fLo "$FONT_DIR/JetBrainsMono.zip" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
-    unzip -oqd "$FONT_DIR" "$FONT_DIR/JetBrainsMono.zip"
-    rm "$FONT_DIR/JetBrainsMono.zip"
-    fc-cache -f "$FONT_DIR"
-    echo -e "${GREEN}Font installed and cached successfully!${NC}"
+OS_NAME="$(uname -s)"
+if [ "$OS_NAME" = "Darwin" ]; then
+    FONT_DIR="$HOME/Library/Fonts"
+    # Check if font is installed
+    if [ ! -f "$FONT_DIR/JetBrainsMonoNerdFont-Regular.ttf" ] && [ ! -f "$FONT_DIR/JetBrains Mono Regular Nerd Font Complete.ttf" ]; then
+        echo -e "${BLUE}JetBrainsMono Nerd Font not found on macOS. Downloading font...${NC}"
+        TEMP_DIR=$(mktemp -d)
+        curl -fLo "$TEMP_DIR/JetBrainsMono.zip" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
+        unzip -oqd "$TEMP_DIR" "$TEMP_DIR/JetBrainsMono.zip"
+        cp "$TEMP_DIR"/*.ttf "$FONT_DIR/"
+        rm -rf "$TEMP_DIR"
+        echo -e "${GREEN}Font installed successfully on macOS!${NC}"
+    else
+        echo -e "${GREEN}JetBrainsMono Nerd Font is already installed on macOS.${NC}"
+    fi
+else
+    # Linux
+    if command -v fc-list &>/dev/null && ! fc-list : family | grep -iq "JetBrainsMono"; then
+        echo -e "${BLUE}JetBrainsMono Nerd Font not found on Linux. Downloading font...${NC}"
+        FONT_DIR="$HOME/.local/share/fonts/vide"
+        mkdir -p "$FONT_DIR"
+        curl -fLo "$FONT_DIR/JetBrainsMono.zip" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
+        unzip -oqd "$FONT_DIR" "$FONT_DIR/JetBrainsMono.zip"
+        rm "$FONT_DIR/JetBrainsMono.zip"
+        fc-cache -f "$FONT_DIR"
+        echo -e "${GREEN}Font installed and cached successfully on Linux!${NC}"
+    else
+        echo -e "${GREEN}JetBrainsMono Nerd Font is already installed on Linux.${NC}"
+    fi
 fi
 
 # 9. Add ~/.local/bin to PATH in shell profile if missing

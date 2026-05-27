@@ -51,6 +51,56 @@ require("lazy").setup({
         }
       })
     end
+  },
+  -- Rich Visual Statusline
+  {
+    "nvim-lualine/lualine.nvim",
+    dependencies = { "nvim-tree/nvim-web-devicons" },
+    config = function()
+      require("lualine").setup({
+        options = {
+          theme = "auto",
+          component_separators = { left = "|", right = "|" },
+          section_separators = { left = "", right = "" },
+        }
+      })
+    end
+  },
+  -- Rich Tabline / Bufferline
+  {
+    "akinsho/bufferline.nvim",
+    version = "*",
+    dependencies = "nvim-tree/nvim-web-devicons",
+    config = function()
+      require("bufferline").setup({
+        options = {
+          diagnostics = "nvim_lsp",
+          offsets = {
+            {
+              filetype = "neo-tree",
+              text = "File Explorer",
+              text_align = "left",
+              separator = true
+            }
+          }
+        }
+      })
+    end
+  },
+  -- Git integration decorations
+  {
+    "lewis6991/gitsigns.nvim",
+    config = function()
+      require("gitsigns").setup()
+    end
+  },
+  -- Keybindings visual aid helper
+  {
+    "folke/which-key.nvim",
+    event = "VeryLazy",
+    config = function()
+      require("which-key").setup()
+    end
   }
 }, {})
 
@@ -182,7 +232,99 @@ end
 
 vim.keymap.set("n", "<leader>e", toggle_tree, { desc = "Toggle File Tree" })
 
+-- Onboarding Quickstart Interactive Guide
+local function open_tutorial()
+  -- Create a new buffer
+  local buf = vim.api.nvim_create_buf(false, true)
+  
+  -- Tutorial content (beautiful markdown with ASCII art)
+  local content = {
+    "  __      __ ___  ___   ___  ___  __  __ ",
+    "  \\ \\    / /|_ _||   \\ | __||_ _| \\ \\/ / ",
+    "   \\ \\/\\/ /  | | | |) || _|  | |   >  <  ",
+    "    \\_/\\_/  |___||___/ |___||___| /_/\\_\\ ",
+    "                                         ",
+    "  Welcome to Vide - The Terminal-Native IDE",
+    "  =========================================",
+    "",
+    "  Vide integrates WezTerm, Neovim, and Yazi into a single",
+    "  cohesive development environment. Here is a quick reference",
+    "  to get you started:",
+    "",
+    "  Core Mappings:",
+    "  --------------",
+    "   * <Space> e   : Toggle Left File Tree (Yazi / Neo-tree)",
+    "   * <Space> m t : Toggle IDE / Zen Mode (Zen hides Yazi & tabs)",
+    "   * <Space> ?   : Open this tutorial guide again",
+    "",
+    "  Seamless Focus Navigation:",
+    "  --------------------------",
+    "   * <Alt> + h   : Move focus to the split on the Left",
+    "   * <Alt> + j   : Move focus to the split Down",
+    "   * <Alt> + k   : Move focus to the split Up",
+    "   * <Alt> + l   : Move focus to the split on the Right",
+    "",
+    "  Dynamic Ecosystem Syncing:",
+    "  -------------------------",
+    "   * Open files in Yazi by pressing Enter. They will load",
+    "     instantly in your Neovim editor pane.",
+    "   * Change Neovim themes (e.g. `:colorscheme tokyonight-storm`)",
+    "     and WezTerm's frame color adapts dynamically.",
+    "",
+    "  [ Press 'q' or '<Esc>' to close this guide ]"
+  }
+  
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, content)
+  vim.api.nvim_buf_set_option(buf, "filetype", "markdown")
+  vim.api.nvim_buf_set_option(buf, "modifiable", false)
+  vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
 
+  -- Calculate centered position
+  local width = 64
+  local height = 24
+  local screen_width = vim.o.columns
+  local screen_height = vim.o.lines
+  local row = math.max(0, math.ceil((screen_height - height) / 2) - 1)
+  local col = math.max(0, math.ceil((screen_width - width) / 2))
 
+  local opts = {
+    style = "minimal",
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    border = "rounded",
+    title = " Vide Quickstart ",
+    title_pos = "center"
+  }
 
+  local win = vim.api.nvim_open_win(buf, true, opts)
+  
+  -- Keymaps to close the window
+  vim.api.nvim_buf_set_keymap(buf, "n", "q", ":close<CR>", { silent = true, noremap = true })
+  vim.api.nvim_buf_set_keymap(buf, "n", "<Esc>", ":close<CR>", { silent = true, noremap = true })
+end
 
+vim.keymap.set("n", "<leader>?", open_tutorial, { desc = "Show Vide Quickstart Guide" })
+
+-- First-boot check to show Quickstart automatically
+vim.api.nvim_create_autocmd("VimEnter", {
+  callback = function()
+    vim.schedule(function()
+      local onboarded_path = vim.fn.expand("~/.local/share/vide/onboarded")
+      local f_onboard = io.open(onboarded_path, "r")
+      if not f_onboard then
+        open_tutorial()
+        -- Mark as onboarded
+        local f_write = io.open(onboarded_path, "w")
+        if f_write then
+          f_write:write("true")
+          f_write:close()
+        end
+      else
+        f_onboard:close()
+      end
+    end)
+  end
+})
