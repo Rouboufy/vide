@@ -137,5 +137,21 @@ end
 
 vim.keymap.set("n", "<leader>mt", toggle_mode, { desc = "Toggle IDE/Zen Mode" })
 
+-- Smart focus navigation between Neovim splits and WezTerm panes
+local function navigate(direction, wez_dir)
+  local current_win = vim.api.nvim_get_current_win()
+  vim.cmd("wincmd " .. direction)
+  if vim.api.nvim_get_current_win() == current_win then
+    -- We hit the edge of Neovim splits, switch WezTerm pane
+    vim.fn.jobstart({ "wezterm", "cli", "activate-pane-direction", wez_dir })
+  end
+end
+
+vim.keymap.set({ "n", "t" }, "<A-h>", function() navigate("h", "Left") end, { desc = "Focus Left split/pane" })
+vim.keymap.set({ "n", "t" }, "<A-j>", function() navigate("j", "Down") end, { desc = "Focus Down split/pane" })
+vim.keymap.set({ "n", "t" }, "<A-k>", function() navigate("k", "Up") end, { desc = "Focus Up split/pane" })
+vim.keymap.set({ "n", "t" }, "<A-l>", function() navigate("l", "Right") end, { desc = "Focus Right split/pane" })
+
+
 
 

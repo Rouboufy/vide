@@ -99,6 +99,37 @@ wezterm.on("update-status", function(window, pane)
 end)
 
 
+-- Helper function to check if active pane runs Vim/Neovim
+local function is_vim(pane)
+  local process_name = pane:get_foreground_process_name()
+  if not process_name then
+    return false
+  end
+  local basename = string.gsub(process_name, "(.*[/\\])(.*)", "%2")
+  return string.find(basename, "n?vim") ~= nil
+end
+
+-- Smart pane movement direction action callback
+local function move_pane(direction, key)
+  return wezterm.action_callback(function(window, pane)
+    if is_vim(pane) then
+      -- Pass the Alt key to Neovim
+      window:perform_action(wezterm.action.SendKey{ key = key, mods = "ALT" }, pane)
+    else
+      -- Directly move focus in WezTerm
+      window:perform_action(wezterm.action.ActivatePaneDirection(direction), pane)
+    end
+  end)
+end
+
+config.keys = {
+  { key = "h", mods = "ALT", action = move_pane("Left", "h") },
+  { key = "l", mods = "ALT", action = move_pane("Right", "l") },
+  { key = "k", mods = "ALT", action = move_pane("Up", "k") },
+  { key = "j", mods = "ALT", action = move_pane("Down", "j") },
+}
+
 -- Return the configuration
 return config
+
 
