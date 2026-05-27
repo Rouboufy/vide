@@ -1,0 +1,70 @@
+#!/bin/bash
+# Vide Sidebar Manager
+# Manages the active view in the sidebar pane (Yazi, Lazygit, Search)
+
+EDITOR_PANE_ID="$1"
+if [ -z "$EDITOR_PANE_ID" ]; then
+  echo "Error: Editor Pane ID is required"
+  exit 1
+fi
+
+PIPE="/tmp/vide_sidebar_${EDITOR_PANE_ID}.pipe"
+rm -f "$PIPE"
+# Create pipe with user-only permissions
+mkfifo "$PIPE"
+chmod 600 "$PIPE"
+
+# Keep the pipe open for reading/writing on FD 3 to prevent EOF hangs
+exec 3<> "$PIPE"
+
+current_mode="explorer"
+child_pid=""
+
+cleanup() {
+  if [ -n "$child_pid" ]; then
+    kill "$child_pid" 2>/dev/null || true
+  fi
+  rm -f "$PIPE"
+  exit 0
+}
+trap cleanup EXIT INT TERM
+
+run_tool() {
+  case "$1" in
+    explorer)
+      # Run Yazi in single panel mode
+      YAZI_ID="vide_yazi_${EDITOR_PANE_ID}" yazi
+      ;;
+    git)
+      # Run Lazygit
+      lazygit
+      ;;
+    search)
+      # Run interactive fzf search
+      YAZI_ID="vide_yazi_${EDITOR_PANE_ID}" vide-search-fzf
+      ;;
+  esac
+}
+
+# Initial spawn
+run_tool "$current_mode" &
+child_pid=$!
+
+# Read commands from the pipe
+while read -r cmd <&3; do
+  # Trim whitespace
+  cmd=$(echo "$cmd" | xargs)
+  
+  if [ -n "$cmd" ] && [ "$cmd" != "$current_mode" ]; then
+    # Kill the current tool
+    if [ -n "$child_pid" ]; then
+      kill "$child_pid" 2>/dev/null || true
+      wait "$child_pid" 2>/dev/null || true
+    fi
+    
+    # Update and run the new tool
+    current_mode="$cmd"
+    run_tool "$current_mode" &
+    child_pid=$!
+  fi
+done

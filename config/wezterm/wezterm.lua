@@ -5,20 +5,50 @@ local config = wezterm.config_builder()
 -- Disable native Wayland to resolve startup hangs on certain graphics drivers (forces XWayland)
 config.enable_wayland = false
 
+-- Define custom Visual Studio Code colorscheme
+config.color_schemes = {
+  ["Visual Studio Code"] = {
+    background = "#1e1e1e",
+    foreground = "#d4d4d4",
+    cursor_bg = "#aeafad",
+    cursor_fg = "#1e1e1e",
+    cursor_border = "#aeafad",
+    selection_bg = "#264f78",
+    selection_fg = "#ffffff",
+    ansi = {
+      "#1e1e1e", "#f44747", "#6a9955", "#d7ba7d",
+      "#569cd6", "#c586c0", "#4fc1ff", "#d4d4d4"
+    },
+    brights = {
+      "#808080", "#f44747", "#6a9955", "#d7ba7d",
+      "#569cd6", "#c586c0", "#4fc1ff", "#ffffff"
+    }
+  }
+}
 
--- GUI Startup Event: Handles splitting the main window
+-- Default to VSCode theme
+config.color_scheme = "Visual Studio Code"
+
+-- Disable WezTerm's own tab bar entirely to let Neovim's bufferline handle tabs
+config.use_tab_bar = false
+
+-- GUI Startup Event: Handles splitting the main window (VSCode style)
 wezterm.on("gui-startup", function(cmd)
   local tab, pane, window = mux.spawn_window(cmd or {})
   local pane_id = pane:pane_id()
   
-  -- Split vertical pane to the left (15% width) to run Yazi file explorer
-  local yazi_pane = pane:split {
+  -- Split vertical pane to the left (18% width) for the sidebar manager
+  local sidebar_pane = pane:split {
+    direction = "Left",
+    size = 0.18,
+    args = { wezterm.home_dir .. "/.local/bin/vide-sidebar", tostring(pane_id) }
+  }
+  
+  -- Split the sidebar vertical pane to the left (15% width of 18% = ~3 columns) to run the Activity Bar
+  local activity_pane = sidebar_pane:split {
     direction = "Left",
     size = 0.15,
-    args = { "yazi" },
-    set_environment_variables = {
-      YAZI_ID = "vide_yazi_" .. tostring(pane_id)
-    }
+    args = { "python3", wezterm.home_dir .. "/.local/bin/vide-activity-bar", tostring(pane_id) }
   }
   
   -- Ensure editing pane (Neovim) holds key focus
@@ -100,22 +130,7 @@ wezterm.on("update-status", function(window, pane)
     end
   end
 
-  -- Read layout state written by Neovim
-  local layout_path = wezterm.home_dir .. "/.local/share/vide/layout.state"
-  local layout_file = io.open(layout_path, "r")
-  if layout_file then
-    local layout = layout_file:read("*l")
-    layout_file:close()
-    if layout and layout ~= last_layout then
-      last_layout = layout
-      if layout == "zen" then
-        overrides.enable_tab_bar = false
-      else
-        overrides.enable_tab_bar = true
-      end
-      changed = true
-    end
-  end
+  -- No WezTerm tab bar is used, Neovim's bufferline handles tabs.
 
   if changed then
     window:set_config_overrides(overrides)

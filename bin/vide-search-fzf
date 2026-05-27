@@ -1,0 +1,37 @@
+#!/bin/bash
+# Interactive Ripgrep search inside files for Vide
+# Press Enter to open the selected line in Neovim
+
+# Set the nvim pane ID based on YAZI_ID
+EDITOR_PANE_ID="${YAZI_ID#vide_yazi_}"
+
+# We use fzf to search text live with ripgrep
+RG_PREFIX="rg --column --line-number --no-heading --color=always --smart-case "
+
+selected=$(fzf --ansi --disabled \
+               --layout=reverse --border=none --info=inline \
+               --prompt="Search Text > " \
+               --bind "start:reload:$RG_PREFIX ''" \
+               --bind "change:reload:$RG_PREFIX {q} || true" \
+               --preview 'file=$(echo {} | cut -d: -f1); line=$(echo {} | cut -d: -f2); bat --style=numbers --color=always --highlight-line "$line" "$file" 2>/dev/null || cat "$file" 2>/dev/null' \
+               --preview-window 'up:60%')
+
+if [ -n "$selected" ]; then
+  file=$(echo "$selected" | cut -d: -f1)
+  line=$(echo "$selected" | cut -d: -f2)
+  col=$(echo "$selected" | cut -d: -f3)
+  
+  if [ -n "$EDITOR_PANE_ID" ]; then
+    PIPE_PATH="/tmp/vide_nvim_${EDITOR_PANE_ID}.pipe"
+    if [ -S "$PIPE_PATH" ]; then
+      FILE_PATH="$(realpath "$file")"
+      # Send remote command to edit and go to line/col
+      nvim --server "$PIPE_PATH" --remote-send "<C-\><C-N>:edit ${FILE_PATH}<CR>:call cursor(${line}, ${col})<CR>"
+      wezterm cli activate-pane --pane-id "$EDITOR_PANE_ID"
+      exit 0
+    fi
+  fi
+  
+  # Fallback
+  exec nvim "+${line}" "$file"
+fi

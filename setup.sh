@@ -85,8 +85,16 @@ ln -sfn "$SOURCE_DIR/config/yazi" "$XDG_CONFIG_HOME/yazi"
 
 # 7. Symlink wrapper launcher binary
 ln -sfn "$SOURCE_DIR/bin/vide" "$HOME/.local/bin/vide"
+ln -sfn "$SOURCE_DIR/bin/vide-open" "$HOME/.local/bin/vide-open"
+ln -sfn "$SOURCE_DIR/bin/vide-activity-bar" "$HOME/.local/bin/vide-activity-bar"
+ln -sfn "$SOURCE_DIR/bin/vide-sidebar" "$HOME/.local/bin/vide-sidebar"
+ln -sfn "$SOURCE_DIR/bin/vide-search-fzf" "$HOME/.local/bin/vide-search-fzf"
+
 chmod +x "$SOURCE_DIR/bin/vide"
 chmod +x "$SOURCE_DIR/bin/vide-open"
+chmod +x "$SOURCE_DIR/bin/vide-activity-bar"
+chmod +x "$SOURCE_DIR/bin/vide-sidebar"
+chmod +x "$SOURCE_DIR/bin/vide-search-fzf"
 
 # 8. Check and install JetBrainsMono Nerd Font
 OS_NAME="$(uname -s)"

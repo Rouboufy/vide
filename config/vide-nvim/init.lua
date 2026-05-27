@@ -206,6 +206,17 @@ end, { silent = true, desc = "Previous Tab" })
 -- Search Hotkey: Ctrl+F opens search
 vim.keymap.set({ "i", "n", "v", "s" }, "<C-f>", "<Esc>/", { desc = "Search / Find" })
 
+-- Tab Creation Hotkeys: Ctrl+T or Ctrl+N opens a new Neovim buffer
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-t>", function()
+  vim.cmd("enew")
+  vim.cmd("startinsert")
+end, { silent = true, desc = "New Tab/Buffer" })
+
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-n>", function()
+  vim.cmd("enew")
+  vim.cmd("startinsert")
+end, { silent = true, desc = "New Tab/Buffer" })
+
 -- Start RPC Server based on WezTerm Pane ID
 local nvim_pane_id = vim.env.WEZTERM_PANE
 if nvim_pane_id then
@@ -263,20 +274,22 @@ local function toggle_mode()
   -- Adjust splits based on the mode
   if nvim_pane_id then
     if next_mode == "zen" then
-      -- Find left pane (Yazi)
-      local handle = io.popen("wezterm cli get-pane-direction Left 2>/dev/null")
-      if handle then
-        local left_pane_id = handle:read("*l")
-        handle:close()
-        if left_pane_id and left_pane_id ~= "" then
-          vim.fn.jobstart({ "wezterm", "cli", "kill-pane", "--pane-id", left_pane_id })
+      -- Close both left splits (Sidebar and Activity Bar)
+      for i = 1, 2 do
+        local handle = io.popen("wezterm cli get-pane-direction Left 2>/dev/null")
+        if handle then
+          local left_pane_id = handle:read("*l")
+          handle:close()
+          if left_pane_id and left_pane_id ~= "" then
+            vim.fn.jobstart({ "wezterm", "cli", "kill-pane", "--pane-id", left_pane_id })
+          end
         end
       end
     else
-      -- Re-spawn left pane split running Yazi
+      -- Re-spawn the sidebar splits (Sidebar and Activity Bar)
       vim.fn.jobstart({
         "bash", "-c",
-        "wezterm cli split-pane --left --percent 15 -- bash -c 'YAZI_ID=vide_yazi_" .. nvim_pane_id .. " yazi' && wezterm cli activate-pane --pane-id " .. nvim_pane_id
+        "wezterm cli split-pane --left --percent 18 -- " .. vim.env.HOME .. "/.local/bin/vide-sidebar " .. nvim_pane_id .. " && wezterm cli activate-pane-direction Left && wezterm cli split-pane --left --percent 15 -- python3 " .. vim.env.HOME .. "/.local/bin/vide-activity-bar " .. nvim_pane_id .. " && wezterm cli activate-pane --pane-id " .. nvim_pane_id
       }, {
         on_exit = function()
           -- Automatically synchronize tree to current directory after split opens

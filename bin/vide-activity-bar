@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+import sys
+import os
+import curses
+
+def main(stdscr):
+    # Setup curses
+    curses.use_default_colors()
+    curses.curs_set(0) # Hide cursor
+    stdscr.keypad(True)
+    
+    # Enable mouse events
+    curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+    
+    editor_pane_id = sys.argv[1] if len(sys.argv) > 1 else "default"
+    pipe_path = f"/tmp/vide_sidebar_{editor_pane_id}.pipe"
+    
+    # Modes list (matches VSCode Activity Bar options)
+    modes = ["explorer", "git", "search"]
+    icons = ["󰙅", "", ""]
+    active_idx = 0
+    
+    # Wait for the pipe to be created by the sidebar script
+    # Loop and write initial state once the pipe is active
+    try:
+        if os.path.exists(pipe_path):
+            fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(fd, modes[active_idx].encode())
+            os.close(fd)
+    except:
+        pass
+        
+    while True:
+        stdscr.clear()
+        
+        # Draw icons (spaced out vertically like VSCode)
+        for i, icon in enumerate(icons):
+            y = 1 + i * 3
+            if i == active_idx:
+                stdscr.attron(curses.A_REVERSE)
+                stdscr.addstr(y, 1, f" {icon} ")
+                stdscr.attroff(curses.A_REVERSE)
+            else:
+                stdscr.addstr(y, 1, f" {icon} ")
+                
+        stdscr.refresh()
+        
+        # Read user interaction
+        key = stdscr.getch()
+        
+        if key == ord('q'):
+            break
+        elif key == curses.KEY_MOUSE:
+            try:
+                _, mx, my, _, bstate = curses.getmouse()
+                clicked_idx = -1
+                if 0 <= my <= 2:
+                    clicked_idx = 0
+                elif 3 <= my <= 5:
+                    clicked_idx = 1
+                elif 6 <= my <= 8:
+                    clicked_idx = 2
+                    
+                if clicked_idx != -1 and clicked_idx != active_idx:
+                    active_idx = clicked_idx
+                    if os.path.exists(pipe_path):
+                        fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+                        os.write(fd, modes[active_idx].encode())
+                        os.close(fd)
+            except Exception as e:
+                pass
+        elif key == ord('1'):
+            active_idx = 0
+            if os.path.exists(pipe_path):
+                fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+                os.write(fd, modes[active_idx].encode())
+                os.close(fd)
+        elif key == ord('2'):
+            active_idx = 1
+            if os.path.exists(pipe_path):
+                fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+                os.write(fd, modes[active_idx].encode())
+                os.close(fd)
+        elif key == ord('3'):
+            active_idx = 2
+            if os.path.exists(pipe_path):
+                fd = os.open(pipe_path, os.O_WRONLY | os.O_NONBLOCK)
+                os.write(fd, modes[active_idx].encode())
+                os.close(fd)
+
+if __name__ == "__main__":
+    curses.wrapper(main)
