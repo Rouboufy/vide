@@ -1,0 +1,26 @@
+#!/bin/bash
+# Resolve script path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Define isolated variables
+export XDG_CONFIG_HOME="$HOME/.config/vide"
+export NVIM_APPNAME="vide-nvim"
+export YAZI_CONFIG_HOME="$HOME/.config/vide/yazi"
+export XDG_DATA_HOME="$HOME/.local/share/vide"
+export XDG_STATE_HOME="$HOME/.local/state/vide"
+export XDG_CACHE_HOME="$HOME/.cache/vide"
+
+# Ensure target directories exist
+mkdir -p "$XDG_CONFIG_HOME"
+mkdir -p "$XDG_DATA_HOME"
+mkdir -p "$XDG_STATE_HOME"
+mkdir -p "$XDG_CACHE_HOME"
+
+# Link configuration directories
+ln -sfn "$PROJECT_DIR/config/wezterm" "$XDG_CONFIG_HOME/wezterm"
+ln -sfn "$PROJECT_DIR/config/vide-nvim" "$XDG_CONFIG_HOME/vide-nvim"
+ln -sfn "$PROJECT_DIR/config/yazi" "$XDG_CONFIG_HOME/yazi"
+
+# Start WezTerm running Neovim, passing all command line arguments
+exec wezterm start -- nvim "$@"
