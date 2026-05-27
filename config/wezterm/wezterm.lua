@@ -65,6 +65,11 @@ config.window_padding = {
   bottom = 0,
 }
 
+-- Typography (JetBrainsMono + Ligatures)
+config.font = wezterm.font("JetBrainsMono Nerd Font", { weight = "Regular" })
+config.font_size = 13.0
+config.harfbuzz_features = { "calt=1", "clig=1", "liga=1" }
+
 -- Theme Mapping Table: Neovim colorscheme -> WezTerm colorscheme
 local theme_map = {
   ["catppuccin-latte"] = "Catppuccin Latte",

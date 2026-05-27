@@ -58,11 +58,39 @@ require("lazy").setup({
     "nvim-lualine/lualine.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
+      -- Custom theme for VSCode status bar coloring
+      local custom_vscode_theme = {
+        normal = {
+          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
+          b = { fg = "#FFFFFF", bg = "#252526" },
+          c = { fg = "#FFFFFF", bg = "#252526" },
+        },
+        insert = {
+          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
+        },
+        visual = {
+          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
+        },
+        replace = {
+          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
+        },
+        inactive = {
+          c = { fg = "#858585", bg = "#252526" },
+        },
+      }
       require("lualine").setup({
         options = {
-          theme = "auto",
+          theme = custom_vscode_theme,
           component_separators = { left = "", right = "" },
           section_separators = { left = "", right = "" },
+        },
+        sections = {
+          lualine_a = { "mode" },
+          lualine_b = { "branch", "diff" },
+          lualine_c = { { "filename", path = 1 } },
+          lualine_x = { "diagnostics", "encoding", "fileformat", "filetype" },
+          lualine_y = { "progress" },
+          lualine_z = { "location" },
         }
       })
     end
@@ -105,6 +133,63 @@ require("lazy").setup({
     event = "VeryLazy",
     config = function()
       require("which-key").setup()
+    end
+  },
+  -- Telescope search engine
+  {
+    "nvim-telescope/telescope.nvim",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    config = function()
+      require("telescope").setup()
+    end
+  },
+  -- Indentation Guides
+  {
+    "lukas-reineke/indent-blankline.nvim",
+    main = "ibl",
+    config = function()
+      require("ibl").setup({
+        indent = { char = "│" },
+        scope = { enabled = false },
+      })
+    end
+  },
+  -- Winbar breadcrumbs
+  {
+    "utilyre/barbecue.nvim",
+    name = "barbecue",
+    version = "*",
+    dependencies = {
+      "SmiteshP/nvim-navic",
+      "nvim-tree/nvim-web-devicons",
+    },
+    config = function()
+      require("barbecue").setup()
+    end
+  },
+  -- Dashboard / Welcome Screen
+  {
+    "goolord/alpha-nvim",
+    dependencies = { "nvim-tree/nvim-web-devicons" },
+    config = function()
+      local alpha = require("alpha")
+      local dashboard = require("alpha.themes.dashboard")
+      dashboard.section.header.val = {
+        "                    ██╗   ██╗██╗██████╗ ███████╗",
+        "                    ██║   ██║██║██╔══██╗██╔════╝",
+        "                    ██║   ██║██║██║  ██║█████╗  ",
+        "                    ╚██╗ ██╔╝██║██║  ██║██╔══╝  ",
+        "                     ╚████╔╝ ██║██████╔╝███████╗",
+        "                      ╚═══╝  ╚═╝╚═════╝ ╚══════╝",
+      }
+      dashboard.section.buttons.val = {
+        dashboard.button("Space Space", "󰍉  Show All Commands", "<cmd>Telescope builtin<CR>"),
+        dashboard.button("Space f f", "󰱼  Find Files", "<cmd>Telescope find_files<CR>"),
+        dashboard.button("Space f r", "󰒲  Open Recent", "<cmd>Telescope oldfiles<CR>"),
+        dashboard.button("Space ,", "󰘵  Open Settings", "<cmd>edit ~/.config/vide/vide-nvim/init.lua<CR>"),
+        dashboard.button("Ctrl + N", "󰈔  New File", "<cmd>enew<CR>"),
+      }
+      alpha.setup(dashboard.opts)
     end
   }
 }, {})
@@ -216,6 +301,31 @@ vim.keymap.set({ "n", "i", "v", "s" }, "<C-n>", function()
   vim.cmd("enew")
   vim.cmd("startinsert")
 end, { silent = true, desc = "New Tab/Buffer" })
+
+-- Telescope Search Shortcuts
+vim.keymap.set("n", "<leader><leader>", "<cmd>Telescope builtin<CR>", { desc = "Show All Commands" })
+vim.keymap.set("n", "<leader>ff", "<cmd>Telescope find_files<CR>", { desc = "Find Files" })
+vim.keymap.set("n", "<leader>fr", "<cmd>Telescope oldfiles<CR>", { desc = "Open Recent" })
+vim.keymap.set("n", "<leader>,", "<cmd>edit ~/.config/vide/vide-nvim/init.lua<CR>", { desc = "Open Settings" })
+
+-- Toggle Bottom Terminal Panel (VSCode style, height 180px / 10 lines)
+local function toggle_bottom_panel()
+  local found = false
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].buftype == "terminal" or vim.bo[buf].filetype == "toggleterm" then
+      vim.api.nvim_win_close(win, true)
+      found = true
+      break
+    end
+  end
+  if not found then
+    vim.cmd("botright split | resize 10 | terminal")
+    vim.cmd("startinsert")
+  end
+end
+
+vim.keymap.set({ "n", "i", "v", "s" }, "<leader>j", toggle_bottom_panel, { desc = "Toggle Bottom Panel" })
 
 -- Start RPC Server based on WezTerm Pane ID
 local nvim_pane_id = vim.env.WEZTERM_PANE
