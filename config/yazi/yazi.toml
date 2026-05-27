@@ -12,6 +12,6 @@ edit = [
 
 [open]
 rules = [
-  { name = "*", use = "edit" }
+  { mime = "*", use = "edit" }
 ]
 
