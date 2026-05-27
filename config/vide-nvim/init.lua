@@ -28,5 +28,29 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
--- Setup lazy.nvim with placeholder empty list for initial load test
-require("lazy").setup({}, {})
+-- Setup lazy.nvim with theme plugins
+require("lazy").setup({
+  { "catppuccin/nvim", name = "catppuccin", priority = 1000 },
+  { "folke/tokyonight.nvim", priority = 1000 },
+  { "rose-pine/neovim", name = "rose-pine", priority = 1000 },
+  { "rebelot/kanagawa.nvim", priority = 1000 },
+}, {})
+
+-- Hook to write active colorscheme to file
+vim.api.nvim_create_autocmd("ColorScheme", {
+  callback = function()
+    local theme = vim.g.colors_name
+    if theme then
+      local state_path = vim.fn.expand("~/.local/share/vide/theme.state")
+      local f = io.open(state_path, "w")
+      if f then
+        f:write(theme)
+        f:close()
+      end
+    end
+  end
+})
+
+-- Load default colorscheme
+vim.cmd("colorscheme catppuccin-mocha")
+
