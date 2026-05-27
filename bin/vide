@@ -10,6 +10,8 @@ export YAZI_CONFIG_HOME="$HOME/.config/vide/yazi"
 export XDG_DATA_HOME="$HOME/.local/share/vide"
 export XDG_STATE_HOME="$HOME/.local/state/vide"
 export XDG_CACHE_HOME="$HOME/.cache/vide"
+export PATH="$SCRIPT_DIR:$PATH"
+
 
 # Ensure target directories exist
 mkdir -p "$XDG_CONFIG_HOME"

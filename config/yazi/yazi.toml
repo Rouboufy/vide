@@ -4,3 +4,14 @@ show_hidden = false
 show_symlink = true
 scrolloff = 5
 mouse_events = [ "click", "scroll" ]
+
+[opener]
+edit = [
+  { run = 'vide-open "$@"', block = true, desc = "Open in Vide" }
+]
+
+[open]
+rules = [
+  { name = "*", use = "edit" }
+]
+

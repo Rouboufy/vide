@@ -1,5 +1,26 @@
 local wezterm = require("wezterm")
+local mux = wezterm.mux
 local config = wezterm.config_builder()
+
+-- GUI Startup Event: Handles splitting the main window
+wezterm.on("gui-startup", function(cmd)
+  local tab, pane, window = mux.spawn_window(cmd or {})
+  local pane_id = pane:pane_id()
+  
+  -- Split vertical pane to the left (15% width) to run Yazi file explorer
+  local yazi_pane = pane:split {
+    direction = "Left",
+    size = 0.15,
+    args = { "yazi" },
+    set_environment_variables = {
+      YAZI_ID = "vide_yazi_" .. tostring(pane_id)
+    }
+  }
+  
+  -- Ensure editing pane (Neovim) holds key focus
+  pane:activate()
+end)
+
 
 -- Window styling
 config.window_decorations = "NONE" -- Hides window controls and borders

@@ -54,3 +54,31 @@ vim.api.nvim_create_autocmd("ColorScheme", {
 -- Load default colorscheme
 vim.cmd("colorscheme catppuccin-mocha")
 
+-- Start RPC Server based on WezTerm Pane ID
+local nvim_pane_id = vim.env.WEZTERM_PANE
+if nvim_pane_id then
+  local pipe_path = "/tmp/vide_nvim_" .. nvim_pane_id .. ".pipe"
+  pcall(vim.fn.serverstart, pipe_path)
+end
+
+-- Sync Neovim directory changes to Yazi file explorer
+local function sync_to_yazi()
+  if not nvim_pane_id then return end
+  local file_path = vim.api.nvim_buf_get_name(0)
+  local dir
+  if file_path ~= "" and vim.bo.buftype == "" then
+    dir = vim.fn.fnamemodify(file_path, ":p:h")
+  elseif vim.bo.buftype == "" then
+    dir = vim.fn.getcwd()
+  end
+  if dir and vim.fn.isdirectory(dir) == 1 then
+    local target_yazi = "vide_yazi_" .. nvim_pane_id
+    vim.fn.jobstart({ "ya", "emit-to", target_yazi, "cd", dir }, { detach = true })
+  end
+end
+
+vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
+  callback = sync_to_yazi
+})
+
+
