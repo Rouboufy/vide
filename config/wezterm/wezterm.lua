@@ -30,7 +30,7 @@ config.color_schemes = {
 config.color_scheme = "Visual Studio Code"
 
 -- Disable WezTerm's own tab bar entirely to let Neovim's bufferline handle tabs
-config.use_tab_bar = false
+config.enable_tab_bar = false
 
 -- GUI Startup Event: Handles splitting the main window (VSCode style)
 wezterm.on("gui-startup", function(cmd)
