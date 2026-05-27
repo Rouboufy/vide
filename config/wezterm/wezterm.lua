@@ -49,10 +49,14 @@ local theme_map = {
   ["cyberdream"] = "Cyberdream",
 }
 
--- State variables to track theme checks
+-- State variables to track theme and layout checks
 local last_theme = nil
+local last_layout = nil
 
 wezterm.on("update-status", function(window, pane)
+  local overrides = window:get_config_overrides() or {}
+  local changed = false
+
   -- Read colorscheme state written by Neovim
   local state_path = wezterm.home_dir .. "/.local/share/vide/theme.state"
   local file = io.open(state_path, "r")
@@ -63,12 +67,33 @@ wezterm.on("update-status", function(window, pane)
       last_theme = theme
       -- Resolve WezTerm equivalent theme name
       local wez_theme = theme_map[theme] or "Catppuccin Mocha"
-      local overrides = window:get_config_overrides() or {}
       overrides.color_scheme = wez_theme
-      window:set_config_overrides(overrides)
+      changed = true
     end
   end
+
+  -- Read layout state written by Neovim
+  local layout_path = wezterm.home_dir .. "/.local/share/vide/layout.state"
+  local layout_file = io.open(layout_path, "r")
+  if layout_file then
+    local layout = layout_file:read("*l")
+    layout_file:close()
+    if layout and layout ~= last_layout then
+      last_layout = layout
+      if layout == "zen" then
+        overrides.enable_tab_bar = false
+      else
+        overrides.enable_tab_bar = true
+      end
+      changed = true
+    end
+  end
+
+  if changed then
+    window:set_config_overrides(overrides)
+  end
 end)
+
 
 -- Return the configuration
 return config

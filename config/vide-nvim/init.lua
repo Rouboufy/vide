@@ -81,4 +81,61 @@ vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
   callback = sync_to_yazi
 })
 
+-- Initialize layout state to IDE mode on boot
+local layout_state_path = vim.fn.expand("~/.local/share/vide/layout.state")
+local f = io.open(layout_state_path, "w")
+if f then
+  f:write("ide")
+  f:close()
+end
+
+-- Toggle layout mode function
+local function toggle_mode()
+  -- Read current layout mode
+  local current_mode = "ide"
+  local rf = io.open(layout_state_path, "r")
+  if rf then
+    current_mode = rf:read("*l") or "ide"
+    rf:close()
+  end
+  
+  local next_mode = (current_mode == "ide") and "zen" or "ide"
+  
+  -- Write next layout mode
+  local wf = io.open(layout_state_path, "w")
+  if wf then
+    wf:write(next_mode)
+    wf:close()
+  end
+  
+  -- Adjust splits based on the mode
+  if nvim_pane_id then
+    if next_mode == "zen" then
+      -- Find left pane (Yazi)
+      local handle = io.popen("wezterm cli get-pane-direction Left 2>/dev/null")
+      if handle then
+        local left_pane_id = handle:read("*l")
+        handle:close()
+        if left_pane_id and left_pane_id ~= "" then
+          vim.fn.jobstart({ "wezterm", "cli", "kill-pane", "--pane-id", left_pane_id })
+        end
+      end
+    else
+      -- Re-spawn left pane split running Yazi
+      vim.fn.jobstart({
+        "bash", "-c",
+        "wezterm cli split-pane --left --percent 15 -- bash -c 'YAZI_ID=vide_yazi_" .. nvim_pane_id .. " yazi' && wezterm cli activate-pane --pane-id " .. nvim_pane_id
+      }, {
+        on_exit = function()
+          -- Automatically synchronize tree to current directory after split opens
+          sync_to_yazi()
+        end
+      })
+    end
+  end
+end
+
+vim.keymap.set("n", "<leader>mt", toggle_mode, { desc = "Toggle IDE/Zen Mode" })
+
+
 
