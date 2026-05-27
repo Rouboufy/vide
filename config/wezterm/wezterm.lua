@@ -2,6 +2,10 @@ local wezterm = require("wezterm")
 local mux = wezterm.mux
 local config = wezterm.config_builder()
 
+-- Disable native Wayland to resolve startup hangs on certain graphics drivers (forces XWayland)
+config.enable_wayland = false
+
+
 -- GUI Startup Event: Handles splitting the main window
 wezterm.on("gui-startup", function(cmd)
   local tab, pane, window = mux.spawn_window(cmd or {})
