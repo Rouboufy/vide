@@ -28,13 +28,32 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
--- Setup lazy.nvim with theme plugins
+-- Setup lazy.nvim with theme and utility plugins
 require("lazy").setup({
   { "catppuccin/nvim", name = "catppuccin", priority = 1000 },
   { "folke/tokyonight.nvim", priority = 1000 },
   { "rose-pine/neovim", name = "rose-pine", priority = 1000 },
   { "rebelot/kanagawa.nvim", priority = 1000 },
+  -- Fallback file explorer for SSH/remote sessions
+  {
+    "nvim-neo-tree/neo-tree.nvim",
+    branch = "v3.x",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-tree/nvim-web-devicons",
+      "MunifTanjim/nui.nvim",
+    },
+    config = function()
+      require("neo-tree").setup({
+        close_if_last_window = true,
+        window = {
+          width = 25,
+        }
+      })
+    end
+  }
 }, {})
+
 
 -- Hook to write active colorscheme to file
 vim.api.nvim_create_autocmd("ColorScheme", {
@@ -151,6 +170,18 @@ vim.keymap.set({ "n", "t" }, "<A-h>", function() navigate("h", "Left") end, { de
 vim.keymap.set({ "n", "t" }, "<A-j>", function() navigate("j", "Down") end, { desc = "Focus Down split/pane" })
 vim.keymap.set({ "n", "t" }, "<A-k>", function() navigate("k", "Up") end, { desc = "Focus Up split/pane" })
 vim.keymap.set({ "n", "t" }, "<A-l>", function() navigate("l", "Right") end, { desc = "Focus Right split/pane" })
+
+-- Conditional File Explorer Toggle (Yazi splits locally, Neo-tree over SSH/remote)
+local function toggle_tree()
+  if nvim_pane_id then
+    toggle_mode()
+  else
+    vim.cmd("Neotree toggle")
+  end
+end
+
+vim.keymap.set("n", "<leader>e", toggle_tree, { desc = "Toggle File Tree" })
+
 
 
 
