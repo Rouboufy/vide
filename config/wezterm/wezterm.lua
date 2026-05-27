@@ -51,6 +51,7 @@ local theme_map = {
   ["kanagawa"] = "Kanagawa Dragon",
   ["nord"] = "Nord",
   ["cyberdream"] = "Cyberdream",
+  ["vscode"] = "Visual Studio Code",
 }
 
 -- State variables to track theme and layout checks
@@ -72,6 +73,29 @@ wezterm.on("update-status", function(window, pane)
       -- Resolve WezTerm equivalent theme name
       local wez_theme = theme_map[theme] or "Catppuccin Mocha"
       overrides.color_scheme = wez_theme
+      
+      -- If theme is VSCode, apply exact color overrides to match VSCode's editor look perfectly
+      if theme == "vscode" then
+        overrides.colors = {
+          background = "#1e1e1e",
+          foreground = "#d4d4d4",
+          cursor_bg = "#aeafad",
+          cursor_fg = "#1e1e1e",
+          cursor_border = "#aeafad",
+          selection_bg = "#264f78",
+          selection_fg = "#ffffff",
+          ansi = {
+            "#1e1e1e", "#f44747", "#6a9955", "#d7ba7d",
+            "#569cd6", "#c586c0", "#4fc1ff", "#d4d4d4"
+          },
+          brights = {
+            "#808080", "#f44747", "#6a9955", "#d7ba7d",
+            "#569cd6", "#c586c0", "#4fc1ff", "#ffffff"
+          }
+        }
+      else
+        overrides.colors = nil
+      end
       changed = true
     end
   end

@@ -4,6 +4,7 @@ show_hidden = false
 show_symlink = true
 scrolloff = 5
 mouse_events = [ "click", "scroll" ]
+layout = [ 0, 1, 0 ]
 
 [opener]
 edit = [

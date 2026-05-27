@@ -34,6 +34,7 @@ require("lazy").setup({
   { "folke/tokyonight.nvim", priority = 1000 },
   { "rose-pine/neovim", name = "rose-pine", priority = 1000 },
   { "rebelot/kanagawa.nvim", priority = 1000 },
+  { "Mofiqul/vscode.nvim", priority = 1000 },
   -- Fallback file explorer for SSH/remote sessions
   {
     "nvim-neo-tree/neo-tree.nvim",
@@ -60,7 +61,7 @@ require("lazy").setup({
       require("lualine").setup({
         options = {
           theme = "auto",
-          component_separators = { left = "|", right = "|" },
+          component_separators = { left = "", right = "" },
           section_separators = { left = "", right = "" },
         }
       })
@@ -75,6 +76,10 @@ require("lazy").setup({
       require("bufferline").setup({
         options = {
           diagnostics = "nvim_lsp",
+          separator_style = "thin",
+          show_buffer_close_icons = true,
+          show_close_icon = false,
+          always_show_bufferline = true,
           offsets = {
             {
               filetype = "neo-tree",
@@ -121,7 +126,85 @@ vim.api.nvim_create_autocmd("ColorScheme", {
 })
 
 -- Load default colorscheme
-vim.cmd("colorscheme catppuccin-mocha")
+vim.cmd("colorscheme vscode")
+
+-- Enable standard selection and input behavior (VSCode/Windows style)
+vim.opt.selectmode = "mouse,key"
+vim.opt.keymodel = "startsel,stopsel"
+
+-- Clipboard Actions (Ctrl+C: Copy, Ctrl+V: Paste, Ctrl+X: Cut)
+vim.keymap.set({"v", "s"}, "<C-c>", '"+y', { noremap = true, desc = "Copy Selection" })
+vim.keymap.set({"v", "s"}, "<C-x>", '"+x', { noremap = true, desc = "Cut Selection" })
+
+-- Paste in Insert mode and Command line / Visual / Select modes
+vim.keymap.set("i", "<C-v>", '<C-r>+', { noremap = true, desc = "Paste Clipboard" })
+vim.keymap.set({"v", "s"}, "<C-v>", '"+p', { noremap = true, desc = "Paste Clipboard" })
+vim.keymap.set("c", "<C-v>", '<C-r>+', { noremap = true, desc = "Paste Clipboard" })
+
+-- Undo / Redo (Ctrl+Z: Undo, Ctrl+Y: Redo)
+vim.keymap.set({"i", "n", "v", "s"}, "<C-z>", function()
+  vim.cmd("undo")
+  vim.cmd("startinsert")
+end, { silent = true, desc = "Undo" })
+
+vim.keymap.set({"i", "n", "v", "s"}, "<C-y>", function()
+  vim.cmd("redo")
+  vim.cmd("startinsert")
+end, { silent = true, desc = "Redo" })
+
+-- Select All (Ctrl+A)
+vim.keymap.set({"i", "n", "v", "s"}, "<C-a>", function()
+  vim.cmd("normal! ggVG")
+end, { silent = true, desc = "Select All" })
+
+-- Auto-enter Insert Mode on all text buffers
+vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "VimEnter" }, {
+  callback = function()
+    -- Only enter insert mode for regular files/editable buffers
+    if vim.bo.buftype == "" and vim.bo.filetype ~= "neo-tree" and vim.bo.filetype ~= "markdown" then
+      vim.cmd("startinsert")
+    end
+  end
+})
+
+-- Block escaping to Normal Mode inside Insert Mode to avoid mode confusion
+vim.keymap.set("i", "<Esc>", "<Nop>")
+vim.keymap.set("i", "<C-[>", "<Nop>")
+
+-- Visual/Select mode: Esc clears selection and returns to Insert Mode
+vim.keymap.set("v", "<Esc>", "<Esc>i", { silent = true })
+vim.keymap.set("s", "<Esc>", "<Esc>i", { silent = true })
+
+-- Standard Editor Hotkeys (Global/Insert/Visual/Select modes)
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-s>", function()
+  vim.cmd("write")
+  vim.cmd("startinsert")
+end, { silent = true, desc = "Save File" })
+
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-q>", function()
+  vim.cmd("qa!")
+end, { silent = true, desc = "Force Quit Vide" })
+
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-w>", function()
+  local bufs = vim.fn.getbufinfo({ buflisted = 1 })
+  if #bufs > 1 then
+    vim.cmd("bdelete")
+  else
+    vim.cmd("qa!")
+  end
+end, { silent = true, desc = "Close Tab/Buffer" })
+
+-- Tab Navigation: Ctrl+Tab (Next Tab), Ctrl+Shift+Tab (Prev Tab)
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-Tab>", function()
+  vim.cmd("BufferLineCycleNext")
+end, { silent = true, desc = "Next Tab" })
+
+vim.keymap.set({ "n", "i", "v", "s" }, "<C-S-Tab>", function()
+  vim.cmd("BufferLineCyclePrev")
+end, { silent = true, desc = "Previous Tab" })
+
+-- Search Hotkey: Ctrl+F opens search
+vim.keymap.set({ "i", "n", "v", "s" }, "<C-f>", "<Esc>/", { desc = "Search / Find" })
 
 -- Start RPC Server based on WezTerm Pane ID
 local nvim_pane_id = vim.env.WEZTERM_PANE
