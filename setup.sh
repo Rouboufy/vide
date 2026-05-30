@@ -23,7 +23,7 @@ echo -e "${NC}"
 echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
 
 # 1. Check basic tools
-for cmd in git curl; do
+for cmd in git curl zig; do
     if ! command -v "$cmd" &>/dev/null; then
         echo -e "${RED}Error: $cmd is required but not installed. Please install it first.${NC}"
         exit 1
@@ -42,12 +42,7 @@ else
     fi
 fi
 
-# 3. Check WezTerm and Yazi
-for cmd in wezterm yazi; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo -e "${YELLOW}Warning: $cmd is not installed. You will need it to run Vide.${NC}"
-    fi
-done
+# 3. (Removed Wezterm and Yazi checks)
 
 # 4. Set paths
 export XDG_CONFIG_HOME="$HOME/.config/vide"
@@ -77,24 +72,17 @@ else
     SOURCE_DIR="$REPO_DIR"
 fi
 
-# 6. Link configurations
+# 6. Build the Zig Binary
+echo -e "${BLUE}Building Vide from source...${NC}"
+cd "$SOURCE_DIR"
+zig build -Doptimize=ReleaseFast
+
+# 7. Link configurations and binary
 echo -e "${BLUE}Linking configuration files...${NC}"
-ln -sfn "$SOURCE_DIR/config/wezterm" "$XDG_CONFIG_HOME/wezterm"
 ln -sfn "$SOURCE_DIR/config/vide-nvim" "$XDG_CONFIG_HOME/vide-nvim"
-ln -sfn "$SOURCE_DIR/config/yazi" "$XDG_CONFIG_HOME/yazi"
 
-# 7. Symlink wrapper launcher binary
-ln -sfn "$SOURCE_DIR/bin/vide" "$HOME/.local/bin/vide"
-ln -sfn "$SOURCE_DIR/bin/vide-open" "$HOME/.local/bin/vide-open"
-ln -sfn "$SOURCE_DIR/bin/vide-activity-bar" "$HOME/.local/bin/vide-activity-bar"
-ln -sfn "$SOURCE_DIR/bin/vide-sidebar" "$HOME/.local/bin/vide-sidebar"
-ln -sfn "$SOURCE_DIR/bin/vide-search-fzf" "$HOME/.local/bin/vide-search-fzf"
-
-chmod +x "$SOURCE_DIR/bin/vide"
-chmod +x "$SOURCE_DIR/bin/vide-open"
-chmod +x "$SOURCE_DIR/bin/vide-activity-bar"
-chmod +x "$SOURCE_DIR/bin/vide-sidebar"
-chmod +x "$SOURCE_DIR/bin/vide-search-fzf"
+ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$HOME/.local/bin/vide"
+chmod +x "$SOURCE_DIR/zig-out/bin/vide"
 
 # 8. Check and install JetBrainsMono Nerd Font
 OS_NAME="$(uname -s)"

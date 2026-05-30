@@ -33,6 +33,8 @@ cd "$TARGET_DIR"
 if [ -d ".git" ]; then
     echo "Pulling latest changes from remote Git repository..."
     git pull
+    echo -e "${BLUE}Rebuilding Vide...${NC}"
+    zig build -Doptimize=ReleaseFast
 else
     echo -e "${YELLOW}Warning: No git repository detected in $TARGET_DIR. Skipping git update...${NC}"
 fi
