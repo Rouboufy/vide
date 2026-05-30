@@ -1,0 +1,187 @@
+const std = @import("std");
+const posix = std.posix;
+
+pub var sigwinch_received = std.atomic.Value(bool).init(false);
+
+pub fn handleSigwinch(sig: posix.SIG) callconv(.c) void {
+    _ = sig;
+    sigwinch_received.store(true, .monotonic);
+}
+
+pub const MouseButton = enum {
+    left,
+    middle,
+    right,
+    wheel_up,
+    wheel_down,
+    none,
+};
+
+pub const MouseAction = enum {
+    press,
+    release,
+    move,
+};
+
+pub const MouseEvent = struct {
+    col: u16,
+    row: u16,
+    button: MouseButton,
+    action: MouseAction,
+};
+
+pub const KeyEvent = struct {
+    char: u8,
+    ctrl: bool = false,
+    alt: bool = false,
+    raw: []const u8,
+};
+
+pub const Event = union(enum) {
+    key: KeyEvent,
+    mouse: MouseEvent,
+    resize: struct { cols: u16, rows: u16 },
+    none,
+    quit,
+};
+
+fn readByteTimeout(fd: posix.fd_t, timeout: i32) !?u8 {
+    var buf: [1]u8 = undefined;
+    var fds = [1]posix.pollfd{.{
+        .fd = fd,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    }};
+    
+    const rc = posix.poll(&fds, timeout) catch |err| switch (err) {
+        error.SystemResources, error.Unexpected => return err,
+        else => return null,
+    };
+    
+    if (rc > 0 and (fds[0].revents & posix.POLL.IN) != 0) {
+        const read_bytes = try posix.read(fd, &buf);
+        if (read_bytes > 0) return buf[0];
+    }
+    return null;
+}
+
+fn parseSgrMouse(seq: []const u8) ?MouseEvent {
+    if (!std.mem.startsWith(u8, seq, "\x1b[<")) return null;
+    
+    const last_char = seq[seq.len - 1];
+    if (last_char != 'M' and last_char != 'm') return null;
+    
+    const params_str = seq[3 .. seq.len - 1];
+    var iter = std.mem.splitScalar(u8, params_str, ';');
+    
+    const b_str = iter.next() orelse return null;
+    const c_str = iter.next() orelse return null;
+    const r_str = iter.next() orelse return null;
+    
+    const b = std.fmt.parseInt(u8, b_str, 10) catch return null;
+    const col = std.fmt.parseInt(u16, c_str, 10) catch return null;
+    const row = std.fmt.parseInt(u16, r_str, 10) catch return null;
+    
+    // std.debug.print("\r\n[SGR] b={d} col={d} row={d} last={c}\r\n", .{b, col, row, last_char});
+        
+    const action: MouseAction = if (last_char == 'M')
+        (if ((b & 32) != 0) .move else .press)
+    else
+        .release;
+        
+    const button: MouseButton = if ((b & 64) != 0) (
+        if ((b & 3) == 0) .wheel_up else .wheel_down
+    ) else switch (b & 3) {
+        0 => .left,
+        1 => .middle,
+        2 => .right,
+        3 => .none,
+        else => .none,
+    };
+    
+    return MouseEvent{
+        .col = if (col > 0) col - 1 else 0,
+        .row = if (row > 0) row - 1 else 0,
+        .button = button,
+        .action = action,
+    };
+}
+
+pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !Event {
+    _ = allocator;
+    // First, check if a resize signal was caught
+    if (sigwinch_received.swap(false, .monotonic)) {
+        var ws: posix.winsize = undefined;
+        const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
+        if (posix.errno(rc) == .SUCCESS) {
+            return Event{ .resize = .{ .cols = ws.col, .rows = ws.row } };
+        }
+    }
+
+    var first_buf: [1]u8 = undefined;
+    const read_bytes = posix.read(fd, &first_buf) catch |err| {
+        if (err == error.BlockedBySignal) {
+            // Signal received (like SIGWINCH), re-check flag
+            if (sigwinch_received.swap(false, .monotonic)) {
+                var ws: posix.winsize = undefined;
+                const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
+                if (posix.errno(rc) == .SUCCESS) {
+                    return Event{ .resize = .{ .cols = ws.col, .rows = ws.row } };
+                }
+            }
+            return Event.none;
+        }
+        return err;
+    };
+
+    if (read_bytes == 0) return Event.none;
+    const first_byte = first_buf[0];
+    seq_buf[0] = first_byte;
+
+    if (first_byte == 0x03) { // Ctrl-C
+        return Event.quit;
+    }
+
+    if (first_byte == 0x1b) { // Escape sequence indicator
+        // Read remaining bytes
+        seq_buf[0] = 0x1b;
+        var len: usize = 1;
+        while (len < seq_buf.len) {
+            if (try readByteTimeout(fd, 20)) |b| {
+                seq_buf[len] = b;
+                len += 1;
+                if (len >= 3) {
+                    if (seq_buf[1] == '[' and seq_buf[2] == '<') {
+                        if (b == 'M' or b == 'm') break;
+                    } else {
+                        if (b >= 64 and b <= 126) break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if (len == 1) { // Just Escape key
+            return Event{ .key = .{ .char = 0x1b, .raw = seq_buf[0..1] } };
+        }
+
+        const seq = seq_buf[0..len];
+        if (std.mem.startsWith(u8, seq, "\x1b[<")) {
+            if (parseSgrMouse(seq)) |me| {
+                return Event{ .mouse = me };
+            }
+        }
+
+        // Generic arrow key or function key
+        return Event{ .key = .{ .char = 0, .raw = seq } };
+    }
+
+    // Ctrl keys mapping (except Ctrl-C which is .quit)
+    if (first_byte < 32 and first_byte != 0x1b) {
+        return Event{ .key = .{ .char = first_byte, .ctrl = true, .raw = seq_buf[0..1] } };
+    }
+
+    // Normal printable key
+    return Event{ .key = .{ .char = first_byte, .raw = seq_buf[0..1] } };
+}

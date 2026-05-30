@@ -1,0 +1,825 @@
+const std = @import("std");
+const posix = std.posix;
+const Terminal = @import("tui/terminal.zig").Terminal;
+const Renderer = @import("tui/renderer.zig").Renderer;
+const Color = @import("tui/renderer.zig").Color;
+const Cell = @import("tui/renderer.zig").Cell;
+const Layout = @import("tui/layout.zig").Layout;
+const Rect = @import("tui/layout.zig").Rect;
+const input = @import("tui/input.zig");
+const ActivityBar = @import("tui/widgets/activity_bar.zig").ActivityBar;
+const Explorer = @import("tui/widgets/explorer.zig").Explorer;
+
+const Mode = enum { ide, zen };
+
+// VSCode Colors Theme Mapping
+var bg_editor = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } };
+var bg_sidebar = Color{ .rgb = .{ .r = 37, .g = 37, .b = 38 } };
+var bg_tab_active = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } };
+var bg_tab_inactive = Color{ .rgb = .{ .r = 45, .g = 45, .b = 45 } };
+var bg_statusbar = Color{ .rgb = .{ .r = 0, .g = 122, .b = 204 } };
+var bg_accent = Color{ .rgb = .{ .r = 0, .g = 122, .b = 204 } };
+var fg_primary = Color{ .rgb = .{ .r = 212, .g = 212, .b = 212 } };
+var fg_secondary = Color{ .rgb = .{ .r = 133, .g = 133, .b = 133 } };
+var fg_accent = Color{ .rgb = .{ .r = 204, .g = 204, .b = 204 } };
+var border_color = Color{ .rgb = .{ .r = 60, .g = 60, .b = 60 } };
+
+fn parseHexColor(hex: []const u8) ?Color {
+    if (hex.len != 7 or hex[0] != '#') return null;
+    const r = std.fmt.parseInt(u8, hex[1..3], 16) catch return null;
+    const g = std.fmt.parseInt(u8, hex[3..5], 16) catch return null;
+    const b = std.fmt.parseInt(u8, hex[5..7], 16) catch return null;
+    return Color{ .rgb = .{ .r = r, .g = g, .b = b } };
+}
+
+fn drawRect(renderer: *Renderer, rect: Rect, char: []const u8, fg: Color, bg: Color) void {
+    renderer.drawRect(rect, char, fg, bg);
+}
+
+fn drawText(renderer: *Renderer, x: u16, y: u16, text: []const u8, fg: Color, bg: Color, bold: bool, italic: bool) void {
+    renderer.drawText(x, y, text, fg, bg, bold, italic);
+}
+
+const NvimProcess = @import("nvim/process.zig").NvimProcess;
+const RpcClient = @import("nvim/rpc.zig").RpcClient;
+const UiState = @import("nvim/ui_protocol.zig").UiState;
+const msgpack = @import("nvim/msgpack.zig");
+const Value = msgpack.Value;
+const Pty = @import("tui/pty.zig").Pty;
+
+fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseEvent, rel_col: u16, rel_row: u16) void {
+    const button_str: []const u8 = switch (m.button) {
+        .left => "left",
+        .middle => "middle",
+        .right => "right",
+        .wheel_up => "wheel",
+        .wheel_down => "wheel",
+        .none => "none",
+    };
+    if (std.mem.eql(u8, button_str, "none")) return;
+    
+    const action_str: []const u8 = switch (m.action) {
+        .press => if (m.button == .wheel_up) "up" else if (m.button == .wheel_down) "down" else "press",
+        .release => "release",
+        .move => "drag",
+    };
+    
+    var p = alloc.alloc(Value, 6) catch return;
+    p[0] = .{ .string = button_str };
+    p[1] = .{ .string = action_str };
+    p[2] = .{ .string = "" }; // modifier
+    p[3] = .{ .integer = 0 }; // grid
+    p[4] = .{ .integer = rel_row }; // row
+    p[5] = .{ .integer = rel_col }; // col
+    
+    if (rpc.call("nvim_input_mouse", p) catch null) |res| {
+        msgpack.freeValue(res, alloc);
+    }
+    alloc.free(p);
+}
+
+fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) anyerror!void {
+    const ui_state: *UiState = @alignCast(@ptrCast(ctx orelse return));
+    if (std.mem.eql(u8, method, "redraw") and params == .array) {
+        try ui_state.handleRedraw(params.array);
+    } else if (std.mem.eql(u8, method, "vide_buf_enter") and params == .array and params.array.len > 0) {
+        if (params.array[0] == .string) {
+            if (ui_state.current_buf_path) |p| ui_state.allocator.free(p);
+            ui_state.current_buf_path = try ui_state.allocator.dupe(u8, params.array[0].string);
+            ui_state.buf_path_changed = true;
+        }
+    } else if (std.mem.eql(u8, method, "vide_toggle_zen")) {
+        // Toggle zen mode
+        ui_state.toggle_zen_requested = true;
+    } else if (std.mem.eql(u8, method, "vide_toggle_ide")) {
+        // Toggle ide mode
+        ui_state.toggle_ide_requested = true;
+    } else if (std.mem.eql(u8, method, "vide_theme_changed") and params == .array and params.array.len > 0) {
+        if (params.array[0] == .map) {
+            ui_state.theme_changed = true;
+            for (params.array[0].map) |kv| {
+                if (kv.key == .string and kv.value == .string) {
+                    const k = kv.key.string;
+                    const v = kv.value.string;
+                    if (parseHexColor(v)) |c| {
+                        if (std.mem.eql(u8, k, "bg_editor")) bg_editor = c;
+                        if (std.mem.eql(u8, k, "bg_sidebar")) bg_sidebar = c;
+                        if (std.mem.eql(u8, k, "bg_tab_active")) bg_tab_active = c;
+                        if (std.mem.eql(u8, k, "bg_tab_inactive")) bg_tab_inactive = c;
+                        if (std.mem.eql(u8, k, "bg_statusbar")) bg_statusbar = c;
+                        if (std.mem.eql(u8, k, "bg_accent")) bg_accent = c;
+                        if (std.mem.eql(u8, k, "fg_primary")) fg_primary = c;
+                        if (std.mem.eql(u8, k, "fg_secondary")) fg_secondary = c;
+                        if (std.mem.eql(u8, k, "fg_accent")) fg_accent = c;
+                        if (std.mem.eql(u8, k, "border_color")) border_color = c;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn processNvimEvents(rpc: *RpcClient) !bool {
+    return try rpc.processNotifications();
+}
+
+fn openFile(rpc: *RpcClient, allocator: std.mem.Allocator, path: []const u8) !void {
+    var input_params = try allocator.alloc(Value, 1);
+    defer allocator.free(input_params);
+    const cmd = try std.fmt.allocPrint(allocator, "edit {s}", .{path});
+    defer allocator.free(cmd);
+    input_params[0] = .{ .string = cmd };
+    const result = try rpc.call("nvim_command", input_params);
+    msgpack.freeValue(result, allocator);
+}
+
+pub fn main(init: std.process.Init) !void {
+    innerMain(init) catch |err| {
+        if (err == error.EndOfStream or err == error.QuitApplication) return;
+        return err;
+    };
+}
+
+fn innerMain(init: std.process.Init) !void {
+    const alloc = init.gpa;
+    var term = try Terminal.init();
+    defer term.deinit();
+
+    var sa = std.posix.Sigaction{
+        .handler = .{ .handler = input.handleSigwinch },
+        .mask = std.mem.zeroes(std.posix.sigset_t),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.WINCH, &sa, null);
+
+    const size = try term.getSize();
+    var renderer = try Renderer.init(alloc, size[0], size[1], term.writer());
+    defer renderer.deinit(alloc);
+
+    var mode: Mode = .ide;
+    var activity_bar = ActivityBar{ .active_idx = 0 };
+    var last_click_x: u16 = 0;
+    var last_click_y: u16 = 0;
+
+    app_loop: while (true) {
+        var nvim = try NvimProcess.spawn(init.io, alloc);
+        defer nvim.deinit(init.io);
+        var rpc = RpcClient.init(nvim, alloc, init.io);
+        var ui_state = UiState.init(alloc);
+        defer ui_state.deinit();
+
+        var nvim_term = try NvimProcess.spawn(init.io, alloc);
+        defer nvim_term.deinit(init.io);
+        var rpc_term = RpcClient.init(nvim_term, alloc, init.io);
+        var ui_term = UiState.init(alloc);
+        defer ui_term.deinit();
+
+        var args = init.minimal.args.iterate();
+        _ = args.skip(); // skip executable name
+        const initial_file: ?[]const u8 = args.next();
+
+        runNvimSession(initial_file, init, alloc, &term, &renderer, &rpc, &ui_state, &rpc_term, &ui_term, &mode, &activity_bar, &last_click_x, &last_click_y) catch |err| {
+            if (err == error.EndOfStream) continue :app_loop;
+            if (err == error.QuitApplication) break :app_loop;
+            return err;
+        };
+    }
+}
+
+fn runNvimSession(
+    initial_file: ?[]const u8,
+    init: std.process.Init,
+    alloc: std.mem.Allocator,
+    term: *Terminal,
+    renderer: *Renderer,
+    rpc: *RpcClient,
+    ui_state: *UiState,
+    rpc_term: *RpcClient,
+    ui_term: *UiState,
+    mode_ptr: *Mode,
+    activity_bar: *ActivityBar,
+    lc_x: *u16,
+    lc_y: *u16,
+) !void {
+    rpc.on_notification = handleNotification;
+    rpc.on_notification_ctx = ui_state;
+
+    rpc_term.on_notification = handleNotification;
+    rpc_term.on_notification_ctx = ui_term;
+
+    var show_file_tree = true;
+    var file_tree_width: u16 = @max(15, @min(40, @as(u16, @intFromFloat(
+        @as(f32, @floatFromInt(renderer.width)) * 0.20
+    ))));
+    var is_resizing_sidebar = false;
+    var is_resizing_panel = false;
+    var terminal_panel_height: u16 = 8;
+    
+    var explorer = Explorer.init(alloc, init.io);
+    defer explorer.deinit();
+    explorer.refresh() catch {};
+
+    const initial_show_panel = (mode_ptr.* == .ide) and false; // initial show_terminal_panel
+    const initial_layout = Layout.compute(renderer.width, renderer.height, initial_show_panel, mode_ptr.* == .zen, show_file_tree, file_tree_width, terminal_panel_height);
+
+    var opt_kvs = try alloc.alloc(Value.KV, 2);
+    defer alloc.free(opt_kvs);
+    opt_kvs[0] = .{ .key = .{ .string = "rgb" }, .value = .{ .bool = true } };
+    opt_kvs[1] = .{ .key = .{ .string = "ext_linegrid" }, .value = .{ .bool = true } };
+
+    var attach_params = try alloc.alloc(Value, 3);
+    defer alloc.free(attach_params);
+    attach_params[0] = .{ .integer = initial_layout.editor.w };
+    attach_params[1] = .{ .integer = initial_layout.editor.h };
+    attach_params[2] = .{ .map = opt_kvs };
+
+    const attach_result = try rpc.call("nvim_ui_attach", attach_params);
+    msgpack.freeValue(attach_result, alloc);
+
+    var term_attach_params = try alloc.alloc(Value, 3);
+    defer alloc.free(term_attach_params);
+    term_attach_params[0] = .{ .integer = if (initial_layout.panel) |p| p.w else 80 };
+    term_attach_params[1] = .{ .integer = if (initial_layout.panel) |p| @max(1, p.h - 1) else 7 };
+    term_attach_params[2] = .{ .map = opt_kvs };
+    const term_attach_result = try rpc_term.call("nvim_ui_attach", term_attach_params);
+    msgpack.freeValue(term_attach_result, alloc);
+
+    {
+        var cp = try alloc.alloc(Value, 1);
+        defer alloc.free(cp);
+        
+        cp[0] = .{ .string = "set laststatus=0" };
+        const r1 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r1, alloc);
+
+        cp[0] = .{ .string = "autocmd BufEnter * call rpcnotify(1, 'vide_buf_enter', expand('%:p'))" };
+        const r_au = try rpc.call("nvim_command", cp);
+        msgpack.freeValue(r_au, alloc);
+
+        cp[0] = .{ .string = "set shortmess+=I" };
+        const r_sm = try rpc.call("nvim_command", cp);
+        msgpack.freeValue(r_sm, alloc);
+
+        cp[0] = .{ .string = "terminal" };
+        const r2 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r2, alloc);
+
+        cp[0] = .{ .string = "startinsert" };
+        const r3 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r3, alloc);
+    }
+
+    var seq_buf: [128]u8 = undefined;
+    var needs_resize = false;
+
+    const TabInfo = struct {
+        name: []const u8,
+        path: ?[]const u8,
+    };
+    var tabs = std.array_list.Managed(TabInfo).init(alloc);
+    defer {
+        for (tabs.items) |t| {
+            alloc.free(t.name);
+            if (t.path) |p| alloc.free(p);
+        }
+        tabs.deinit();
+    }
+    if (initial_file) |f| {
+        try tabs.append(.{
+            .name = try alloc.dupe(u8, std.fs.path.basename(f)),
+            .path = try alloc.dupe(u8, f),
+        });
+        openFile(rpc, alloc, f) catch {};
+    } else {
+        var params = try alloc.alloc(Value, 2);
+        params[0] = .{ .string = @embedFile("nvim/vide_init.lua") };
+        params[1] = .{ .array = &[_]Value{} };
+        if (rpc.call("nvim_exec_lua", params)) |res| {
+            msgpack.freeValue(res, alloc);
+        } else |_| {}
+        alloc.free(params);
+    }
+    var active_tab: usize = 0;
+
+    var terminal_focus = false;
+    var show_terminal_panel = false;
+
+    while (true) {
+        const cols = renderer.width;
+        const rows = renderer.height;
+        const show_panel = (mode_ptr.* == .ide) and show_terminal_panel;
+        const layout = Layout.compute(cols, rows, show_panel, mode_ptr.* == .zen, show_file_tree, file_tree_width, terminal_panel_height);
+
+        if (needs_resize) {
+            needs_resize = false;
+            var rp = try alloc.alloc(Value, 2);
+            defer alloc.free(rp);
+            rp[0] = .{ .integer = layout.editor.w };
+            rp[1] = .{ .integer = layout.editor.h };
+            if (rpc.call("nvim_ui_try_resize", rp) catch null) |res| {
+                msgpack.freeValue(res, alloc);
+            }
+            if (layout.panel) |panel| {
+                var tp = try alloc.alloc(Value, 2);
+                defer alloc.free(tp);
+                tp[0] = .{ .integer = panel.w };
+                tp[1] = .{ .integer = @max(1, panel.h - 1) };
+                if (rpc_term.call("nvim_ui_try_resize", tp) catch null) |tres| {
+                    msgpack.freeValue(tres, alloc);
+                }
+            }
+        }
+
+        const nvim_alive = try processNvimEvents(rpc);
+        if (!nvim_alive) return;
+        _ = try processNvimEvents(rpc_term);
+
+
+
+        drawRect(renderer, layout.total, " ", fg_primary, bg_editor);
+
+        var gy: u16 = 0;
+        while (gy < layout.editor.h) : (gy += 1) {
+            var gx: u16 = 0;
+            while (gx < layout.editor.w) : (gx += 1) {
+                if (gy < ui_state.grid.height and gx < ui_state.grid.width) {
+                    var cell = ui_state.grid.cells[gy * ui_state.grid.width + gx];
+                    
+                    if (std.meta.eql(cell.bg, ui_state.default_bg) or std.meta.activeTag(cell.bg) == .none) {
+                        cell.bg = bg_editor;
+                    }
+                    if (std.meta.eql(cell.fg, ui_state.default_fg) or std.meta.activeTag(cell.fg) == .none) {
+                        cell.fg = fg_primary;
+                    }
+                    renderer.setCell(layout.editor.x + gx, layout.editor.y + gy, cell);
+                } else {
+                    renderer.setCell(layout.editor.x + gx, layout.editor.y + gy, Cell{
+                        .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1,
+                        .fg = ui_state.default_fg, .bg = bg_editor,
+                    });
+                }
+            }
+        }
+
+        if (mode_ptr.* == .ide) {
+            activity_bar.draw(renderer, layout.activity_bar, .{
+                .bg_sidebar = bg_sidebar, .bg_accent = bg_accent,
+                .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color,
+            });
+            if (show_file_tree) {
+                if (activity_bar.active_idx == 0) {
+                    explorer.draw(renderer, layout.file_tree, .{
+                        .bg_sidebar = bg_sidebar, .bg_editor = bg_editor, .bg_accent = bg_accent,
+                        .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
+                    });
+                } else {
+                    drawRect(renderer, layout.file_tree, " ", fg_primary, bg_sidebar);
+                }
+                var y: u16 = 0;
+                while (y < layout.file_tree.h) : (y += 1) {
+                    var cell = Cell{ .fg = border_color, .bg = bg_sidebar };
+                    cell.setChar("│");
+                    renderer.setCell(layout.file_tree.x + layout.file_tree.w - 1, layout.file_tree.y + y, cell);
+                }
+            }
+            drawRect(renderer, layout.tab_bar, " ", fg_secondary, bg_sidebar);
+            var tx: u16 = layout.tab_bar.x;
+            for (tabs.items, 0..) |tab, i| {
+                const is_active = (i == active_tab);
+                const tab_w: u16 = @as(u16, @intCast(tab.name.len)) + 8;
+                const bg = if (is_active) bg_tab_active else bg_tab_inactive;
+                const fg = if (is_active) fg_primary else fg_secondary;
+                
+                drawRect(renderer, Rect{ .x = tx, .y = layout.tab_bar.y, .w = tab_w, .h = 1 }, " ", fg, bg);
+                drawText(renderer, tx + 2, layout.tab_bar.y, tab.name, fg, bg, is_active, false);
+                const close_color = if (is_active) Color{ .rgb = .{ .r = 235, .g = 100, .b = 100 } } else fg_secondary;
+                drawText(renderer, tx + tab_w - 3, layout.tab_bar.y, "󰅖", close_color, bg, false, false);
+                tx += tab_w;
+            }
+            // Draw + button for new tab
+            drawText(renderer, tx + 1, layout.tab_bar.y, "+", fg_secondary, bg_sidebar, true, false);
+            drawRect(renderer, layout.status_bar, " ", fg_primary, bg_statusbar);
+            drawText(renderer, layout.status_bar.x + 1, layout.status_bar.y, " 󰚌  NORMAL ", bg_accent, Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, true, false);
+            drawText(renderer, layout.status_bar.x + 12, layout.status_bar.y, "󰌆  main.zig", Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, bg_statusbar, false, false);
+
+            if (layout.panel) |panel| {
+                var px: u16 = 0;
+                while (px < panel.w) : (px += 1) {
+                    var cell = Cell{ .fg = bg_accent, .bg = bg_sidebar };
+                    cell.setChar("━");
+                    renderer.setCell(panel.x + px, panel.y, cell);
+                }
+                const term_header_fg = if (terminal_focus) bg_accent else fg_secondary;
+                drawText(renderer, panel.x + 2, panel.y, " TERMINAL ", term_header_fg, bg_sidebar, true, false);
+                drawText(renderer, panel.x + 13, panel.y, " DEBUG CONSOLE ", fg_secondary, bg_sidebar, false, false);
+                drawText(renderer, panel.x + 30, panel.y, " OUTPUT ", fg_secondary, bg_sidebar, false, false);
+
+                var py: u16 = 0;
+                while (py < panel.h - 1) : (py += 1) {
+                    px = 0;
+                    while (px < panel.w) : (px += 1) {
+                        if (py < ui_term.grid.height and px < ui_term.grid.width) {
+                            var cell = ui_term.grid.cells[py * ui_term.grid.width + px];
+                            if (std.meta.eql(cell.bg, ui_term.default_bg) or std.meta.activeTag(cell.bg) == .none) {
+                                cell.bg = bg_sidebar;
+                            }
+                            if (std.meta.eql(cell.fg, ui_term.default_fg) or std.meta.activeTag(cell.fg) == .none) {
+                                cell.fg = fg_primary;
+                            }
+                            renderer.setCell(panel.x + px, panel.y + 1 + py, cell);
+                        } else {
+                            renderer.setCell(panel.x + px, panel.y + 1 + py, Cell{
+                                .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1,
+                                .fg = fg_primary, .bg = bg_sidebar,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        try renderer.flush();
+        const final_cursor_x = if (terminal_focus and layout.panel != null) panel_info: {
+            const panel = layout.panel.?;
+            break :panel_info panel.x + ui_term.cursor_x;
+        } else layout.editor.x + ui_state.cursor_x;
+        const final_cursor_y = if (terminal_focus and layout.panel != null) panel_info: {
+            const panel = layout.panel.?;
+            break :panel_info panel.y + 1 + ui_term.cursor_y;
+        } else layout.editor.y + ui_state.cursor_y;
+        try term.writer().print("\x1b[{d};{d}H\x1b[?25h", .{ final_cursor_y + 1, final_cursor_x + 1 });
+
+        var fds = [3]posix.pollfd{
+            .{ .fd = term.tty_fd, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = rpc.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = rpc_term.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 },
+        };
+
+        const poll_num = posix.poll(&fds, -1) catch |err| {
+            if (err == error.BlockedBySignal) {
+                if (input.sigwinch_received.swap(false, .monotonic)) {
+                    var ws: posix.winsize = undefined;
+                    const rc = posix.system.ioctl(term.tty_fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
+                    if (posix.errno(rc) == .SUCCESS) {
+                        try renderer.resize(alloc, ws.col, ws.row);
+                        needs_resize = true;
+                    }
+                }
+                continue;
+            }
+            return err;
+        };
+
+        if (ui_state.buf_path_changed) {
+            ui_state.buf_path_changed = false;
+            if (ui_state.current_buf_path) |p| {
+                if (p.len > 0) {
+                    if (tabs.items.len == 0) {
+                        const basename = std.fs.path.basename(p);
+                        if (alloc.dupe(u8, basename)) |new_name| {
+                            if (alloc.dupe(u8, p)) |new_path| {
+                                tabs.append(.{ .name = new_name, .path = new_path }) catch {};
+                                active_tab = 0;
+                            } else |_| alloc.free(new_name);
+                        } else |_| {}
+                    } else if (active_tab < tabs.items.len) {
+                        const basename = std.fs.path.basename(p);
+                        if (alloc.dupe(u8, basename)) |new_name| {
+                            alloc.free(tabs.items[active_tab].name);
+                            tabs.items[active_tab].name = new_name;
+                        } else |_| {}
+                        if (alloc.dupe(u8, p)) |new_path| {
+                            if (tabs.items[active_tab].path) |old_p| alloc.free(old_p);
+                            tabs.items[active_tab].path = new_path;
+                        } else |_| {}
+                    }
+                    needs_resize = true;
+                }
+            }
+        }
+
+        if (poll_num > 0) {
+            if ((fds[1].revents & posix.POLL.IN) != 0) {
+                const alive = try processNvimEvents(rpc);
+                if (!alive) return;
+            }
+            if ((fds[2].revents & posix.POLL.IN) != 0) {
+                _ = try processNvimEvents(rpc_term);
+            }
+            
+            if (ui_state.toggle_zen_requested) {
+                ui_state.toggle_zen_requested = false;
+                mode_ptr.* = if (mode_ptr.* == .zen) .ide else .zen;
+                needs_resize = true;
+            }
+            if (ui_state.toggle_ide_requested) {
+                ui_state.toggle_ide_requested = false;
+                mode_ptr.* = .ide;
+                needs_resize = true;
+            }
+            if (ui_state.theme_changed) {
+                ui_state.theme_changed = false;
+                needs_resize = true;
+            }
+
+            if ((fds[0].revents & posix.POLL.IN) != 0 or input.sigwinch_received.load(.monotonic)) {
+                const event = try input.readEvent(term.tty_fd, &seq_buf, alloc);
+                switch (event) {
+                    .key => |k| {
+                        if (k.raw.len == 1 and k.raw[0] == 0x03) return error.QuitApplication;
+                        var toggle_zen = false;
+                        var toggle_explorer = false;
+                        var toggle_terminal_panel = false;
+                        var new_file = false;
+                        if (k.raw.len == 1) {
+                            const c = k.raw[0];
+                            if (c == 20) toggle_terminal_panel = true; // Ctrl-t
+                            if (c == 5) toggle_explorer = true; // Ctrl-e
+                            if (c == 11) toggle_zen = true; // Ctrl-k
+                            if (c == 14) new_file = true; // Ctrl-n
+                        } else if (std.mem.eql(u8, k.raw, "\x1b[23~")) { // F11
+                            toggle_zen = true;
+                        } else if (std.mem.eql(u8, k.raw, "\x1bt")) { // Alt-t
+                            toggle_zen = true;
+                        }
+
+                        if (toggle_zen) {
+                            mode_ptr.* = if (mode_ptr.* == .ide) .zen else .ide;
+                            needs_resize = true;
+                        } else if (toggle_explorer) {
+                            show_file_tree = !show_file_tree;
+                            needs_resize = true;
+                        } else if (toggle_terminal_panel) {
+                            show_terminal_panel = !show_terminal_panel;
+                            terminal_focus = show_terminal_panel;
+                            needs_resize = true;
+                        } else if (new_file) {
+                            var buf: [32]u8 = undefined;
+                            const new_name = std.fmt.bufPrint(&buf, "File {d}", .{tabs.items.len + 1}) catch "File";
+                            tabs.append(.{
+                                .name = alloc.dupe(u8, new_name) catch "error",
+                                .path = null,
+                            }) catch {};
+                            active_tab = tabs.items.len - 1;
+                            needs_resize = true;
+                            
+                            var cmd_p = try alloc.alloc(Value, 1);
+                            cmd_p[0] = .{ .string = "enew" };
+                            if (rpc.call("nvim_command", cmd_p) catch null) |res| {
+                                msgpack.freeValue(res, alloc);
+                            }
+                            alloc.free(cmd_p);
+                        } else {
+                            const nk = get_key: {
+                                if (k.raw.len == 1) {
+                                    const b = k.raw[0];
+                                    if (b == 0x0d or b == 0x0a) break :get_key "<Enter>";
+                                    if (b == 0x1b) break :get_key "<Esc>";
+                                    if (b == 0x7f or b == 0x08) break :get_key "<BS>";
+                                    break :get_key k.raw;
+                                }
+                                if (std.mem.eql(u8, k.raw, "\x1b[A") or std.mem.eql(u8, k.raw, "\x1bOA")) break :get_key "<Up>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[B") or std.mem.eql(u8, k.raw, "\x1bOB")) break :get_key "<Down>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[C") or std.mem.eql(u8, k.raw, "\x1bOC")) break :get_key "<Right>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[D") or std.mem.eql(u8, k.raw, "\x1bOD")) break :get_key "<Left>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[H")) break :get_key "<Home>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[F")) break :get_key "<End>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[5~")) break :get_key "<PageUp>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[6~")) break :get_key "<PageDown>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
+                                if (std.mem.eql(u8, k.raw, "\x1b[1;3A")) { // Alt+Up
+                                    if (layout.panel != null) {
+                                        if (terminal_panel_height < layout.total.h - 4) {
+                                            terminal_panel_height += 1;
+                                            needs_resize = true;
+                                        }
+                                    }
+                                    break :get_key "";
+                                }
+                                if (std.mem.eql(u8, k.raw, "\x1b[1;3B")) { // Alt+Down
+                                    if (layout.panel != null) {
+                                        if (terminal_panel_height > 2) {
+                                            terminal_panel_height -= 1;
+                                            needs_resize = true;
+                                        }
+                                    }
+                                    break :get_key "";
+                                }
+                                if (std.mem.eql(u8, k.raw, "\x1b[1;3C")) { // Alt+Right
+                                    if (show_file_tree) {
+                                        if (file_tree_width < layout.total.w - layout.activity_bar.w - 10) {
+                                            file_tree_width += 1;
+                                            needs_resize = true;
+                                        }
+                                    }
+                                    break :get_key "";
+                                }
+                                if (std.mem.eql(u8, k.raw, "\x1b[1;3D")) { // Alt+Left
+                                    if (show_file_tree) {
+                                        if (file_tree_width > 5) {
+                                            file_tree_width -= 1;
+                                            needs_resize = true;
+                                        }
+                                    }
+                                    break :get_key "";
+                                }
+                                break :get_key k.raw;
+                            };
+                            if (nk.len > 0) {
+                                if (show_file_tree and activity_bar.active_idx == 0 and explorer.action_state != .none) {
+                                    if (explorer.handleKey(nk) catch false) {
+                                        needs_resize = true;
+                                        continue;
+                                    }
+                                }
+                                var ip = try alloc.alloc(Value, 1);
+                                defer alloc.free(ip);
+                                ip[0] = .{ .string = nk };
+                                if ((if (terminal_focus) rpc_term else rpc).call("nvim_input", ip) catch null) |res| {
+                                    msgpack.freeValue(res, alloc);
+                                }
+                            }
+                        }
+                    },
+                                        .mouse => |m| {
+                        lc_x.* = m.col; lc_y.* = m.row;
+                        
+                        if (mode_ptr.* == .ide) {
+                            if (m.action == .press) {
+                                if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and activity_bar.active_idx == 0 and m.button == .wheel_up) {
+                                    explorer.handleScroll(-1);
+                                    needs_resize = true;
+                                } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and activity_bar.active_idx == 0 and m.button == .wheel_down) {
+                                    explorer.handleScroll(1);
+                                    needs_resize = true;
+                                } else if (show_file_tree and m.col >= layout.file_tree.x + layout.file_tree.w - 2 and m.col <= layout.file_tree.x + layout.file_tree.w) {
+                                    is_resizing_sidebar = true;
+                                } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h and activity_bar.active_idx == 0) {
+                                    if (explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
+                                        openFile(rpc, alloc, path) catch {};
+                                        if (tabs.items.len == 0) {
+                                            const basename = std.fs.path.basename(path);
+                                            tabs.append(.{
+                                                .name = alloc.dupe(u8, basename) catch "error",
+                                                .path = alloc.dupe(u8, path) catch null,
+                                            }) catch {};
+                                            active_tab = 0;
+                                        } else if (active_tab < tabs.items.len) {
+                                            const basename = std.fs.path.basename(path);
+                                            if (alloc.dupe(u8, basename) catch null) |new_name| {
+                                                alloc.free(tabs.items[active_tab].name);
+                                                tabs.items[active_tab].name = new_name;
+                                            }
+                                            if (alloc.dupe(u8, path) catch null) |new_path| {
+                                                if (tabs.items[active_tab].path) |p| alloc.free(p);
+                                                tabs.items[active_tab].path = new_path;
+                                            }
+                                        }
+                                    }
+                                    needs_resize = true;
+                                } else if (layout.panel != null and m.row >= layout.panel.?.y - 1 and m.row <= layout.panel.?.y + 1) {
+                                    is_resizing_panel = true;
+                                } else {
+                                    const prev_idx = activity_bar.active_idx;
+                                    if (activity_bar.handleMouse(m.col, m.row, layout.activity_bar)) |new_idx| {
+                                        if (new_idx == 99) {
+                                            var cmd_p = try alloc.alloc(Value, 1);
+                                            cmd_p[0] = .{ .string = "lua require('vide_settings').open()" };
+                                            if (rpc.call("nvim_command", cmd_p) catch null) |res| {
+                                                msgpack.freeValue(res, alloc);
+                                            }
+                                            alloc.free(cmd_p);
+                                        } else if (show_file_tree and prev_idx == new_idx) {
+                                            show_file_tree = false;
+                                            needs_resize = true;
+                                        } else if (!show_file_tree) {
+                                            show_file_tree = true;
+                                            needs_resize = true;
+                                        }
+                                    }
+                                    
+                                    // Handle tab bar clicks
+                                    if (m.row == layout.tab_bar.y) {
+                                        var tx: u16 = layout.tab_bar.x;
+                                        var clicked_tab = false;
+                                        for (tabs.items, 0..) |tab, i| {
+                                            const tab_w: u16 = @as(u16, @intCast(tab.name.len)) + 8;
+                                            if (m.col >= tx and m.col < tx + tab_w) {
+                                                if (m.col >= tx + tab_w - 3 and m.col < tx + tab_w) {
+                                                    // Close tab
+                                                    if (tabs.items.len > 0) {
+                                                        const removed = tabs.orderedRemove(i);
+                                                        alloc.free(removed.name);
+                                                        if (removed.path) |p| alloc.free(p);
+                                                        
+                                                        // Actually close the buffer in Neovim
+                                                        var cmd_p = try alloc.alloc(Value, 1);
+                                                        cmd_p[0] = .{ .string = "bdelete" };
+                                                        if (rpc.call("nvim_command", cmd_p) catch null) |res| {
+                                                            msgpack.freeValue(res, alloc);
+                                                        }
+                                                        alloc.free(cmd_p);
+                                                        
+                                                        if (tabs.items.len == 0) {
+                                                            active_tab = 0;
+                                                            var alpha_p = try alloc.alloc(Value, 1);
+                                                            alpha_p[0] = .{ .string = "lua _G.vide_alpha_start()" };
+                                                            if (rpc.call("nvim_command", alpha_p) catch null) |res| {
+                                                                msgpack.freeValue(res, alloc);
+                                                            }
+                                                            alloc.free(alpha_p);
+                                                        } else if (active_tab >= tabs.items.len) {
+                                                            active_tab = tabs.items.len - 1;
+                                                        }
+                                                        needs_resize = true;
+                                                    }
+                                                } else {
+                                                    active_tab = i;
+                                                    needs_resize = true; // force redraw
+                                                    if (tabs.items[i].path) |p| {
+                                                        openFile(rpc, alloc, p) catch {};
+                                                    }
+                                                }
+                                                clicked_tab = true;
+                                                break;
+                                            }
+                                            tx += tab_w;
+                                        }
+                                        if (!clicked_tab and m.col == tx + 1) {
+                                            // New tab
+                                            var buf: [32]u8 = undefined;
+                                            const new_name = try std.fmt.bufPrint(&buf, "File {d}", .{tabs.items.len + 1});
+                                            try tabs.append(.{
+                                                .name = try alloc.dupe(u8, new_name),
+                                                .path = null,
+                                            });
+                                            active_tab = tabs.items.len - 1;
+                                            needs_resize = true;
+                                            var cmd_p = try alloc.alloc(Value, 1);
+                                            cmd_p[0] = .{ .string = "enew" };
+                                            if (rpc.call("nvim_command", cmd_p) catch null) |res| {
+                                                msgpack.freeValue(res, alloc);
+                                            }
+                                            alloc.free(cmd_p);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if (m.action == .move) {
+                                if (is_resizing_sidebar) {
+                                    if (m.col > layout.activity_bar.w + 5) {
+                                        var new_w = m.col - layout.activity_bar.w;
+                                        if (new_w > layout.total.w - layout.activity_bar.w - 10) {
+                                            new_w = layout.total.w - layout.activity_bar.w - 10;
+                                        }
+                                        file_tree_width = new_w;
+                                        needs_resize = true;
+                                    }
+                                } else if (is_resizing_panel) {
+                                    if (m.row < layout.total.h - 2) {
+                                        const new_h = layout.total.h - 1 - m.row;
+                                        if (new_h >= 2 and new_h < layout.total.h - 2) {
+                                            terminal_panel_height = new_h;
+                                            needs_resize = true;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            const was_resizing = is_resizing_sidebar or is_resizing_panel;
+                            if (m.action == .release) {
+                                is_resizing_sidebar = false;
+                                is_resizing_panel = false;
+                                needs_resize = true;
+                            }
+                            if (was_resizing) continue;
+                        }
+
+                        if (is_resizing_sidebar or is_resizing_panel) continue;
+
+                        if (layout.panel != null and m.col >= layout.panel.?.x and m.col < layout.panel.?.x + layout.panel.?.w and
+                            m.row > layout.panel.?.y and m.row < layout.panel.?.y + layout.panel.?.h)
+                        {
+                            if (m.action == .press or m.action == .release) terminal_focus = true;
+                            sendMouseEvent(rpc_term, alloc, m, m.col - layout.panel.?.x, m.row - layout.panel.?.y - 1);
+                        } else if (m.col >= layout.editor.x and m.col < layout.editor.x + layout.editor.w and
+                                   m.row >= layout.editor.y and m.row < layout.editor.y + layout.editor.h)
+                        {
+                            if (m.action == .press) terminal_focus = false;
+                            sendMouseEvent(rpc, alloc, m, m.col - layout.editor.x, m.row - layout.editor.y);
+                        } else {
+                            if (m.action == .press) terminal_focus = false;
+                        }
+                    },
+                    .resize => |r| {
+                        try renderer.resize(alloc, r.cols, r.rows);
+                        needs_resize = true;
+                    },
+                    .quit => return error.QuitApplication,
+                    .none => {},
+                }
+            }
+        }
+    }
+}
