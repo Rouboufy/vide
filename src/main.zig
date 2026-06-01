@@ -9,9 +9,11 @@ const Rect = @import("tui/layout.zig").Rect;
 const input = @import("tui/input.zig");
 const ActivityBar = @import("tui/widgets/activity_bar.zig").ActivityBar;
 const Explorer = @import("tui/widgets/explorer.zig").Explorer;
+const GitPanel = @import("tui/widgets/git_panel.zig").GitPanel;
 const SettingsWidget = @import("tui/widgets/settings.zig").SettingsWidget;
 const MasonWidget = @import("tui/widgets/mason.zig").MasonWidget;
 const LazyWidget = @import("tui/widgets/lazy.zig").LazyWidget;
+const GitDetailedWidget = @import("tui/widgets/git_detailed.zig").GitDetailedWidget;
 
 const Mode = enum { ide, zen };
 
@@ -20,7 +22,7 @@ var bg_editor = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } };
 var bg_sidebar = Color{ .rgb = .{ .r = 37, .g = 37, .b = 38 } };
 var bg_tab_active = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } };
 var bg_tab_inactive = Color{ .rgb = .{ .r = 45, .g = 45, .b = 45 } };
-var bg_statusbar = Color{ .rgb = .{ .r = 0, .g = 122, .b = 204 } };
+var bg_statusbar = Color{ .rgb = .{ .r = 0, .g = 95, .b = 184 } }; // Highly visible bright blue
 var bg_accent = Color{ .rgb = .{ .r = 0, .g = 122, .b = 204 } };
 var fg_primary = Color{ .rgb = .{ .r = 212, .g = 212, .b = 212 } };
 var fg_secondary = Color{ .rgb = .{ .r = 133, .g = 133, .b = 133 } };
@@ -232,6 +234,10 @@ fn runNvimSession(
     defer explorer.deinit();
     explorer.refresh() catch {};
 
+    var git_panel = GitPanel.init(alloc, init.io);
+    defer git_panel.deinit();
+    git_panel.refresh() catch {};
+
     const home = init.environ_map.get("HOME") orelse "";
     const settings_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "settings.json" });
     const preview_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "preview.json" });
@@ -243,6 +249,8 @@ fn runNvimSession(
     defer mason_widget.deinit();
     var lazy_widget = LazyWidget.init(alloc);
     defer lazy_widget.deinit();
+    var git_detailed_widget = GitDetailedWidget.init(alloc, init.io);
+    defer git_detailed_widget.deinit();
     defer settings_widget.deinit();
 
     const initial_show_panel = (mode_ptr.* == .ide) and false; // initial show_terminal_panel
@@ -346,6 +354,10 @@ fn runNvimSession(
             if (explorer.refreshStatus(rpc)) {
                 needs_resize = true; // force redraw
             }
+            if (activity_bar.active_idx == 2) {
+                git_panel.refresh() catch {};
+                needs_resize = true;
+            }
         }
 
         const cols = renderer.width;
@@ -415,6 +427,11 @@ fn runNvimSession(
                         .bg_sidebar = bg_sidebar, .bg_editor = bg_editor, .bg_accent = bg_accent,
                         .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
                     });
+                } else if (activity_bar.active_idx == 2) {
+                    git_panel.draw(renderer, layout.file_tree, .{
+                        .bg_sidebar = bg_sidebar, .bg_editor = bg_editor, .bg_accent = bg_accent,
+                        .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
+                    });
                 } else {
                     drawRect(renderer, layout.file_tree, " ", fg_primary, bg_sidebar);
                 }
@@ -443,7 +460,15 @@ fn runNvimSession(
             drawText(renderer, tx + 1, layout.tab_bar.y, "+", fg_secondary, bg_sidebar, true, false);
             drawRect(renderer, layout.status_bar, " ", fg_primary, bg_statusbar);
             drawText(renderer, layout.status_bar.x + 1, layout.status_bar.y, " 󰚌  NORMAL ", bg_accent, Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, true, false);
-            drawText(renderer, layout.status_bar.x + 12, layout.status_bar.y, "󰌆  main.zig", Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, bg_statusbar, false, false);
+            
+            // Draw Branch in Status Bar
+            const branch_name = git_panel.current_branch orelse "main";
+            var status_buf: [128]u8 = undefined;
+            const branch_display = std.fmt.bufPrint(&status_buf, "  {s} ", .{branch_name}) catch "  main ";
+            drawText(renderer, layout.status_bar.x + 12, layout.status_bar.y, branch_display, Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, bg_statusbar, true, false);
+            
+            const file_x = 12 + @as(u16, @intCast(branch_display.len)) + 1;
+            drawText(renderer, layout.status_bar.x + file_x, layout.status_bar.y, "󰌆  main.zig", Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, bg_statusbar, false, false);
 
             if (layout.panel) |panel| {
                 var px: u16 = 0;
@@ -495,6 +520,13 @@ fn runNvimSession(
         }
         if (lazy_widget.is_open) {
             lazy_widget.draw(renderer, renderer.width, renderer.height, .{
+                .bg_editor = bg_editor, .bg_sidebar = bg_sidebar, .bg_accent = bg_accent,
+                .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
+                .fg_comment = fg_secondary,
+            });
+        }
+        if (git_detailed_widget.is_open) {
+            git_detailed_widget.draw(renderer, renderer.width, renderer.height, .{
                 .bg_editor = bg_editor, .bg_sidebar = bg_sidebar, .bg_accent = bg_accent,
                 .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
                 .fg_comment = fg_secondary,
@@ -591,6 +623,7 @@ fn runNvimSession(
                     settings_widget.is_open = false;
                     mason_widget.is_open = false;
                     lazy_widget.is_open = false;
+                    git_detailed_widget.is_open = false;
                 }
                 needs_resize = true;
             }
@@ -745,6 +778,12 @@ fn runNvimSession(
                                 }
                                 continue;
                             }
+                            if (git_detailed_widget.is_open) {
+                                if (git_detailed_widget.handleKey(nk)) {
+                                    needs_resize = true;
+                                }
+                                continue;
+                            }
                         }
 
                         var toggle_zen = false;
@@ -764,6 +803,7 @@ fn runNvimSession(
                                 settings_widget.is_open = false;
                                 mason_widget.is_open = false;
                                 lazy_widget.is_open = false;
+                                git_detailed_widget.is_open = false;
                             }
                             needs_resize = true;
                         } else if (toggle_explorer) {
@@ -793,9 +833,17 @@ fn runNvimSession(
                                 msgpack.freeValue(res, alloc);
                             }
                             alloc.free(cmd_p);
-                        } else if (nk.len > 0) {
+                        }
+
+                        if (nk.len > 0) {
                             if (show_file_tree and activity_bar.active_idx == 0 and explorer.action_state != .none) {
                                 if (explorer.handleKey(nk) catch false) {
+                                    needs_resize = true;
+                                    continue;
+                                }
+                            }
+                            if (show_file_tree and activity_bar.active_idx == 2 and git_panel.is_focus_commit) {
+                                if (git_panel.handleKey(nk) catch false) {
                                     needs_resize = true;
                                     continue;
                                 }
@@ -840,7 +888,15 @@ fn runNvimSession(
                                 } else if (m.action == .press) {
                                     lazy_widget.is_open = false;
                                     needs_resize = true;
+                                }
+                            }
+                            if (git_detailed_widget.is_open) {
+                                if (git_detailed_widget.handleMouse(m, renderer.width, renderer.height)) {
+                                    needs_resize = true;
                                     continue;
+                                } else if (m.action == .press) {
+                                    git_detailed_widget.is_open = false;
+                                    needs_resize = true;
                                 }
                             }
 
@@ -871,31 +927,76 @@ fn runNvimSession(
                                 } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and activity_bar.active_idx == 0 and m.button == .wheel_down) {
                                     explorer.handleScroll(1);
                                     needs_resize = true;
+                                } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and activity_bar.active_idx == 2 and m.button == .wheel_up) {
+                                    git_panel.handleScroll(-1);
+                                    needs_resize = true;
+                                } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and activity_bar.active_idx == 2 and m.button == .wheel_down) {
+                                    git_panel.handleScroll(1);
+                                    needs_resize = true;
                                 } else if (show_file_tree and m.col >= layout.file_tree.x + layout.file_tree.w - 2 and m.col <= layout.file_tree.x + layout.file_tree.w) {
                                     is_resizing_sidebar = true;
-                                } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h and activity_bar.active_idx == 0) {
-                                    if (explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
-                                        openFile(rpc, alloc, path) catch {};
-                                        if (tabs.items.len == 0) {
-                                            const basename = std.fs.path.basename(path);
-                                            tabs.append(.{
-                                                .name = alloc.dupe(u8, basename) catch "error",
-                                                .path = alloc.dupe(u8, path) catch null,
-                                            }) catch {};
-                                            active_tab = 0;
-                                        } else if (active_tab < tabs.items.len) {
-                                            const basename = std.fs.path.basename(path);
-                                            if (alloc.dupe(u8, basename) catch null) |new_name| {
-                                                alloc.free(tabs.items[active_tab].name);
-                                                tabs.items[active_tab].name = new_name;
-                                            }
-                                            if (alloc.dupe(u8, path) catch null) |new_path| {
-                                                if (tabs.items[active_tab].path) |p| alloc.free(p);
-                                                tabs.items[active_tab].path = new_path;
+                                } else if (show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h) {
+                                    if (activity_bar.active_idx == 0) {
+                                        if (explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
+                                            openFile(rpc, alloc, path) catch {};
+                                            if (tabs.items.len == 0) {
+                                                const basename = std.fs.path.basename(path);
+                                                tabs.append(.{
+                                                    .name = alloc.dupe(u8, basename) catch "error",
+                                                    .path = alloc.dupe(u8, path) catch null,
+                                                }) catch {};
+                                                active_tab = 0;
+                                            } else if (active_tab < tabs.items.len) {
+                                                const basename = std.fs.path.basename(path);
+                                                if (alloc.dupe(u8, basename) catch null) |new_name| {
+                                                    alloc.free(tabs.items[active_tab].name);
+                                                    tabs.items[active_tab].name = new_name;
+                                                }
+                                                if (alloc.dupe(u8, path) catch null) |new_path| {
+                                                    if (tabs.items[active_tab].path) |p| alloc.free(p);
+                                                    tabs.items[active_tab].path = new_path;
+                                                }
                                             }
                                         }
+                                        needs_resize = true;
+                                    } else if (activity_bar.active_idx == 2) {
+                                        if (git_panel.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
+                                            if (std.mem.startsWith(u8, path, "__CMD__:GitWidget")) {
+                                                git_detailed_widget.is_open = true;
+                                                git_detailed_widget.refresh();
+                                                needs_resize = true;
+                                            } else if (std.mem.startsWith(u8, path, "__CMD__:Telescope")) {
+                                                const cmd = path[8..]; // skip __CMD__:
+                                                var cmd_p = try alloc.alloc(Value, 1);
+                                                defer alloc.free(cmd_p);
+                                                cmd_p[0] = .{ .string = cmd };
+                                                if (rpc.call("nvim_command", cmd_p) catch null) |res| {
+                                                    msgpack.freeValue(res, alloc);
+                                                }
+                                            } else {
+                                                openFile(rpc, alloc, path) catch {};
+                                                if (tabs.items.len == 0) {
+                                                    const basename = std.fs.path.basename(path);
+                                                    tabs.append(.{
+                                                        .name = alloc.dupe(u8, basename) catch "error",
+                                                        .path = alloc.dupe(u8, path) catch null,
+                                                    }) catch {};
+                                                    active_tab = 0;
+                                                } else if (active_tab < tabs.items.len) {
+                                                    const basename = std.fs.path.basename(path);
+                                                    if (alloc.dupe(u8, basename) catch null) |new_name| {
+                                                        alloc.free(tabs.items[active_tab].name);
+                                                        tabs.items[active_tab].name = new_name;
+                                                    }
+                                                    if (alloc.dupe(u8, path) catch null) |new_path| {
+                                                        if (tabs.items[active_tab].path) |p| alloc.free(p);
+                                                        tabs.items[active_tab].path = new_path;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        needs_resize = true;
                                     }
-                                    needs_resize = true;
                                 } else if (layout.panel != null and m.row >= layout.panel.?.y - 1 and m.row <= layout.panel.?.y + 1) {
                                     is_resizing_panel = true;
                                 } else {
