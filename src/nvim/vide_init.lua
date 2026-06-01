@@ -12,6 +12,8 @@ end
 vim.opt.rtp:prepend(lazypath)
 
 vim.g.mapleader = " "
+vim.opt.hidden = true
+vim.opt.shortmess:append("A")
 
 require("lazy").setup({
     {
@@ -35,7 +37,18 @@ require("lazy").setup({
                 dashboard.button("f", "  Find File", "<cmd>Telescope find_files<CR>"),
                 dashboard.button("q", "󰈆  Quit", ":qa<CR>"),
             }
+            dashboard.opts.opts = {
+                noautocmd = true,
+            }
             require("alpha").setup(dashboard.config)
+            local group = vim.api.nvim_create_augroup("VideDashboard", { clear = true })
+            vim.api.nvim_create_autocmd({ "FileType", "BufEnter" }, {
+                group = group,
+                pattern = "alpha",
+                callback = function()
+                    vim.cmd("setlocal nonumber norelativenumber laststatus=0")
+                end,
+            })
         end
     },
     { "nvim-lua/plenary.nvim", lazy = true },
@@ -109,6 +122,11 @@ _G.vide_enable_ide_mode = function()
     pcall(vim.keymap.set, 'i', '<Esc>', '<nop>', { desc = "Disable Esc in IDE mode" })
     pcall(vim.keymap.set, 'n', '<Esc>', 'i', { desc = "Disable Esc in IDE mode" })
     pcall(vim.keymap.set, 'v', '<Esc>', '<C-c>i', { desc = "Disable Esc in IDE mode" })
+    pcall(vim.keymap.set, {'i', 'n', 'v', 's'}, '<C-s>', function() vim.cmd("write") vim.cmd("startinsert") end, { desc = "Save File" })
+    pcall(vim.keymap.set, {'i', 'n', 'v', 's'}, '<C-z>', function() pcall(vim.cmd, "undo") vim.cmd("startinsert") end, { desc = "Undo" })
+    pcall(vim.keymap.set, {'i', 'n', 'v', 's'}, '<C-y>', function() pcall(vim.cmd, "redo") vim.cmd("startinsert") end, { desc = "Redo" })
+    pcall(vim.keymap.set, 'v', '<BS>', '"_c', { desc = "Delete selection" })
+    pcall(vim.keymap.set, 'v', '<Del>', '"_c', { desc = "Delete selection" })
     vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
         group = vim.api.nvim_create_augroup("VideIdeMode", { clear = true }),
         callback = function()
@@ -125,6 +143,11 @@ _G.vide_disable_ide_mode = function()
     pcall(vim.keymap.del, 'i', '<Esc>')
     pcall(vim.keymap.del, 'n', '<Esc>')
     pcall(vim.keymap.del, 'v', '<Esc>')
+    pcall(vim.keymap.del, {'i', 'n', 'v', 's'}, '<C-s>')
+    pcall(vim.keymap.del, {'i', 'n', 'v', 's'}, '<C-z>')
+    pcall(vim.keymap.del, {'i', 'n', 'v', 's'}, '<C-y>')
+    pcall(vim.keymap.del, 'v', '<BS>')
+    pcall(vim.keymap.del, 'v', '<Del>')
     pcall(vim.api.nvim_del_augroup_by_name, "VideIdeMode")
 end
 

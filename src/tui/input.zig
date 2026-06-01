@@ -2,10 +2,14 @@ const std = @import("std");
 const posix = std.posix;
 
 pub var sigwinch_received = std.atomic.Value(bool).init(false);
+pub var sigwinch_pipe_write_fd: ?posix.fd_t = null;
 
 pub fn handleSigwinch(sig: posix.SIG) callconv(.c) void {
     _ = sig;
     sigwinch_received.store(true, .monotonic);
+    if (sigwinch_pipe_write_fd) |fd| {
+        _ = posix.system.write(fd, "W", 1);
+    }
 }
 
 pub const MouseButton = enum {
@@ -40,10 +44,26 @@ pub const KeyEvent = struct {
 pub const Event = union(enum) {
     key: KeyEvent,
     mouse: MouseEvent,
+    paste: []const u8,
     resize: struct { cols: u16, rows: u16 },
     none,
     quit,
 };
+
+pub var unget_byte: ?u8 = null;
+
+fn tryReadByte(fd: posix.fd_t) !?u8 {
+    if (unget_byte) |b| {
+        unget_byte = null;
+        return b;
+    }
+    var buf: [1]u8 = undefined;
+    var fds = [1]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+    if ((posix.poll(&fds, 0) catch 0) > 0 and (fds[0].revents & posix.POLL.IN) != 0) {
+        if ((posix.read(fd, &buf) catch 0) == 1) return buf[0];
+    }
+    return null;
+}
 
 fn readByteTimeout(fd: posix.fd_t, timeout: i32) !?u8 {
     var buf: [1]u8 = undefined;
@@ -108,7 +128,6 @@ fn parseSgrMouse(seq: []const u8) ?MouseEvent {
 }
 
 pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !Event {
-    _ = allocator;
     // First, check if a resize signal was caught
     if (sigwinch_received.swap(false, .monotonic)) {
         var ws: posix.winsize = undefined;
@@ -118,24 +137,29 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
         }
     }
 
-    var first_buf: [1]u8 = undefined;
-    const read_bytes = posix.read(fd, &first_buf) catch |err| {
-        if (err == error.BlockedBySignal) {
-            // Signal received (like SIGWINCH), re-check flag
-            if (sigwinch_received.swap(false, .monotonic)) {
-                var ws: posix.winsize = undefined;
-                const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
-                if (posix.errno(rc) == .SUCCESS) {
-                    return Event{ .resize = .{ .cols = ws.col, .rows = ws.row } };
+    var first_byte: u8 = undefined;
+    if (unget_byte) |b| {
+        first_byte = b;
+        unget_byte = null;
+    } else {
+        var first_buf: [1]u8 = undefined;
+        const read_bytes = posix.read(fd, &first_buf) catch |err| {
+            if (err == error.BlockedBySignal) {
+                // Signal received (like SIGWINCH), re-check flag
+                if (sigwinch_received.swap(false, .monotonic)) {
+                    var ws: posix.winsize = undefined;
+                    const rc = posix.system.ioctl(fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
+                    if (posix.errno(rc) == .SUCCESS) {
+                        return Event{ .resize = .{ .cols = ws.col, .rows = ws.row } };
+                    }
                 }
+                return Event.none;
             }
-            return Event.none;
-        }
-        return err;
-    };
-
-    if (read_bytes == 0) return Event.none;
-    const first_byte = first_buf[0];
+            return err;
+        };
+        if (read_bytes == 0) return Event.none;
+        first_byte = first_buf[0];
+    }
     seq_buf[0] = first_byte;
 
     if (first_byte == 0x03) { // Ctrl-C
@@ -173,6 +197,34 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
             }
         }
 
+        if (std.mem.eql(u8, seq, "\x1b[200~")) {
+            var paste_buf = std.array_list.Managed(u8).init(allocator);
+            errdefer paste_buf.deinit();
+            var end_seq_idx: usize = 0;
+            const end_seq = "\x1b[201~";
+            while (true) {
+                if (try readByteTimeout(fd, 200)) |b| {
+                    try paste_buf.append(b);
+                    if (b == end_seq[end_seq_idx]) {
+                        end_seq_idx += 1;
+                        if (end_seq_idx == end_seq.len) {
+                            paste_buf.shrinkRetainingCapacity(paste_buf.items.len - end_seq.len);
+                            return Event{ .paste = try paste_buf.toOwnedSlice() };
+                        }
+                    } else {
+                        if (b == end_seq[0]) {
+                            end_seq_idx = 1;
+                        } else {
+                            end_seq_idx = 0;
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+            return Event{ .paste = try paste_buf.toOwnedSlice() };
+        }
+
         // Generic arrow key or function key
         return Event{ .key = .{ .char = 0, .raw = seq } };
     }
@@ -182,6 +234,24 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
         return Event{ .key = .{ .char = first_byte, .ctrl = true, .raw = seq_buf[0..1] } };
     }
 
-    // Normal printable key
-    return Event{ .key = .{ .char = first_byte, .raw = seq_buf[0..1] } };
+    // Normal printable key (or unparsed char)
+    seq_buf[0] = first_byte;
+    var len: usize = 1;
+    
+    // Batch more characters if available!
+    while (len < seq_buf.len) {
+        if (tryReadByte(fd) catch null) |b| {
+            if (b == 0x1b or b < 32 or b == 0x7f) {
+                // It's a special character, put it back for the next event!
+                unget_byte = b;
+                break;
+            }
+            seq_buf[len] = b;
+            len += 1;
+        } else {
+            break;
+        }
+    }
+
+    return Event{ .key = .{ .char = first_byte, .raw = seq_buf[0..len] } };
 }

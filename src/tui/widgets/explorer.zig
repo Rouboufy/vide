@@ -2,6 +2,10 @@ const std = @import("std");
 const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const Rect = @import("../layout.zig").Rect;
+const msgpack = @import("../../nvim/msgpack.zig");
+const Value = msgpack.Value;
+const rpc_mod = @import("../../nvim/rpc.zig");
+const RpcClient = rpc_mod.RpcClient;
 
 fn getFileIcon(name: []const u8) []const u8 {
     if (std.mem.endsWith(u8, name, ".zig")) return " ";
@@ -46,6 +50,10 @@ pub const Explorer = struct {
     input_len: usize = 0,
     action_target_path: ?[]const u8 = null, // The directory in which to create, or file to delete
 
+    // Status tracking
+    neovim_modified: std.StringHashMap(void),
+    session_saved: std.StringHashMap(void),
+
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Explorer {
         return Explorer{
             .allocator = allocator,
@@ -54,6 +62,8 @@ pub const Explorer = struct {
             .items = std.array_list.Managed(ExplorerItem).init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
             .action_state = .none,
+            .neovim_modified = std.StringHashMap(void).init(allocator),
+            .session_saved = std.StringHashMap(void).init(allocator),
         };
     }
 
@@ -61,6 +71,14 @@ pub const Explorer = struct {
         self.expanded_dirs.deinit();
         self.items.deinit();
         self.arena.deinit();
+        
+        var it_neo = self.neovim_modified.keyIterator();
+        while (it_neo.next()) |k| self.allocator.free(k.*);
+        self.neovim_modified.deinit();
+
+        var it_saved = self.session_saved.keyIterator();
+        while (it_saved.next()) |k| self.allocator.free(k.*);
+        self.session_saved.deinit();
     }
 
     pub fn refresh(self: *Explorer) !void {
@@ -68,6 +86,76 @@ pub const Explorer = struct {
         _ = self.arena.reset(.retain_capacity);
 
         try self.scanDir(".", 0);
+    }
+
+    pub fn refreshStatus(self: *Explorer, rpc: *RpcClient) bool {
+        var changed = false;
+
+        // 1. Refresh Neovim modified and saved buffers
+        const script = 
+            \\local res = { modified = {}, saved = {} }
+            \\for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            \\    local name = vim.api.nvim_buf_get_name(buf)
+            \\    if name ~= "" then
+            \\        local rel_name = vim.fn.fnamemodify(name, ':.')
+            \\        if vim.api.nvim_buf_get_option(buf, 'modified') then
+            \\            table.insert(res.modified, rel_name)
+            \\        else
+            \\            local is_saved = false
+            \\            pcall(function() is_saved = vim.b[buf].vide_session_saved end)
+            \\            if is_saved then
+            \\                table.insert(res.saved, rel_name)
+            \\            end
+            \\        end
+            \\    end
+            \\end
+            \\return res
+        ;
+
+        var params = self.allocator.alloc(Value, 2) catch return changed;
+        defer self.allocator.free(params);
+        params[0] = .{ .string = script };
+        params[1] = .{ .array = &[_]Value{} };
+
+        if (rpc.call("nvim_exec_lua", params) catch null) |res| {
+            defer msgpack.freeValue(res, self.allocator);
+            if (res == .map) {
+                var new_mod = std.StringHashMap(void).init(self.allocator);
+                var new_sav = std.StringHashMap(void).init(self.allocator);
+                
+                for (res.map) |kv| {
+                    if (kv.key == .string and std.mem.eql(u8, kv.key.string, "modified") and kv.value == .array) {
+                        for (kv.value.array) |item| {
+                            if (item == .string) new_mod.put(self.allocator.dupe(u8, item.string) catch continue, {}) catch {};
+                        }
+                    } else if (kv.key == .string and std.mem.eql(u8, kv.key.string, "saved") and kv.value == .array) {
+                        for (kv.value.array) |item| {
+                            if (item == .string) new_sav.put(self.allocator.dupe(u8, item.string) catch continue, {}) catch {};
+                        }
+                    }
+                }
+                
+                if (new_mod.count() != self.neovim_modified.count()) changed = true;
+                var it_mod = self.neovim_modified.keyIterator();
+                while (it_mod.next()) |k| {
+                    if (!new_mod.contains(k.*)) changed = true;
+                    self.allocator.free(k.*);
+                }
+                self.neovim_modified.deinit();
+                self.neovim_modified = new_mod;
+                
+                if (new_sav.count() != self.session_saved.count()) changed = true;
+                var it_sav = self.session_saved.keyIterator();
+                while (it_sav.next()) |k| {
+                    if (!new_sav.contains(k.*)) changed = true;
+                    self.allocator.free(k.*);
+                }
+                self.session_saved.deinit();
+                self.session_saved = new_sav;
+            }
+        }
+        
+        return changed;
     }
 
     fn scanDir(self: *Explorer, dir_path: []const u8, depth: u16) !void {
@@ -309,6 +397,10 @@ pub const Explorer = struct {
             const indent = item.depth * 2;
             const prefix = if (item.is_dir) (if (item.expanded) "v " else "> ") else "  ";
             
+            // Status check
+            const is_unsaved = self.neovim_modified.contains(item.path);
+            const is_session_saved = self.session_saved.contains(item.path);
+
             // Icon
             const icon = if (item.is_dir) "󰉋 " else getFileIcon(item.name);
             const text_x = rect.x + 1 + @as(u16, @intCast(indent));
@@ -318,7 +410,27 @@ pub const Explorer = struct {
             if (avail_w > 0) {
                 var buf: [256]u8 = undefined;
                 const formatted = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{prefix, icon, item.name}) catch continue;
-                drawTextClipped(rend, text_x, rect.y + y, formatted, avail_w, colors.fg_primary, bg, false, false);
+                
+                var item_fg = colors.fg_primary;
+                if (is_unsaved) {
+                    item_fg = .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }; // Red-ish
+                } else if (is_session_saved) {
+                    item_fg = .{ .rgb = .{ .r = 80, .g = 255, .b = 80 } }; // Green-ish
+                }
+
+                drawTextClipped(rend, text_x, rect.y + y, formatted, avail_w, item_fg, bg, false, false);
+                
+                // Draw 'C' indicator at the end if modified
+                if (is_unsaved or is_session_saved) {
+                    const indicator_fg = if (is_unsaved) 
+                        Color{ .rgb = .{ .r = 255, .g = 0, .b = 0 } } 
+                    else 
+                        Color{ .rgb = .{ .r = 0, .g = 255, .b = 0 } };
+                    
+                    if (rect.w > 3) {
+                        rend.drawText(rect.x + rect.w - 2, rect.y + y, "C", indicator_fg, bg, true, false);
+                    }
+                }
             }
         }
 

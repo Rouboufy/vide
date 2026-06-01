@@ -67,7 +67,6 @@ pub const RpcClient = struct {
             const msg = try msgpack.decode(&fd_reader, self.allocator);
             errdefer msgpack.freeValue(msg, self.allocator);
             if (msg != .array or msg.array.len < 3) {
-                msgpack.freeValue(msg, self.allocator);
                 return error.InvalidRpcMessage;
             }
             const msg_type = msg.array[0].integer;
@@ -76,7 +75,11 @@ pub const RpcClient = struct {
                 if (resp_id == id) {
                     const err_val = msg.array[2];
                     if (err_val != .nil) {
-                        msgpack.freeValue(msg, self.allocator);
+                        if (err_val == .array and err_val.array.len >= 2 and err_val.array[1] == .string) {
+                            std.debug.print("Neovim RPC Error: {s}\n", .{err_val.array[1].string});
+                        } else {
+                            std.debug.print("Unknown Neovim RPC Error\n", .{});
+                        }
                         return error.NvimRpcError;
                     }
                     const result = msg.array[3];

@@ -190,7 +190,15 @@ require("lazy").setup({
         dashboard.button("Ctrl + N", "󰈔  New File", "<cmd>enew<CR>"),
       }
       alpha.setup(dashboard.opts)
-    end
+      local group = vim.api.nvim_create_augroup("VideDashboard", { clear = true })
+      vim.api.nvim_create_autocmd({ "FileType", "BufEnter" }, {
+        group = group,
+        pattern = "alpha",
+        callback = function()
+          vim.cmd("setlocal nonumber norelativenumber laststatus=0")
+        end,
+      })
+      end
   }
 }, {})
 

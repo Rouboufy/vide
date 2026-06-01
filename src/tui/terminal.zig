@@ -122,15 +122,15 @@ pub const Terminal = struct {
             .tty_writer = TerminalWriter.init(tty_fd),
         };
 
-        // Enable alternate screen, hide cursor, enable mouse tracking (SGR + button press/release/drag)
-        try term.writer().writeAll("\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h");
+        // Enable alternate screen, hide cursor, enable mouse tracking, enable bracketed paste
+        try term.writer().writeAll("\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h\x1b[?2004h");
 
         return term;
     }
 
     pub fn deinit(self: *Terminal) void {
-        // Disable mouse tracking, show cursor, disable alternate screen
-        self.writer().writeAll("\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l") catch {};
+        // Disable bracketed paste, disable mouse tracking, show cursor, disable alternate screen
+        self.writer().writeAll("\x1b[?2004l\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l") catch {};
 
         // Restore original terminal attributes
         posix.tcsetattr(self.tty_fd, .FLUSH, self.orig_termios) catch {};

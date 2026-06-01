@@ -1,11 +1,11 @@
-# 🛠️ Vide — Project Specification
+#  Vide — Project Specification
 
 > Ce document résume la vision, l'architecture technique et les choix d'implémentation de Vide.
 > Stack : Zig + Neovim embarqué. Zéro dépendance externe à l'exécution.
 
 ---
 
-## 🎯 Vision du Projet
+##  Vision du Projet
 
 La plupart des IDE modernes font un choix : soit ils sont accessibles, soit ils sont puissants. VS Code a choisi l'accessibilité. Neovim a choisi la puissance. **Vide refuse de choisir.**
 
@@ -29,24 +29,24 @@ Vide est une **application Zig unique** qui embarque Neovim comme moteur d'édit
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    VIDE (binaire Zig)                    │
+│                    VIDE (binaire Zig)                   │
 │                                                         │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │                  TUI RENDERER                    │   │
-│  │     Raw VT sequences · Mouse · Keyboard          │   │
-│  └──────────────────────┬──────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │                  TUI RENDERER                   │    │
+│  │     Raw VT sequences · Mouse · Keyboard         │    │
+│  └──────────────────────┬──────────────────────────┘    │
 │                         │                               │
-│  ┌──────────┬───────────┼──────────────┬────────────┐  │
-│  │ ACTIVITY │   FILE    │    EDITOR    │   STATUS   │  │
-│  │   BAR    │   TREE    │    PANEL     │    BAR     │  │
-│  │  (Zig)   │  (Zig)    │  (Neovim     │   (Zig)    │  │
-│  │          │           │  viewport)   │            │  │
-│  └──────────┴───────────┴──────┬───────┴────────────┘  │
+│  ┌──────────┬───────────┼──────────────┬────────────┐   │
+│  │ ACTIVITY │   FILE    │    EDITOR    │   STATUS   │   │
+│  │   BAR    │   TREE    │    PANEL     │    BAR     │   │
+│  │  (Zig)   │  (Zig)    │  (Neovim     │   (Zig)    │   │
+│  │          │           │  viewport)   │            │   │
+│  └──────────┴───────────┴──────┬───────┴────────────┘   │
 │                                │                        │
-│  ┌─────────────────────────────▼──────────────────┐    │
-│  │              NEOVIM RPC LAYER (Zig)             │    │
-│  │        msgpack-rpc · nvim --embed               │    │
-│  └─────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────▼──────────────────┐     │
+│  │              NEOVIM RPC LAYER (Zig)            │     │
+│  │        msgpack-rpc · nvim --embed              │     │
+│  └────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -64,7 +64,7 @@ Vide est une **application Zig unique** qui embarque Neovim comme moteur d'édit
 
 ---
 
-## 🔄 Les Deux Modes de l'Interface
+##  Les Deux Modes de l'Interface
 
 ### 1. Mode IDE *(par défaut)*
 
@@ -77,7 +77,7 @@ Vide est une **application Zig unique** qui embarque Neovim comme moteur d'édit
 │ B  │    build.zig │                               │
 │ A  │              │                               │
 │ R  │              ├───────────────────────────────┤
-│    │              │  PANEL (diagnostics / terminal)│
+│    │              │ PANEL (diagnostics / terminal)│
 ├────┴──────────────┴───────────────────────────────┤
 │              STATUS BAR                           │
 └───────────────────────────────────────────────────┘
@@ -109,7 +109,7 @@ Toggle : `Space m t`
 
 ---
 
-## 📦 Stack Technique Détaillé
+##  Stack Technique Détaillé
 
 | Composant | Technologie | Pourquoi |
 |-----------|-------------|----------|
@@ -123,7 +123,7 @@ Toggle : `Space m t`
 
 ---
 
-## 🧠 Mécaniques Clés
+##  Mécaniques Clés
 
 ### Rendu Double Buffer
 Vide maintient deux buffers de cellules (actuel + précédent). Au flush, seules les cellules modifiées sont envoyées au terminal — zéro scintillement, performance maximale.
@@ -139,7 +139,7 @@ Le layout est calculé à partir des dimensions du terminal (`TIOCGWINSZ`). Chaq
 
 ---
 
-## 📦 Distribution
+##  Distribution
 
 ```bash
 curl -fsSL https://vide.sh/install | sh
@@ -153,7 +153,7 @@ curl -fsSL https://vide.sh/install | sh
 
 ---
 
-## 🗺️ Roadmap
+##  Roadmap
 
 ```
 Phase 1 — TUI de base
