@@ -1,12 +1,12 @@
 <div align="center">
 
 ```
-██╗   ██╗██╗██████╗ ███████╗
-██║   ██║██║██╔══██╗██╔════╝
-██║   ██║██║██║  ██║█████╗
-╚██╗ ██╔╝██║██║  ██║██╔══╝
- ╚████╔╝ ██║██████╔╝███████╗
-  ╚═══╝  ╚═╝╚═════╝ ╚══════╝
+                  ██╗   ██╗██╗██████╗ ███████╗
+                  ██║   ██║██║██╔══██╗██╔════╝
+                  ██║   ██║██║██║  ██║█████╗
+                  ╚██╗ ██╔╝██║██║  ██║██╔══╝
+                   ╚████╔╝ ██║██████╔╝███████╗
+                    ╚═══╝  ╚═╝╚═════╝ ╚══════╝
 ```
 
 **The IDE that hides a terminal. The terminal that wears an IDE.**
@@ -21,21 +21,29 @@
 
 ## What is Vide?
 
-Vide is a terminal-native Integrated Development Environment built entirely in Zig, using Neovim as its core editing engine. 
+Vide is a terminal-native Integrated Development Environment built entirely in Zig, using Neovim as its core editing engine.
 
-It provides the visual comfort and mouse-driven interactions of a modern GUI editor, while retaining the performance, keyboard efficiency, and portability of a pure terminal application.
+**The power of a professional IDE, the speed of a terminal, the simplicity of a single binary.**
 
-Because Vide is a single binary that relies exclusively on ANSI terminal escape sequences, it works natively over SSH without any forwarding or special configurations.
+Vide eliminates the false choice between GUI IDEs and terminal editors. You get full IDE capabilities—integrated file explorer, integrated terminal panel, real-time diagnostics, and a configuration interface—wrapped in a high-performance, lightweight terminal application. No bloat. No Electron. No configuration hell.
+
+### Why Choose Vide?
+
+- **Single Binary, Zero Installation Friction:** Ship your development environment anywhere with a binary smaller than most text editors. Works natively over SSH without X11 forwarding or remote extensions.
+- **True Performance:** Zig's raw speed means Vide starts instantly, renders responsively, and handles large files effortlessly. No framework overhead, no virtual machines, no startup taxes.
+- **Familiar yet Powerful:** Full Neovim compatibility means all your plugins, LSP configurations, and keybindings work out of the box. Everything from Telescope fuzzy finding to TreeSitter highlighting to your favorite plugins just works.
+- **Unified Workflow:** Mouse-driven file navigation, integrated terminal, and Neovim all share the same window. No task switching, no terminal juggling. Work naturally with keyboard or mouse.
+- **Complete Independence:** Vide uses its own configuration directory and never interferes with your system Neovim setup. Run both side by side.
 
 ---
 
 ## Architecture
 
-Vide operates as a unified Terminal User Interface (TUI). 
+Vide operates as a unified Terminal User Interface (TUI).
 
-Instead of wrapping a terminal emulator or launching multiple discrete processes, Vide handles all terminal rendering directly via a highly optimized, double-buffered drawing engine written in Zig. 
+Instead of wrapping a terminal emulator or launching multiple discrete processes, Vide handles all terminal rendering directly via a highly optimized, double-buffered drawing engine written in Zig.
 
-Neovim is launched as a hidden, headless subprocess using its native `--embed` protocol. Vide intercepts Neovim's UI commands via Msgpack-RPC and paints them onto the terminal, seamlessly surrounding the text buffer with native Zig widgets.
+Neovim is launched as a hidden, headless subprocess using its native `--embed` protocol. Vide intercepts Neovim's UI commands via Msgpack-RPC and paints them onto the terminal, seamlessly integrating Neovim's power with custom native components.
 
 This architecture ensures:
 * **Zero Configuration Constraints:** Vide uses its own isolated configuration path (`~/.config/vide`) and does not interfere with your existing Neovim or shell setups.
