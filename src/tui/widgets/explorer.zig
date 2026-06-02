@@ -292,6 +292,7 @@ pub const Explorer = struct {
             if (self.action_state != .none) {
                 return null; // Don't allow clicking items while prompt is open
             }
+            if (rel_y == 0) return null;
 
             const item_idx = rel_y - 1 + self.scroll_y;
             if (item_idx < self.items.items.len) {
@@ -379,7 +380,7 @@ pub const Explorer = struct {
             drawTextClipped(rend, rect.x + rect.w - 2, rect.y, " X", 2, colors.fg_accent, colors.bg_sidebar, true, false);
         }
 
-        const max_items = @max(1, rect.h - 1);
+        const max_items = if (rect.h > 0) @max(1, rect.h - 1) else 0;
         var y: u16 = 1;
         
         // Draw Items
@@ -394,7 +395,7 @@ pub const Explorer = struct {
                 rend.drawRect(Rect{ .x = rect.x, .y = rect.y + y, .w = rect.w, .h = 1 }, " ", colors.fg_primary, bg);
             }
 
-            const indent = item.depth * 2;
+            const indent = @as(usize, item.depth) * 2;
             const prefix = if (item.is_dir) (if (item.expanded) "v " else "> ") else "  ";
             
             // Status check
@@ -403,7 +404,7 @@ pub const Explorer = struct {
 
             // Icon
             const icon = if (item.is_dir) "󰉋 " else getFileIcon(item.name);
-            const text_x = rect.x + 1 + @as(u16, @intCast(indent));
+            const text_x = rect.x + 1 + @as(u16, @intCast(@min(32000, indent)));
             
             var avail_w: u16 = 0;
             if (text_x < rect.x + rect.w) avail_w = rect.x + rect.w - text_x;
@@ -436,7 +437,7 @@ pub const Explorer = struct {
 
         // Draw prompt if action_state != .none
         if (self.action_state != .none and rect.h > 2) {
-            const prompt_y = rect.y + rect.h - 1;
+            const prompt_y = if (rect.h > 0) rect.y + rect.h - 1 else rect.y;
             rend.drawRect(Rect{ .x = rect.x, .y = prompt_y - 1, .w = rect.w, .h = 2 }, " ", colors.fg_primary, colors.bg_editor);
             
             const ptext = switch (self.action_state) {

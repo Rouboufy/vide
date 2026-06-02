@@ -58,7 +58,7 @@ pub const Renderer = struct {
 
     pub fn setCell(self: *Renderer, x: u16, y: u16, cell: Cell) void {
         if (x >= self.width or y >= self.height) return;
-        self.buf[y * self.width + x] = cell;
+        self.buf[@as(usize, y) * @as(usize, self.width) + x] = cell;
     }
 
     pub fn drawRect(self: *Renderer, rect: @import("layout.zig").Rect, char: []const u8, fg: Color, bg: Color) void {

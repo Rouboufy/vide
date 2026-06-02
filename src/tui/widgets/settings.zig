@@ -3,10 +3,10 @@ const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 
 pub const Keybindings = struct {
-    toggle_terminal: []const u8 = "\x14", // Ctrl-t
-    toggle_explorer: []const u8 = "\x05", // Ctrl-e
-    toggle_zen: []const u8 = "\x0b",      // Ctrl-k
-    new_file: []const u8 = "\x0e",        // Ctrl-n
+    toggle_explorer: []const u8 = "<C-e>", // Ctrl-e
+    toggle_terminal: []const u8 = "<C-t>", // Ctrl-t
+    toggle_zen: []const u8 = "<C-z>", // Ctrl-z
+    new_file: []const u8 = "<C-n>", // Ctrl-n
 };
 
 pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
@@ -510,7 +510,6 @@ pub const SettingsWidget = struct {
             
             self.active_binding = null;
             self.has_unsaved_changes = true;
-            self.needs_apply = true;
             return true;
         }
         
@@ -548,7 +547,6 @@ pub const SettingsWidget = struct {
                 if (my == py + 5) {
                     if (mx >= px + 4 and mx <= px + 10) { // [ Yes ]
                         self.config = SettingsConfig.load(self.allocator, self.settings_path) catch SettingsConfig{};
-                        self.needs_apply = true;
                         self.has_unsaved_changes = false;
                         self.popup_active = false;
                         self.is_open = false;
@@ -611,7 +609,6 @@ pub const SettingsWidget = struct {
                 
                 if (changed) {
                     self.has_unsaved_changes = true;
-                    self.needs_apply = true;
                 }
             }
             // Any click while dropdown is open closes the dropdown (and consumes the click)
@@ -642,6 +639,7 @@ pub const SettingsWidget = struct {
                 if (self.has_unsaved_changes) {
                     self.config.save(self.settings_path) catch {};
                     self.has_unsaved_changes = false;
+                    self.needs_apply = true;
                 }
                 return true;
             }
@@ -710,7 +708,6 @@ pub const SettingsWidget = struct {
                 }
                 if (changed) {
                     self.has_unsaved_changes = true;
-                    self.needs_apply = true;
                 }
             }
             return true; // ALWAYS consume the click if it's inside the window!

@@ -326,6 +326,48 @@ function M.sync_theme()
     end
     
     local bg_accent = get_color("Function", "fg") or get_color("Statement", "fg") or "#007acc"
+    
+    local fg_statusbar = "#ffffff"
+    do
+        local r = tonumber(bg_accent:sub(2, 3), 16) or 0
+        local g = tonumber(bg_accent:sub(4, 5), 16) or 0
+        local b = tonumber(bg_accent:sub(6, 7), 16) or 0
+        local brightness = (r * 299 + g * 587 + b * 114) / 1000
+        if brightness > 128 then
+            fg_statusbar = "#1e1e1e"
+        end
+    end
+
+    -- Set terminal colors for the terminal panel so bash prompt ~ > is legible
+    local bg_terminal = get_contrast(bg_editor, 12) -- Lighten background slightly for contrast
+    if not bg_terminal then bg_terminal = bg_editor end
+    
+    vim.g.terminal_color_0  = get_color("Normal", "bg") or "#1e1e1e"
+    vim.g.terminal_color_1  = get_color("Error", "fg") or "#f2495a"
+    vim.g.terminal_color_2  = get_color("String", "fg") or "#42be65"
+    vim.g.terminal_color_3  = get_color("WarningMsg", "fg") or "#ffcc00"
+    vim.g.terminal_color_4  = get_color("Function", "fg") or "#007acc"
+    vim.g.terminal_color_5  = get_color("Statement", "fg") or "#c678dd"
+    vim.g.terminal_color_6  = get_color("Special", "fg") or "#56b6c2"
+    vim.g.terminal_color_7  = get_color("Normal", "fg") or "#d4d4d4"
+    vim.g.terminal_color_8  = get_color("Comment", "fg") or "#858585"
+    vim.g.terminal_color_9  = get_color("Error", "fg") or "#f2495a"
+    vim.g.terminal_color_10 = get_color("String", "fg") or "#42be65"
+    vim.g.terminal_color_11 = get_color("WarningMsg", "fg") or "#ffcc00"
+    vim.g.terminal_color_12 = get_color("Function", "fg") or "#007acc"
+    vim.g.terminal_color_13 = get_color("Statement", "fg") or "#c678dd"
+    vim.g.terminal_color_14 = get_color("Special", "fg") or "#56b6c2"
+    vim.g.terminal_color_15 = "#ffffff"
+
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.bo[buf].buftype == "terminal" then
+            for i = 0, 15 do
+                vim.api.nvim_buf_set_var(buf, "terminal_color_" .. i, vim.g["terminal_color_" .. i])
+            end
+            -- Force redraw in terminal buffer by briefly switching to it (optional but ensures update)
+        end
+    end
+
     local f = io.open("/home/blanglai/vide/vide_error.log", "a")
     if f then
         f:write("sync_theme bg_editor=" .. bg_editor .. " default_bg=" .. (get_color("Normal", "bg") or "nil") .. "\n")
@@ -333,8 +375,9 @@ function M.sync_theme()
     end
     vim.rpcnotify(1, "vide_theme_changed", {
         bg_editor = bg_editor, bg_sidebar = bg_sidebar, bg_tab_active = bg_editor,
-        bg_tab_inactive = bg_tab_inactive, bg_statusbar = bg_accent, bg_accent = bg_accent,
+        bg_tab_inactive = bg_tab_inactive, bg_statusbar = bg_accent, fg_statusbar = fg_statusbar, bg_accent = bg_accent,
         fg_primary = fg_primary, fg_secondary = fg_secondary, fg_accent = fg_primary, border_color = border_color,
+        bg_terminal = bg_terminal,
     })
 end
 
@@ -371,3 +414,49 @@ vim.keymap.set("n", "N", "Nzzzv")
 vim.keymap.set("x", "<leader>p", [["_dP]])
 vim.keymap.set({ "n", "v" }, "<leader>d", [["_d]])
 vim.keymap.set("n", "<leader>th", "<cmd>lua require('vide_settings').open()<cr>")
+
+-- Track Telescope windows for Vide to draw a close button
+local function notify_telescope()
+    local top, left, bottom, right = 9999, 9999, -1, -1
+    local found = false
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(w) then
+            local buf = vim.api.nvim_win_get_buf(w)
+            local ft = vim.bo[buf].filetype
+            if ft == "TelescopePrompt" or ft == "TelescopeResults" or ft == "TelescopePreview" then
+                found = true
+                local cfg = vim.api.nvim_win_get_config(w)
+                if cfg.relative ~= "" then
+                    local r = math.floor(cfg.row or 0)
+                    local c = math.floor(cfg.col or 0)
+                    if r < 0 then r = 0 end
+                    if c < 0 then c = 0 end
+                    local w_w = math.floor(cfg.width or 0)
+                    local w_h = math.floor(cfg.height or 0)
+                    if r < top then top = r end
+                    if c < left then left = c end
+                    if r + w_h > bottom then bottom = r + w_h end
+                    if c + w_w > right then right = c + w_w end
+                end
+            end
+        end
+    end
+    if found then
+        vim.rpcnotify(1, "vide_telescope_rect", { top, left, right - left, bottom - top })
+    else
+        vim.rpcnotify(1, "vide_telescope_rect", vim.NIL)
+    end
+end
+
+vim.api.nvim_create_autocmd({"WinNew", "WinClosed", "WinEnter", "WinLeave"}, {
+    callback = function() vim.schedule(notify_telescope) end
+})
+
+-- Configure Telescope to use no borders so Vide can draw its own widget frame
+pcall(function()
+    require('telescope').setup({
+        defaults = {
+            border = false,
+        }
+    })
+end)

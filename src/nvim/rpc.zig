@@ -60,6 +60,18 @@ pub const RpcClient = struct {
         return try self.waitResponse(id);
     }
 
+    pub fn notify(self: *RpcClient, method: []const u8, params: []const Value) !void {
+        var req_arr = try self.allocator.alloc(Value, 3);
+        defer self.allocator.free(req_arr);
+        req_arr[0] = .{ .integer = 2 };
+        req_arr[1] = .{ .string = method };
+        const params_dup = try self.allocator.alloc(Value, params.len);
+        @memcpy(params_dup, params);
+        defer self.allocator.free(params_dup);
+        req_arr[2] = .{ .array = params_dup };
+        try self.send(.{ .array = req_arr });
+    }
+
     fn waitResponse(self: *RpcClient, id: u32) !Value {
         var fd_reader = FdReader{ .fd = self.process.stdout.handle };
         while (true) {

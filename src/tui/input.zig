@@ -202,13 +202,18 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
             errdefer paste_buf.deinit();
             var end_seq_idx: usize = 0;
             const end_seq = "\x1b[201~";
+            const MAX_PASTE_SIZE = 2 * 1024 * 1024; // 2MB
             while (true) {
                 if (try readByteTimeout(fd, 200)) |b| {
-                    try paste_buf.append(b);
+                    if (paste_buf.items.len < MAX_PASTE_SIZE) {
+                        try paste_buf.append(b);
+                    }
                     if (b == end_seq[end_seq_idx]) {
                         end_seq_idx += 1;
                         if (end_seq_idx == end_seq.len) {
-                            paste_buf.shrinkRetainingCapacity(paste_buf.items.len - end_seq.len);
+                            if (paste_buf.items.len >= end_seq.len) {
+                                paste_buf.shrinkRetainingCapacity(paste_buf.items.len - end_seq.len);
+                            }
                             return Event{ .paste = try paste_buf.toOwnedSlice() };
                         }
                     } else {

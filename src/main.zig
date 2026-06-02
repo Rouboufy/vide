@@ -14,6 +14,22 @@ const SettingsWidget = @import("tui/widgets/settings.zig").SettingsWidget;
 const MasonWidget = @import("tui/widgets/mason.zig").MasonWidget;
 const LazyWidget = @import("tui/widgets/lazy.zig").LazyWidget;
 const GitDetailedWidget = @import("tui/widgets/git_detailed.zig").GitDetailedWidget;
+const SearchPanel = @import("tui/widgets/search_panel.zig").SearchPanel;
+const OutputPanel = @import("tui/widgets/output_panel.zig").OutputPanel;
+const DebugConsole = @import("tui/widgets/debug_console.zig").DebugConsole;
+
+var global_term: ?*Terminal = null;
+
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    _ = error_return_trace;
+    if (global_term) |term| {
+        term.deinit();
+    } else {
+        const esc = "\x1b[?2004l\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l\x1b[0m\r\n";
+        _ = posix.system.write(2, esc, esc.len);
+    }
+    std.debug.defaultPanic(msg, ret_addr);
+}
 
 const Mode = enum { ide, zen };
 
@@ -23,6 +39,8 @@ var bg_sidebar = Color{ .rgb = .{ .r = 37, .g = 37, .b = 38 } };
 var bg_tab_active = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } };
 var bg_tab_inactive = Color{ .rgb = .{ .r = 45, .g = 45, .b = 45 } };
 var bg_statusbar = Color{ .rgb = .{ .r = 0, .g = 95, .b = 184 } }; // Highly visible bright blue
+var fg_statusbar = Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }; // White default
+var bg_terminal = Color{ .rgb = .{ .r = 10, .g = 10, .b = 10 } }; // Darker background for terminal
 var bg_accent = Color{ .rgb = .{ .r = 0, .g = 122, .b = 204 } };
 var fg_primary = Color{ .rgb = .{ .r = 212, .g = 212, .b = 212 } };
 var fg_secondary = Color{ .rgb = .{ .r = 133, .g = 133, .b = 133 } };
@@ -77,9 +95,7 @@ fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseEvent
     p[4] = .{ .integer = rel_row }; // row
     p[5] = .{ .integer = rel_col }; // col
     
-    if (rpc.call("nvim_input_mouse", p) catch null) |res| {
-        msgpack.freeValue(res, alloc);
-    }
+    rpc.notify("nvim_input_mouse", p) catch {};
     alloc.free(p);
 }
 
@@ -92,6 +108,22 @@ fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) anyer
             if (ui_state.current_buf_path) |p| ui_state.allocator.free(p);
             ui_state.current_buf_path = try ui_state.allocator.dupe(u8, params.array[0].string);
             ui_state.buf_path_changed = true;
+        }
+    } else if (std.mem.eql(u8, method, "vide_telescope_rect") and params == .array) {
+        if (params.array.len > 0 and params.array[0] == .array) {
+            const arr = params.array[0].array;
+            if (arr.len == 4 and arr[0] == .integer and arr[1] == .integer and arr[2] == .integer and arr[3] == .integer) {
+                ui_state.telescope_rect = Rect{
+                    .y = @as(u16, @intCast(@min(65535, @max(0, arr[0].integer)))),
+                    .x = @as(u16, @intCast(@min(65535, @max(0, arr[1].integer)))),
+                    .w = @as(u16, @intCast(@min(65535, @max(0, arr[2].integer)))),
+                    .h = @as(u16, @intCast(@min(65535, @max(0, arr[3].integer)))),
+                };
+            } else {
+                ui_state.telescope_rect = null;
+            }
+        } else {
+            ui_state.telescope_rect = null;
         }
     } else if (std.mem.eql(u8, method, "vide_toggle_zen")) {
         // Toggle zen mode
@@ -112,6 +144,8 @@ fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) anyer
                         if (std.mem.eql(u8, k, "bg_tab_active")) bg_tab_active = c;
                         if (std.mem.eql(u8, k, "bg_tab_inactive")) bg_tab_inactive = c;
                         if (std.mem.eql(u8, k, "bg_statusbar")) bg_statusbar = c;
+                        if (std.mem.eql(u8, k, "fg_statusbar")) fg_statusbar = c;
+                        if (std.mem.eql(u8, k, "bg_terminal")) bg_terminal = c;
                         if (std.mem.eql(u8, k, "bg_accent")) bg_accent = c;
                         if (std.mem.eql(u8, k, "fg_primary")) fg_primary = c;
                         if (std.mem.eql(u8, k, "fg_secondary")) fg_secondary = c;
@@ -139,8 +173,7 @@ fn openFile(rpc: *RpcClient, allocator: std.mem.Allocator, path: []const u8) !vo
     
     params[1] = .{ .array = lua_args };
     
-    const result = try rpc.call("nvim_exec_lua", params);
-    msgpack.freeValue(result, allocator);
+    try rpc.notify("nvim_exec_lua", params);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -154,6 +187,7 @@ fn innerMain(init: std.process.Init) !void {
     const alloc = init.gpa;
     var term = try Terminal.init();
     defer term.deinit();
+    global_term = &term;
 
     var sa = std.posix.Sigaction{
         .handler = .{ .handler = input.handleSigwinch },
@@ -238,6 +272,15 @@ fn runNvimSession(
     defer git_panel.deinit();
     git_panel.refresh() catch {};
 
+    var search_panel = SearchPanel.init(alloc);
+    defer search_panel.deinit();
+
+    var output_panel = OutputPanel.init(alloc);
+    defer output_panel.deinit();
+
+    var debug_console = DebugConsole.init(alloc);
+    defer debug_console.deinit();
+
     const home = init.environ_map.get("HOME") orelse "";
     const settings_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "settings.json" });
     const preview_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "preview.json" });
@@ -273,7 +316,7 @@ fn runNvimSession(
     var term_attach_params = try alloc.alloc(Value, 3);
     defer alloc.free(term_attach_params);
     term_attach_params[0] = .{ .integer = if (initial_layout.panel) |p| p.w else 80 };
-    term_attach_params[1] = .{ .integer = if (initial_layout.panel) |p| @max(1, p.h - 1) else 7 };
+    term_attach_params[1] = .{ .integer = if (initial_layout.panel) |p| (if (p.h > 0) @max(1, p.h - 1) else 1) else 7 };
     term_attach_params[2] = .{ .map = opt_kvs };
     const term_attach_result = try rpc_term.call("nvim_ui_attach", term_attach_params);
     msgpack.freeValue(term_attach_result, alloc);
@@ -342,6 +385,7 @@ fn runNvimSession(
 
     var terminal_focus = false;
     var show_terminal_panel = false;
+    var active_terminal_panel_idx: u8 = 0;
     var last_explorer_refresh: i64 = 0;
 
     while (true) {
@@ -378,7 +422,7 @@ fn runNvimSession(
                 var tp = try alloc.alloc(Value, 2);
                 defer alloc.free(tp);
                 tp[0] = .{ .integer = panel.w };
-                tp[1] = .{ .integer = @max(1, panel.h - 1) };
+                tp[1] = .{ .integer = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
                 if (rpc_term.call("nvim_ui_try_resize", tp) catch null) |tres| {
                     msgpack.freeValue(tres, alloc);
                 }
@@ -398,7 +442,7 @@ fn runNvimSession(
             var gx: u16 = 0;
             while (gx < layout.editor.w) : (gx += 1) {
                 if (gy < ui_state.grid.height and gx < ui_state.grid.width) {
-                    var cell = ui_state.grid.cells[gy * ui_state.grid.width + gx];
+                    var cell = ui_state.grid.cells[@as(usize, gy) * @as(usize, ui_state.grid.width) + gx];
                     
                     if (std.meta.eql(cell.bg, ui_state.default_bg) or std.meta.activeTag(cell.bg) == .none) {
                         cell.bg = bg_editor;
@@ -424,6 +468,11 @@ fn runNvimSession(
             if (show_file_tree) {
                 if (activity_bar.active_idx == 0) {
                     explorer.draw(renderer, layout.file_tree, .{
+                        .bg_sidebar = bg_sidebar, .bg_editor = bg_editor, .bg_accent = bg_accent,
+                        .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
+                    });
+                } else if (activity_bar.active_idx == 1) {
+                    search_panel.draw(renderer, layout.file_tree, .{
                         .bg_sidebar = bg_sidebar, .bg_editor = bg_editor, .bg_accent = bg_accent,
                         .fg_primary = fg_primary, .fg_secondary = fg_secondary, .border_color = border_color, .fg_accent = fg_accent,
                     });
@@ -458,51 +507,133 @@ fn runNvimSession(
             }
             // Draw + button for new tab
             drawText(renderer, tx + 1, layout.tab_bar.y, "+", fg_secondary, bg_sidebar, true, false);
+            
+            // Draw Status Bar background
             drawRect(renderer, layout.status_bar, " ", fg_primary, bg_statusbar);
-            drawText(renderer, layout.status_bar.x + 1, layout.status_bar.y, " 󰚌  NORMAL ", bg_accent, Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, true, false);
+            
+            // Draw mode indicator
+            drawText(renderer, layout.status_bar.x + 1, layout.status_bar.y, " 󰚌  NORMAL ", fg_statusbar, bg_statusbar, true, false);
             
             // Draw Branch in Status Bar
             const branch_name = git_panel.current_branch orelse "main";
             var status_buf: [128]u8 = undefined;
             const branch_display = std.fmt.bufPrint(&status_buf, "  {s} ", .{branch_name}) catch "  main ";
-            drawText(renderer, layout.status_bar.x + 12, layout.status_bar.y, branch_display, Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, bg_statusbar, true, false);
+            drawText(renderer, layout.status_bar.x + 12, layout.status_bar.y, branch_display, fg_statusbar, bg_statusbar, true, false);
             
+            // Draw File in Status Bar
             const file_x = 12 + @as(u16, @intCast(branch_display.len)) + 1;
-            drawText(renderer, layout.status_bar.x + file_x, layout.status_bar.y, "󰌆  main.zig", Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } }, bg_statusbar, false, false);
+            drawText(renderer, layout.status_bar.x + file_x, layout.status_bar.y, "󰌆  main.zig", fg_statusbar, bg_statusbar, false, false);
 
             if (layout.panel) |panel| {
+                // Draw terminal panel background
+                drawRect(renderer, panel, " ", fg_primary, bg_terminal);
+                
                 var px: u16 = 0;
                 while (px < panel.w) : (px += 1) {
                     var cell = Cell{ .fg = bg_accent, .bg = bg_sidebar };
                     cell.setChar("━");
                     renderer.setCell(panel.x + px, panel.y, cell);
                 }
-                const term_header_fg = if (terminal_focus) bg_accent else fg_secondary;
-                drawText(renderer, panel.x + 2, panel.y, " TERMINAL ", term_header_fg, bg_sidebar, true, false);
-                drawText(renderer, panel.x + 13, panel.y, " DEBUG CONSOLE ", fg_secondary, bg_sidebar, false, false);
-                drawText(renderer, panel.x + 30, panel.y, " OUTPUT ", fg_secondary, bg_sidebar, false, false);
+                
+                // Draw terminal header
+                const term_header_fg = if (active_terminal_panel_idx == 0) bg_accent else fg_secondary;
+                const debug_header_fg = if (active_terminal_panel_idx == 1) bg_accent else fg_secondary;
+                const output_header_fg = if (active_terminal_panel_idx == 2) bg_accent else fg_secondary;
+                
+                drawText(renderer, panel.x + 2, panel.y, " TERMINAL ", term_header_fg, bg_terminal, active_terminal_panel_idx == 0, false);
+                drawText(renderer, panel.x + 13, panel.y, " DEBUG CONSOLE ", debug_header_fg, bg_terminal, active_terminal_panel_idx == 1, false);
+                drawText(renderer, panel.x + 30, panel.y, " OUTPUT ", output_header_fg, bg_terminal, active_terminal_panel_idx == 2, false);
 
-                var py: u16 = 0;
-                while (py < panel.h - 1) : (py += 1) {
+                if (panel.h > 1) {
+                    var py: u16 = 0;
+                    while (py < panel.h - 1) : (py += 1) {
                     px = 0;
                     while (px < panel.w) : (px += 1) {
-                        if (py < ui_term.grid.height and px < ui_term.grid.width) {
-                            var cell = ui_term.grid.cells[py * ui_term.grid.width + px];
+                        if (active_terminal_panel_idx == 0 and py < ui_term.grid.height and px < ui_term.grid.width) {
+                            var cell = ui_term.grid.cells[@as(usize, py) * @as(usize, ui_term.grid.width) + px];
                             if (std.meta.eql(cell.bg, ui_term.default_bg) or std.meta.activeTag(cell.bg) == .none) {
-                                cell.bg = bg_sidebar;
+                                cell.bg = bg_terminal;
                             }
                             if (std.meta.eql(cell.fg, ui_term.default_fg) or std.meta.activeTag(cell.fg) == .none) {
                                 cell.fg = fg_primary;
+                            } else if (std.meta.activeTag(cell.fg) == .rgb) {
+                                const r = cell.fg.rgb.r;
+                                const g = cell.fg.rgb.g;
+                                const b = cell.fg.rgb.b;
+                                // If the color is very dark blue, snap it to a highly visible vivid light blue (cyan-ish)
+                                if (r < 80 and g < 80 and b > 50) {
+                                    cell.fg.rgb.r = 86;
+                                    cell.fg.rgb.g = 182;
+                                    cell.fg.rgb.b = 194;
+                                } else if (r < 60 and g < 60 and b < 60) {
+                                    // If it's just very dark (like black on dark background), brighten it
+                                    cell.fg.rgb.r = r +| 100;
+                                    cell.fg.rgb.g = g +| 100;
+                                    cell.fg.rgb.b = b +| 100;
+                                }
                             }
                             renderer.setCell(panel.x + px, panel.y + 1 + py, cell);
+                        } else if (active_terminal_panel_idx == 1) {
+                            // Delay rendering slightly, it will be done below
+                        } else if (active_terminal_panel_idx == 2) {
+                            // Delay rendering slightly, it will be done below
                         } else {
                             renderer.setCell(panel.x + px, panel.y + 1 + py, Cell{
                                 .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1,
-                                .fg = fg_primary, .bg = bg_sidebar,
+                                .fg = fg_primary, .bg = bg_terminal,
                             });
                         }
                     }
                 }
+                }
+                
+                if (active_terminal_panel_idx == 1) {
+                    const content_rect = Rect{ .x = panel.x, .y = panel.y + 1, .w = panel.w, .h = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
+                    debug_console.draw(renderer, content_rect, .{ .fg_primary = fg_primary, .fg_secondary = fg_secondary, .fg_accent = fg_accent, .bg_terminal = bg_terminal });
+                } else if (active_terminal_panel_idx == 2) {
+                    const content_rect = Rect{ .x = panel.x, .y = panel.y + 1, .w = panel.w, .h = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
+                    output_panel.draw(renderer, content_rect, .{ .fg_primary = fg_primary, .fg_secondary = fg_secondary, .fg_accent = fg_accent, .bg_terminal = bg_terminal });
+                }
+            }
+            
+            if (ui_state.telescope_rect) |rect| {
+                const draw_x = layout.editor.x + rect.x;
+                const draw_y = layout.editor.y + rect.y;
+                
+                const wx = if (draw_x > 0) draw_x - 1 else 0;
+                const wy = if (draw_y > 0) draw_y - 1 else 0;
+                const shadow_color = Color{ .rgb = .{ .r = 10, .g = 10, .b = 10 } };
+                
+                // Draw shadow right
+                var sy: u16 = 1;
+                while (sy <= rect.h + 1) : (sy += 1) {
+                    renderer.drawText(wx + rect.w + 2, wy + sy, " ", fg_primary, shadow_color, false, false);
+                    renderer.drawText(wx + rect.w + 3, wy + sy, " ", fg_primary, shadow_color, false, false);
+                }
+                // Draw shadow bottom
+                var sx: u16 = 1;
+                while (sx <= rect.w + 3) : (sx += 1) {
+                    renderer.drawText(wx + sx, wy + rect.h + 2, " ", fg_primary, shadow_color, false, false);
+                }
+                
+                // Top border
+                var bw: u16 = 0;
+                while (bw < rect.w + 2) : (bw += 1) {
+                    renderer.drawText(wx + bw, wy, " ", fg_primary, border_color, false, false);
+                    renderer.drawText(wx + bw, wy + rect.h + 1, " ", fg_primary, border_color, false, false);
+                }
+                // Side borders
+                var bh: u16 = 0;
+                while (bh < rect.h + 2) : (bh += 1) {
+                    renderer.drawText(wx, wy + bh, " ", fg_primary, border_color, false, false);
+                    renderer.drawText(wx + rect.w + 1, wy + bh, " ", fg_primary, border_color, false, false);
+                }
+                
+                // Top bar text
+                renderer.drawText(wx + 5, wy, " Telescope ", fg_primary, border_color, true, false);
+                
+                // Red cross
+                renderer.drawText(wx + 2, wy, "✖", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, border_color, true, false);
             }
         }
         if (settings_widget.is_open) {
@@ -542,11 +673,11 @@ fn runNvimSession(
         was_settings_open = settings_widget.is_open;
 
         try renderer.flush();
-        const final_cursor_x = if (terminal_focus and layout.panel != null) panel_info: {
+        const final_cursor_x = if (terminal_focus and active_terminal_panel_idx == 0 and layout.panel != null) panel_info: {
             const panel = layout.panel.?;
             break :panel_info panel.x + ui_term.cursor_x;
         } else layout.editor.x + ui_state.cursor_x;
-        const final_cursor_y = if (terminal_focus and layout.panel != null) panel_info: {
+        const final_cursor_y = if (terminal_focus and active_terminal_panel_idx == 0 and layout.panel != null) panel_info: {
             const panel = layout.panel.?;
             break :panel_info panel.y + 1 + ui_term.cursor_y;
         } else layout.editor.y + ui_state.cursor_y;
@@ -654,9 +785,7 @@ fn runNvimSession(
                 
                 if (std.fmt.bufPrint(&cmd_buf, "colorscheme {s}", .{settings_widget.config.theme})) |cmd_str| {
                     cmd_p[0] = .{ .string = cmd_str };
-                    if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                        msgpack.freeValue(res, alloc);
-                    }
+                    rpc.notify("nvim_command", cmd_p) catch {};
                 } else |_| {}
                 
                 if (std.mem.eql(u8, settings_widget.config.line_numbers, "relative")) {
@@ -666,9 +795,7 @@ fn runNvimSession(
                 } else {
                     cmd_p[0] = .{ .string = "setglobal norelativenumber nonumber" };
                 }
-                if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                    msgpack.freeValue(res, alloc);
-                }
+                rpc.notify("nvim_command", cmd_p) catch {};
                 
                 if (std.fmt.bufPrint(&cmd_buf, "set shiftwidth={d} tabstop={d} {s} {s}", .{
                     settings_widget.config.indent_size,
@@ -677,9 +804,7 @@ fn runNvimSession(
                     if (settings_widget.config.wrap) @as([]const u8, "wrap") else @as([]const u8, "nowrap"),
                 })) |cmd_str| {
                     cmd_p[0] = .{ .string = cmd_str };
-                    if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                        msgpack.freeValue(res, alloc);
-                    }
+                    rpc.notify("nvim_command", cmd_p) catch {};
                 } else |_| {}
 
                 if (settings_widget.config.clip) {
@@ -687,9 +812,7 @@ fn runNvimSession(
                 } else {
                     cmd_p[0] = .{ .string = "set clipboard=" };
                 }
-                if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                    msgpack.freeValue(res, alloc);
-                }
+                rpc.notify("nvim_command", cmd_p) catch {};
 
                 alloc.free(cmd_p);
             }
@@ -705,7 +828,11 @@ fn runNvimSession(
                                 if (b == 0x0d or b == 0x0a) break :get_key "<Enter>";
                                 if (b == 0x1b) break :get_key "<Esc>";
                                 if (b == 0x7f or b == 0x08) break :get_key "<BS>";
+                                if (b == 5) break :get_key "<C-e>";
+                                if (b == 14) break :get_key "<C-n>";
                                 if (b == 19) break :get_key "<C-s>";
+                                if (b == 20) break :get_key "<C-t>";
+                                if (b == 26) break :get_key "<C-z>";
                                 break :get_key k.raw;
                             }
                             if (std.mem.eql(u8, k.raw, "\x1b[A") or std.mem.eql(u8, k.raw, "\x1bOA")) break :get_key "<Up>";
@@ -719,8 +846,8 @@ fn runNvimSession(
                             if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
                             if (std.mem.eql(u8, k.raw, "\x1b[1;3A")) { // Alt+Up
                                 if (layout.panel != null) {
-                                    if (terminal_panel_height < layout.total.h - 4) {
-                                        terminal_panel_height += 1;
+                                    if (layout.total.h > 4 and terminal_panel_height < layout.total.h - 4) {
+                                        terminal_panel_height +|= 1;
                                         needs_resize = true;
                                     }
                                 }
@@ -737,7 +864,7 @@ fn runNvimSession(
                             }
                             if (std.mem.eql(u8, k.raw, "\x1b[1;3C")) { // Alt+Right
                                 if (show_file_tree) {
-                                    if (file_tree_width < layout.total.w - layout.activity_bar.w - 10) {
+                                    if (layout.total.w > layout.activity_bar.w + 10 and file_tree_width < layout.total.w - layout.activity_bar.w - 10) {
                                         file_tree_width += 1;
                                         needs_resize = true;
                                     }
@@ -809,10 +936,12 @@ fn runNvimSession(
                         } else if (toggle_explorer) {
                             show_file_tree = !show_file_tree;
                             needs_resize = true;
+                            continue;
                         } else if (toggle_terminal_panel) {
                             show_terminal_panel = !show_terminal_panel;
                             terminal_focus = show_terminal_panel;
                             needs_resize = true;
+                            continue;
                         } else if (new_file) {
                             var buf: [32]u8 = undefined;
                             const new_name = std.fmt.bufPrint(&buf, "File {d}", .{tabs.items.len + 1}) catch "File";
@@ -820,7 +949,7 @@ fn runNvimSession(
                                 .name = alloc.dupe(u8, new_name) catch "error",
                                 .path = null,
                             }) catch {};
-                            active_tab = tabs.items.len - 1;
+                            active_tab = if (tabs.items.len > 0) tabs.items.len - 1 else 0;
                             needs_resize = true;
                             
                             var cmd_p = try alloc.alloc(Value, 1);
@@ -833,6 +962,7 @@ fn runNvimSession(
                                 msgpack.freeValue(res, alloc);
                             }
                             alloc.free(cmd_p);
+                            continue;
                         }
 
                         if (nk.len > 0) {
@@ -851,9 +981,7 @@ fn runNvimSession(
                             var ip = try alloc.alloc(Value, 1);
                             defer alloc.free(ip);
                             ip[0] = .{ .string = nk };
-                            if ((if (terminal_focus) rpc_term else rpc).call("nvim_input", ip) catch null) |res| {
-                                msgpack.freeValue(res, alloc);
-                            }
+                            (if (terminal_focus) rpc_term else rpc).notify("nvim_input", ip) catch {};
                         }
                     },
                     .paste => |p| {
@@ -901,6 +1029,22 @@ fn runNvimSession(
                             }
 
                             if (m.action == .press) {
+                                if (ui_state.telescope_rect) |rect| {
+                                    const t_x = layout.editor.x + rect.x;
+                                    const t_y = layout.editor.y + rect.y;
+                                    const wx = if (t_x > 0) t_x - 1 else 0;
+                                    const wy = if (t_y > 0) t_y - 1 else 0;
+                                    if (m.row == wy and m.col >= wx + 1 and m.col <= wx + 3) {
+                                        var ip = try alloc.alloc(Value, 1);
+                                        defer alloc.free(ip);
+                                        ip[0] = .{ .string = "<Esc><Esc>" };
+                                        rpc.notify("nvim_input", ip) catch {};
+                                        ui_state.telescope_rect = null;
+                                        needs_resize = true;
+                                        continue;
+                                    }
+                                }
+
                                 if (settings_widget.is_open) {
                                     if (settings_widget.handleMouse(m.col, m.row, renderer.width, renderer.height)) {
                                         needs_resize = true;
@@ -959,20 +1103,23 @@ fn runNvimSession(
                                             }
                                         }
                                         needs_resize = true;
+                                    } else if (activity_bar.active_idx == 1) {
+                                        if (search_panel.handleMouse(m.col, m.row, layout.file_tree)) |cmd| {
+                                            if (std.mem.startsWith(u8, cmd, "__CMD__:Telescope")) {
+                                                const actual_cmd = cmd[8..];
+                                                var cmd_p = try alloc.alloc(Value, 1);
+                                                defer alloc.free(cmd_p);
+                                                cmd_p[0] = .{ .string = actual_cmd };
+                                                rpc.notify("nvim_command", cmd_p) catch {};
+                                            }
+                                        }
+                                        needs_resize = true;
                                     } else if (activity_bar.active_idx == 2) {
                                         if (git_panel.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
                                             if (std.mem.startsWith(u8, path, "__CMD__:GitWidget")) {
                                                 git_detailed_widget.is_open = true;
                                                 git_detailed_widget.refresh();
                                                 needs_resize = true;
-                                            } else if (std.mem.startsWith(u8, path, "__CMD__:Telescope")) {
-                                                const cmd = path[8..]; // skip __CMD__:
-                                                var cmd_p = try alloc.alloc(Value, 1);
-                                                defer alloc.free(cmd_p);
-                                                cmd_p[0] = .{ .string = cmd };
-                                                if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                                                    msgpack.freeValue(res, alloc);
-                                                }
                                             } else {
                                                 openFile(rpc, alloc, path) catch {};
                                                 if (tabs.items.len == 0) {
@@ -997,7 +1144,24 @@ fn runNvimSession(
                                         }
                                         needs_resize = true;
                                     }
-                                } else if (layout.panel != null and m.row >= layout.panel.?.y - 1 and m.row <= layout.panel.?.y + 1) {
+                                } else if (layout.panel != null and m.row == layout.panel.?.y) {
+                                    const px = m.col - layout.panel.?.x;
+                                    if (px >= 2 and px <= 12) {
+                                        active_terminal_panel_idx = 0;
+                                        terminal_focus = true;
+                                    } else if (px >= 13 and px <= 28) {
+                                        active_terminal_panel_idx = 1;
+                                        terminal_focus = false;
+                                        debug_console.refresh(rpc);
+                                    } else if (px >= 30 and px <= 38) {
+                                        active_terminal_panel_idx = 2;
+                                        terminal_focus = false;
+                                        output_panel.refresh(rpc);
+                                    } else {
+                                        is_resizing_panel = true;
+                                    }
+                                    needs_resize = true;
+                                } else if (layout.panel != null and layout.panel.?.y > 0 and (m.row == layout.panel.?.y - 1 or m.row == layout.panel.?.y + 1)) {
                                     is_resizing_panel = true;
                                 } else {
                                     const prev_idx = activity_bar.active_idx;
@@ -1007,30 +1171,6 @@ fn runNvimSession(
                                             settings_widget.is_open = true;
                                             needs_resize = true;
                                             activity_bar.active_idx = prev_idx; // Revert active idx visually
-                                        } else if (new_idx == 1) {
-                                            show_file_tree = false;
-                                            needs_resize = true;
-                                            const cmd = 
-                                                \\local is_open = false
-                                                \\for _, win in ipairs(vim.api.nvim_list_wins()) do
-                                                \\    local buf = vim.api.nvim_win_get_buf(win)
-                                                \\    if vim.bo[buf].filetype == "TelescopePrompt" then
-                                                \\        pcall(vim.api.nvim_win_close, win, true)
-                                                \\        is_open = true
-                                                \\        break
-                                                \\    end
-                                                \\end
-                                                \\if not is_open then
-                                                \\    vim.cmd("Telescope find_files")
-                                                \\end
-                                            ;
-                                            var params = try alloc.alloc(Value, 2);
-                                            params[0] = .{ .string = cmd };
-                                            params[1] = .{ .array = &[_]Value{} };
-                                            if (rpc.call("nvim_exec_lua", params) catch null) |res| {
-                                                msgpack.freeValue(res, alloc);
-                                            }
-                                            alloc.free(params);
                                         } else if (show_file_tree and prev_idx == new_idx) {
                                             show_file_tree = false;
                                             needs_resize = true;
@@ -1057,18 +1197,14 @@ fn runNvimSession(
                                                         // Actually close the buffer in Neovim
                                                         var cmd_p = try alloc.alloc(Value, 1);
                                                         cmd_p[0] = .{ .string = "bdelete" };
-                                                        if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                                                            msgpack.freeValue(res, alloc);
-                                                        }
+                                                        rpc.notify("nvim_command", cmd_p) catch {};
                                                         alloc.free(cmd_p);
                                                         
                                                         if (tabs.items.len == 0) {
                                                             active_tab = 0;
                                                             var alpha_p = try alloc.alloc(Value, 1);
                                                             alpha_p[0] = .{ .string = "lua _G.vide_alpha_start()" };
-                                                            if (rpc.call("nvim_command", alpha_p) catch null) |res| {
-                                                                msgpack.freeValue(res, alloc);
-                                                            }
+                                                            rpc.notify("nvim_command", alpha_p) catch {};
                                                             alloc.free(alpha_p);
                                                         } else if (active_tab >= tabs.items.len) {
                                                             active_tab = tabs.items.len - 1;
@@ -1099,9 +1235,7 @@ fn runNvimSession(
                                             needs_resize = true;
                                             var cmd_p = try alloc.alloc(Value, 1);
                                             cmd_p[0] = .{ .string = "enew" };
-                                            if (rpc.call("nvim_command", cmd_p) catch null) |res| {
-                                                msgpack.freeValue(res, alloc);
-                                            }
+                                            rpc.notify("nvim_command", cmd_p) catch {};
                                             alloc.free(cmd_p);
                                         }
                                     }
@@ -1112,14 +1246,15 @@ fn runNvimSession(
                                 if (is_resizing_sidebar) {
                                     if (m.col > layout.activity_bar.w + 5) {
                                         var new_w = m.col - layout.activity_bar.w;
-                                        if (new_w > layout.total.w - layout.activity_bar.w - 10) {
-                                            new_w = layout.total.w - layout.activity_bar.w - 10;
+                                        const max_w = if (layout.total.w > layout.activity_bar.w + 10) layout.total.w - layout.activity_bar.w - 10 else 0;
+                                        if (new_w > max_w) {
+                                            new_w = max_w;
                                         }
                                         file_tree_width = new_w;
                                         needs_resize = true;
                                     }
                                 } else if (is_resizing_panel) {
-                                    if (m.row < layout.total.h - 2) {
+                                    if (layout.total.h > 2 and m.row < layout.total.h - 2) {
                                         const new_h = layout.total.h - 1 - m.row;
                                         if (new_h >= 2 and new_h < layout.total.h - 2) {
                                             terminal_panel_height = new_h;
@@ -1143,8 +1278,20 @@ fn runNvimSession(
                         if (layout.panel != null and m.col >= layout.panel.?.x and m.col < layout.panel.?.x + layout.panel.?.w and
                             m.row > layout.panel.?.y and m.row < layout.panel.?.y + layout.panel.?.h)
                         {
-                            if (m.action == .press or m.action == .release) terminal_focus = true;
-                            sendMouseEvent(rpc_term, alloc, m, m.col - layout.panel.?.x, m.row - layout.panel.?.y - 1);
+                            if (active_terminal_panel_idx == 0) {
+                                if (m.action == .press or m.action == .release) terminal_focus = true;
+                                if (m.button == .wheel_up or m.button == .wheel_down) {
+                                    sendMouseEvent(rpc_term, alloc, m, m.col - layout.panel.?.x, m.row - layout.panel.?.y - 1);
+                                }
+                            } else if (active_terminal_panel_idx == 1) {
+                                if (m.action == .press and m.button == .wheel_up) debug_console.handleScroll(-1);
+                                if (m.action == .press and m.button == .wheel_down) debug_console.handleScroll(1);
+                                needs_resize = true;
+                            } else if (active_terminal_panel_idx == 2) {
+                                if (m.action == .press and m.button == .wheel_up) output_panel.handleScroll(-1);
+                                if (m.action == .press and m.button == .wheel_down) output_panel.handleScroll(1);
+                                needs_resize = true;
+                            }
                         } else if (m.col >= layout.editor.x and m.col < layout.editor.x + layout.editor.w and
                                    m.row >= layout.editor.y and m.row < layout.editor.y + layout.editor.h)
                         {

@@ -62,6 +62,7 @@ pub const UiState = struct {
     allocator: std.mem.Allocator,
     current_buf_path: ?[]const u8 = null,
     buf_path_changed: bool = false,
+    telescope_rect: ?@import("../tui/layout.zig").Rect = null,
     toggle_zen_requested: bool = false,
     toggle_ide_requested: bool = false,
     theme_changed: bool = false,
@@ -173,30 +174,39 @@ pub const UiState = struct {
                     if (arg != .array or arg.array.len < 7) continue;
                     const grid_id = arg.array[0].integer;
                     if (grid_id != 1) continue;
-                    const top = @as(u16, @intCast(arg.array[1].integer));
-                    const bot = @as(u16, @intCast(arg.array[2].integer));
-                    const left = @as(u16, @intCast(arg.array[3].integer));
-                    const right = @as(u16, @intCast(arg.array[4].integer));
-                    const rows = arg.array[5].integer;
+                    const top: u16 = @as(u16, @intCast(@max(0, arg.array[1].integer)));
+                    const bot: u16 = @as(u16, @intCast(@max(0, arg.array[2].integer)));
+                    const left: u16 = @as(u16, @intCast(@max(0, arg.array[3].integer)));
+                    const right: u16 = @as(u16, @intCast(@max(0, arg.array[4].integer)));
+                    const rows: i64 = arg.array[5].integer;
+                    
+                    if (top >= self.grid.height or bot > self.grid.height or left >= self.grid.width or right > self.grid.width or top >= bot or left >= right) {
+                        continue;
+                    }
                     // const cols = arg.array[6].integer; // Always 0 in current Nvim
 
                     if (rows > 0) {
                         // Scroll up: move rows from [top+rows, bot) to [top, bot-rows)
                         var y = top;
-                        while (y < bot - @as(u16, @intCast(rows))) : (y += 1) {
-                            const src_y = y + @as(u16, @intCast(rows));
-                            for (left..right) |x| {
-                                self.grid.cells[y * self.grid.width + x] = self.grid.cells[src_y * self.grid.width + x];
+                        const ur = @as(u16, @intCast(rows));
+                        if (bot > ur) {
+                            while (y < bot - ur) : (y += 1) {
+                                const src_y = y + ur;
+                                for (left..right) |x| {
+                                    self.grid.cells[@as(usize, y) * @as(usize, self.grid.width) + x] = self.grid.cells[@as(usize, src_y) * @as(usize, self.grid.width) + x];
+                                }
                             }
                         }
                     } else if (rows < 0) {
                         // Scroll down: move rows from [top, bot+rows) to [top-rows, bot)
                         const abs_rows = @as(u16, @intCast(-rows));
-                        var y = bot - 1;
-                        while (y >= top + abs_rows) : (y -= 1) {
-                            const src_y = y - abs_rows;
-                            for (left..right) |x| {
-                                self.grid.cells[y * self.grid.width + x] = self.grid.cells[src_y * self.grid.width + x];
+                        if (bot > 0) {
+                            var y = bot - 1;
+                            while (y >= top + abs_rows) : (y -= 1) {
+                                const src_y = y - abs_rows;
+                                for (left..right) |x| {
+                                    self.grid.cells[@as(usize, y) * @as(usize, self.grid.width) + x] = self.grid.cells[@as(usize, src_y) * @as(usize, self.grid.width) + x];
+                                }
                             }
                         }
                     }
@@ -212,17 +222,18 @@ pub const UiState = struct {
 
                     if (cells != .array) continue;
 
-                    var active_hl_id: i64 = 0;
+                    var current_hl_id: i64 = 0;
 
                     for (cells.array) |c| {
                         if (c != .array or c.array.len < 1) continue;
-                        const text = c.array[0].string;
+                        const text = if (c.array[0] == .string) c.array[0].string else " ";
                         if (c.array.len >= 2) {
-                            active_hl_id = c.array[1].integer;
+                            current_hl_id = c.array[1].integer;
                         }
-                        const repeat: usize = if (c.array.len >= 3) @as(usize, @intCast(c.array[2].integer)) else 1;
+                        const repeat_i = if (c.array.len >= 3) c.array[2].integer else 1;
+                        const repeat: usize = if (repeat_i > 0) @as(usize, @intCast(repeat_i)) else 1;
 
-                        const hl = self.highlights.get(active_hl_id) orelse Highlight{
+                        const hl = self.highlights.get(current_hl_id) orelse Highlight{
                             .fg = .none,
                             .bg = .none,
                         };
@@ -237,7 +248,7 @@ pub const UiState = struct {
                                     .italic = hl.italic,
                                 };
                                 cell.setChar(text);
-                                self.grid.cells[row * self.grid.width + col] = cell;
+                                self.grid.cells[@as(usize, row) * @as(usize, self.grid.width) + col] = cell;
                             }
                             col += 1;
                         }
