@@ -62,7 +62,7 @@ pub const UiState = struct {
     allocator: std.mem.Allocator,
     current_buf_path: ?[]const u8 = null,
     buf_path_changed: bool = false,
-    telescope_rect: ?@import("../tui/layout.zig").Rect = null,
+    telescope_rects: [2]?@import("../tui/layout.zig").Rect = .{ null, null },
     toggle_zen_requested: bool = false,
     toggle_ide_requested: bool = false,
     theme_changed: bool = false,

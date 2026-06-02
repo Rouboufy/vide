@@ -415,36 +415,61 @@ vim.keymap.set("x", "<leader>p", [["_dP]])
 vim.keymap.set({ "n", "v" }, "<leader>d", [["_d]])
 vim.keymap.set("n", "<leader>th", "<cmd>lua require('vide_settings').open()<cr>")
 
--- Track Telescope windows for Vide to draw a close button
+local telescope_timer = nil
+
 local function notify_telescope()
-    local top, left, bottom, right = 9999, 9999, -1, -1
-    local found = false
+    local mt_top, mt_left, mt_bottom, mt_right = 9999, 9999, -1, -1
+    local pr_top, pr_left, pr_bottom, pr_right = 9999, 9999, -1, -1
+    local found_mt = false
+    local found_pr = false
+
     for _, w in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_is_valid(w) then
-            local buf = vim.api.nvim_win_get_buf(w)
-            local ft = vim.bo[buf].filetype
-            if ft == "TelescopePrompt" or ft == "TelescopeResults" or ft == "TelescopePreview" then
-                found = true
-                local cfg = vim.api.nvim_win_get_config(w)
-                if cfg.relative ~= "" then
-                    local r = math.floor(cfg.row or 0)
-                    local c = math.floor(cfg.col or 0)
-                    if r < 0 then r = 0 end
-                    if c < 0 then c = 0 end
-                    local w_w = math.floor(cfg.width or 0)
-                    local w_h = math.floor(cfg.height or 0)
-                    if r < top then top = r end
-                    if c < left then left = c end
-                    if r + w_h > bottom then bottom = r + w_h end
-                    if c + w_w > right then right = c + w_w end
+            local cfg = vim.api.nvim_win_get_config(w)
+            if cfg.relative ~= "" then
+                local buf = vim.api.nvim_win_get_buf(w)
+                local ft = vim.bo[buf].filetype
+                local r = math.floor(cfg.row or 0)
+                local c = math.floor(cfg.col or 0)
+                local h = math.floor(cfg.height or 0)
+                local w_w = math.floor(cfg.width or 0)
+                
+                if r < 0 then r = 0 end
+                if c < 0 then c = 0 end
+
+                if ft == "TelescopePrompt" or ft == "TelescopeResults" then
+                    found_mt = true
+                    if r < mt_top then mt_top = r end
+                    if c < mt_left then mt_left = c end
+                    if r + h > mt_bottom then mt_bottom = r + h end
+                    if c + w_w > mt_right then mt_right = c + w_w end
+                elseif ft ~= "neo-tree" and ft ~= "mason" and ft ~= "lazy" then
+                    found_pr = true
+                    if r < pr_top then pr_top = r end
+                    if c < pr_left then pr_left = c end
+                    if r + h > pr_bottom then pr_bottom = r + h end
+                    if c + w_w > pr_right then pr_right = c + w_w end
                 end
             end
         end
     end
-    if found then
-        vim.rpcnotify(1, "vide_telescope_rect", { top, left, right - left, bottom - top })
+
+    local mt_rect = found_mt and { mt_top, mt_left, mt_right - mt_left, mt_bottom - mt_top } or vim.NIL
+    local pr_rect = found_pr and { pr_top, pr_left, pr_right - pr_left, pr_bottom - pr_top } or vim.NIL
+
+    if found_mt or found_pr then
+        if not telescope_timer then
+            telescope_timer = vim.uv.new_timer()
+            telescope_timer:start(50, 50, vim.schedule_wrap(notify_telescope))
+        end
+        vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect)
     else
-        vim.rpcnotify(1, "vide_telescope_rect", vim.NIL)
+        if telescope_timer then
+            telescope_timer:stop()
+            telescope_timer:close()
+            telescope_timer = nil
+        end
+        vim.rpcnotify(1, "vide_telescope_rect", vim.NIL, vim.NIL)
     end
 end
 
