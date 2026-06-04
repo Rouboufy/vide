@@ -87,9 +87,6 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
     fi
 fi
 
-# 3. (Removed Wezterm and Yazi checks)
-
-# 4. Set paths
 export XDG_CONFIG_HOME="$HOME/.config/vide"
 export XDG_DATA_HOME="$HOME/.local/share/vide"
 export XDG_STATE_HOME="$HOME/.local/state/vide"
@@ -101,7 +98,6 @@ mkdir -p "$XDG_STATE_HOME"
 mkdir -p "$XDG_CACHE_HOME"
 mkdir -p "$HOME/.local/bin"
 
-# 5. Resolve Source Directory (Local Repo vs Remote Clone)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -d "$SCRIPT_DIR/config" ]; then
     echo -e "${GREEN}Detected local repository installation...${NC}"
@@ -117,19 +113,19 @@ else
     SOURCE_DIR="$REPO_DIR"
 fi
 
-# 6. Build the Zig Binary
+# Build the Zig Binary
 echo -e "${BLUE}Building Vide from source...${NC}"
 cd "$SOURCE_DIR"
 zig build -Doptimize=ReleaseFast
 
-# 7. Link configurations and binary
+#  Link configurations and binary
 echo -e "${BLUE}Linking configuration files...${NC}"
 ln -sfn "$SOURCE_DIR/config/vide-nvim" "$XDG_CONFIG_HOME/vide-nvim"
 
 ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$HOME/.local/bin/vide"
 chmod +x "$SOURCE_DIR/zig-out/bin/vide"
 
-# 8. Check and install JetBrainsMono Nerd Font
+#  Check and install JetBrainsMono Nerd Font
 OS_NAME="$(uname -s)"
 if [ "$OS_NAME" = "Darwin" ]; then
     FONT_DIR="$HOME/Library/Fonts"
@@ -146,7 +142,7 @@ if [ "$OS_NAME" = "Darwin" ]; then
         echo -e "${GREEN}JetBrainsMono Nerd Font is already installed on macOS.${NC}"
     fi
 else
-    # Linux
+ 
     if command -v fc-list &>/dev/null && ! fc-list : family | grep -iq "JetBrainsMono"; then
         echo -e "${BLUE}JetBrainsMono Nerd Font not found on Linux. Downloading font...${NC}"
         FONT_DIR="$HOME/.local/share/fonts/vide"
@@ -161,7 +157,7 @@ else
     fi
 fi
 
-# 9. Add ~/.local/bin to PATH in shell profile if missing
+#Add ~/.local/bin to PATH in shell profile if missing
 SHELL_PROFILES=("$HOME/.bashrc" "$HOME/.zshrc")
 for profile in "${SHELL_PROFILES[@]}"; do
     if [ -f "$profile" ]; then
@@ -172,7 +168,7 @@ for profile in "${SHELL_PROFILES[@]}"; do
     fi
 done
 
-# 10. Bootstrap Neovim plugins headlessly
+# Bootstrap Neovim plugins headlessly
 if command -v nvim &>/dev/null; then
     echo -e "${BLUE}Pre-installing Neovim plugins and themes...${NC}"
     NVIM_APPNAME="vide-nvim" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" nvim --headless -c "Lazy! sync" -c "qa"
