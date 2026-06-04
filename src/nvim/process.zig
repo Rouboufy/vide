@@ -12,7 +12,7 @@ pub const NvimProcess = struct {
             .argv = &argv,
             .stdin = .pipe,
             .stdout = .pipe,
-            .stderr = .ignore,
+            .stderr = .inherit,
         });
         errdefer {
             if (child.id != null) {

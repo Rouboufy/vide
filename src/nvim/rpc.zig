@@ -135,7 +135,7 @@ pub const RpcClient = struct {
     pub fn hasData(self: RpcClient) bool {
         var fds = [1]posix.pollfd{.{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 }};
         const rc = posix.poll(&fds, 0) catch return false;
-        return rc > 0 and (fds[0].revents & posix.POLL.IN) != 0;
+        return rc > 0 and (fds[0].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR)) != 0;
     }
 };
 

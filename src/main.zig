@@ -261,17 +261,13 @@ fn runNvimSession(
             defer alloc.free(rp);
             rp[0] = .{ .integer = @max(1, layout.editor.w) };
             rp[1] = .{ .integer = @max(1, layout.editor.h) };
-            if (rpc.call("nvim_ui_try_resize", rp) catch null) |res| {
-                msgpack.freeValue(res, alloc);
-            }
+            rpc.notify("nvim_ui_try_resize", rp) catch {};
             if (layout.panel) |panel| {
                 var tp = try alloc.alloc(Value, 2);
                 defer alloc.free(tp);
                 tp[0] = .{ .integer = @max(1, panel.w) };
                 tp[1] = .{ .integer = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
-                if (rpc_term.call("nvim_ui_try_resize", tp) catch null) |tres| {
-                    msgpack.freeValue(tres, alloc);
-                }
+                rpc_term.notify("nvim_ui_try_resize", tp) catch {};
             }
         }
 
@@ -356,12 +352,13 @@ fn runNvimSession(
                 var discard: [32]u8 = undefined;
                 _ = std.posix.read(sigwinch_read_fd, &discard) catch 0;
             }
-            if ((fds[1].revents & std.posix.POLL.IN) != 0) {
+            if ((fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                 const alive = try nvim_helpers.processNvimEvents(rpc);
                 if (!alive) return;
             }
-            if ((fds[2].revents & posix.POLL.IN) != 0) {
-                _ = try nvim_helpers.processNvimEvents(rpc_term);
+            if ((fds[2].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
+                const alive_term = try nvim_helpers.processNvimEvents(rpc_term);
+                if (!alive_term) return;
             }
             
             if (ui_state.toggle_zen_requested) {
