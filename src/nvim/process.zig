@@ -23,6 +23,13 @@ pub const NvimProcess = struct {
         const stdin = child.stdin orelse return error.StdinPipeFailed;
         const stdout = child.stdout orelse return error.StdoutPipeFailed;
 
+        const F_SETPIPE_SZ = 1031;
+        _ = std.posix.system.fcntl(stdin.handle, F_SETPIPE_SZ, 1048576);
+        _ = std.posix.system.fcntl(stdout.handle, F_SETPIPE_SZ, 1048576);
+
+        const flags = std.posix.system.fcntl(stdin.handle, std.posix.F.GETFL, 0);
+        _ = std.posix.system.fcntl(stdin.handle, std.posix.F.SETFL, flags | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))));
+
         return NvimProcess{
             .child = child,
             .stdin = stdin,

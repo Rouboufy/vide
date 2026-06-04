@@ -34,18 +34,27 @@ pub const RpcClient = struct {
         const data = buf.written();
         var total_written: usize = 0;
         while (total_written < data.len) {
-            const rc = posix.system.write(self.process.stdin.handle, data[total_written..].ptr, data.len - total_written);
-            const err = posix.errno(rc);
-            switch (err) {
-                .SUCCESS => {
-                    if (rc > 0) total_written += rc else break;
-                },
-                .INTR => continue,
-                .AGAIN => {
-                    var fds = [1]posix.pollfd{.{ .fd = self.process.stdin.handle, .events = posix.POLL.OUT, .revents = 0 }};
-                    _ = posix.poll(&fds, -1) catch 0;
-                },
-                else => break,
+            var fds = [2]posix.pollfd{
+                .{ .fd = self.process.stdin.handle, .events = posix.POLL.OUT, .revents = 0 },
+                .{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 },
+            };
+            const rc_poll = posix.poll(&fds, -1) catch 0;
+            if (rc_poll > 0) {
+                if ((fds[1].revents & (posix.POLL.IN | posix.POLL.ERR | posix.POLL.HUP)) != 0) {
+                    _ = self.processNotifications() catch {};
+                }
+                if ((fds[0].revents & posix.POLL.OUT) != 0) {
+                    const rc = posix.system.write(self.process.stdin.handle, data[total_written..].ptr, data.len - total_written);
+                    const err = posix.errno(rc);
+                    switch (err) {
+                        .SUCCESS => {
+                            if (rc > 0) total_written += rc else return error.Closed;
+                        },
+                        .INTR => continue,
+                        .AGAIN => continue,
+                        else => return error.WriteFailed,
+                    }
+                }
             }
         }
     }
