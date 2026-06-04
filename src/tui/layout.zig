@@ -31,17 +31,17 @@ pub const SplitNode = struct {
             },
             .split => |s| {
                 if (s.dir == .horizontal) {
-                    const w1 = @as(u16, @intFromFloat(@as(f32, @floatFromInt(rect.w)) * s.ratio));
-                    const w2 = if (rect.w > w1) rect.w - w1 else 0;
-                    const r1 = Rect{ .x = rect.x, .y = rect.y, .w = w1, .h = rect.h };
-                    const r2 = Rect{ .x = rect.x + w1, .y = rect.y, .w = w2, .h = rect.h };
+                    const w1 = @max(1, @as(u16, @intFromFloat(@as(f32, @floatFromInt(rect.w)) * s.ratio)));
+                    const w2 = if (rect.w > w1) @max(1, rect.w - w1) else 1;
+                    const r1 = Rect{ .x = rect.x, .y = rect.y, .w = w1, .h = @max(1, rect.h) };
+                    const r2 = Rect{ .x = rect.x + w1, .y = rect.y, .w = w2, .h = @max(1, rect.h) };
                     s.child1.compute(r1, out_editor, out_panel);
                     s.child2.compute(r2, out_editor, out_panel);
                 } else {
-                    const h1 = @as(u16, @intFromFloat(@as(f32, @floatFromInt(rect.h)) * s.ratio));
-                    const h2 = if (rect.h > h1) rect.h - h1 else 0;
-                    const r1 = Rect{ .x = rect.x, .y = rect.y, .w = rect.w, .h = h1 };
-                    const r2 = Rect{ .x = rect.x, .y = rect.y + h1, .w = rect.w, .h = h2 };
+                    const h1 = @max(1, @as(u16, @intFromFloat(@as(f32, @floatFromInt(rect.h)) * s.ratio)));
+                    const h2 = if (rect.h > h1) @max(1, rect.h - h1) else 1;
+                    const r1 = Rect{ .x = rect.x, .y = rect.y, .w = @max(1, rect.w), .h = h1 };
+                    const r2 = Rect{ .x = rect.x, .y = rect.y + h1, .w = @max(1, rect.w), .h = h2 };
                     s.child1.compute(r1, out_editor, out_panel);
                     s.child2.compute(r2, out_editor, out_panel);
                 }

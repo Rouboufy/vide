@@ -259,15 +259,15 @@ fn runNvimSession(
             app.needs_resize = false;
             var rp = try alloc.alloc(Value, 2);
             defer alloc.free(rp);
-            rp[0] = .{ .integer = layout.editor.w };
-            rp[1] = .{ .integer = layout.editor.h };
+            rp[0] = .{ .integer = @max(1, layout.editor.w) };
+            rp[1] = .{ .integer = @max(1, layout.editor.h) };
             if (rpc.call("nvim_ui_try_resize", rp) catch null) |res| {
                 msgpack.freeValue(res, alloc);
             }
             if (layout.panel) |panel| {
                 var tp = try alloc.alloc(Value, 2);
                 defer alloc.free(tp);
-                tp[0] = .{ .integer = panel.w };
+                tp[0] = .{ .integer = @max(1, panel.w) };
                 tp[1] = .{ .integer = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
                 if (rpc_term.call("nvim_ui_try_resize", tp) catch null) |tres| {
                     msgpack.freeValue(tres, alloc);
