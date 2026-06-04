@@ -25,24 +25,32 @@ pub const RpcClient = struct {
         return self.msg_id;
     }
 
-    fn send(self: *RpcClient, val: Value) !void {
-        var buf = std.Io.Writer.Allocating.init(self.allocator);
-        defer buf.deinit();
-        try msgpack.encode(&buf.writer, val);
-        const data = buf.written();
-
+    fn writeThread(fd: posix.fd_t, data: []const u8, allocator: std.mem.Allocator) void {
         var total_written: usize = 0;
         while (total_written < data.len) {
             const sub = data[total_written..];
-            const rc = posix.system.write(self.process.stdin.handle, sub.ptr, sub.len);
+            const rc = posix.system.write(fd, sub.ptr, sub.len);
             const err = posix.errno(rc);
             switch (err) {
                 .SUCCESS => total_written += rc,
                 .INTR => continue,
-                .PIPE => return error.EndOfStream,
-                else => return error.WriteFailed,
+                .AGAIN => {
+                    var fds = [1]posix.pollfd{.{ .fd = fd, .events = posix.POLL.OUT, .revents = 0 }};
+                    _ = posix.poll(&fds, -1) catch 0;
+                },
+                else => break,
             }
         }
+        allocator.free(data);
+    }
+
+    fn send(self: *RpcClient, val: Value) !void {
+        var buf = std.Io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        try msgpack.encode(&buf.writer, val);
+        const data = try self.allocator.dupe(u8, buf.written());
+        const thread = try std.Thread.spawn(.{}, writeThread, .{ self.process.stdin.handle, data, self.allocator });
+        thread.detach();
     }
 
     pub fn call(self: *RpcClient, method: []const u8, params: []const Value) !Value {
