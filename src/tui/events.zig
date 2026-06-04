@@ -31,24 +31,36 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
         if (std.mem.eql(u8, k.raw, "\x1b[1;3A")) { // Alt+Up
             if (layout.panel != null) {
-                if (layout.total.h > 4 and a.terminal_panel_height < layout.total.h - 4) {
-                    a.terminal_panel_height +|= 1;
-                    a.needs_resize = true;
+                if (a.panel_position == .bottom) {
+                    if (layout.total.h > 4 and a.terminal_panel_height < layout.total.h - 4) {
+                        a.terminal_panel_height +|= 1;
+                        a.updateLayoutTree();
+                        a.needs_resize = true;
+                    }
                 }
             }
             break :get_key "";
         }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3B")) { // Alt+Down
             if (layout.panel != null) {
-                if (a.terminal_panel_height > 2) {
-                    a.terminal_panel_height -= 1;
-                    a.needs_resize = true;
+                if (a.panel_position == .bottom) {
+                    if (a.terminal_panel_height > 2) {
+                        a.terminal_panel_height -= 1;
+                        a.updateLayoutTree();
+                        a.needs_resize = true;
+                    }
                 }
             }
             break :get_key "";
         }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3C")) { // Alt+Right
-            if (a.show_file_tree) {
+            if (layout.panel != null and a.panel_position == .right) {
+                if (layout.total.w > 10 and a.terminal_panel_width > 10) {
+                    a.terminal_panel_width -= 1;
+                    a.updateLayoutTree();
+                    a.needs_resize = true;
+                }
+            } else if (a.show_file_tree) {
                 if (layout.total.w > layout.activity_bar.w + 10 and a.file_tree_width < layout.total.w - layout.activity_bar.w - 10) {
                     a.file_tree_width += 1;
                     a.needs_resize = true;
@@ -57,12 +69,24 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             break :get_key "";
         }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3D")) { // Alt+Left
-            if (a.show_file_tree) {
+            if (layout.panel != null and a.panel_position == .right) {
+                if (layout.total.w > 10 and a.terminal_panel_width < layout.total.w - 10) {
+                    a.terminal_panel_width += 1;
+                    a.updateLayoutTree();
+                    a.needs_resize = true;
+                }
+            } else if (a.show_file_tree) {
                 if (a.file_tree_width > 5) {
                     a.file_tree_width -= 1;
                     a.needs_resize = true;
                 }
             }
+            break :get_key "";
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bp")) { // Alt+P
+            a.panel_position = if (a.panel_position == .bottom) .right else .bottom;
+            a.updateLayoutTree();
+            a.needs_resize = true;
             break :get_key "";
         }
         break :get_key k.raw;
@@ -123,6 +147,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         return true;
     } else if (toggle_terminal_panel) {
         a.show_terminal_panel = !a.show_terminal_panel;
+        a.updateLayoutTree();
         a.terminal_focus = a.show_terminal_panel;
         a.needs_resize = true;
         return true;
@@ -339,7 +364,9 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.is_resizing_panel = true;
                 }
                 a.needs_resize = true;
-            } else if (layout.panel != null and layout.panel.?.y > 0 and (m.row == layout.panel.?.y - 1 or m.row == layout.panel.?.y + 1)) {
+            } else if (layout.panel != null and a.panel_position == .bottom and layout.panel.?.y > 0 and (m.row == layout.panel.?.y - 1 or m.row == layout.panel.?.y + 1)) {
+                a.is_resizing_panel = true;
+            } else if (layout.panel != null and a.panel_position == .right and layout.panel.?.x > 0 and (m.col == layout.panel.?.x - 1 or m.col == layout.panel.?.x)) {
                 a.is_resizing_panel = true;
             } else {
                 const prev_idx = a.activity_bar.active_idx;
@@ -432,11 +459,23 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.needs_resize = true;
                 }
             } else if (a.is_resizing_panel) {
-                if (layout.total.h > 2 and m.row < layout.total.h - 2) {
-                    const new_h = layout.total.h - 1 - m.row;
-                    if (new_h >= 2 and new_h < layout.total.h - 2) {
-                        a.terminal_panel_height = new_h;
-                        a.needs_resize = true;
+                if (a.panel_position == .bottom) {
+                    if (layout.total.h > 2 and m.row < layout.total.h - 2) {
+                        const new_h = layout.total.h - 1 - m.row;
+                        if (new_h >= 2 and new_h < layout.total.h - 2) {
+                            a.terminal_panel_height = new_h;
+                            a.updateLayoutTree();
+                            a.needs_resize = true;
+                        }
+                    }
+                } else {
+                    if (layout.total.w > 10 and m.col < layout.total.w - 5) {
+                        const new_w = layout.total.w - 1 - m.col;
+                        if (new_w >= 10 and new_w < layout.total.w - 10) {
+                            a.terminal_panel_width = new_w;
+                            a.updateLayoutTree();
+                            a.needs_resize = true;
+                        }
                     }
                 }
             }

@@ -164,8 +164,7 @@ fn runNvimSession(
     defer git_detailed_widget.deinit();
     app.git_detailed_widget = &git_detailed_widget;
 
-    const initial_show_panel = (app.mode == .ide) and false; // initial show_terminal_panel
-    const initial_layout = Layout.compute(ren.width, ren.height, initial_show_panel, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.terminal_panel_height);
+    const initial_layout = Layout.compute(ren.width, ren.height, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
 
     var opt_kvs = try alloc.alloc(Value.KV, 2);
     defer alloc.free(opt_kvs);
@@ -254,8 +253,7 @@ fn runNvimSession(
 
         const cols = ren.width;
         const rows = ren.height;
-        const show_panel = (app.mode == .ide) and app.show_terminal_panel;
-        const layout = Layout.compute(cols, rows, show_panel, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.terminal_panel_height);
+        const layout = Layout.compute(cols, rows, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
 
         if (app.needs_resize) {
             app.needs_resize = false;

@@ -7,6 +7,7 @@ const rpc_client = @import("../nvim/rpc.zig");
 const theme = @import("theme.zig");
 const settings = @import("widgets/settings.zig");
 const Layout = @import("layout.zig").Layout;
+const SplitNode = @import("layout.zig").SplitNode;
 const ActivityBar = @import("widgets/activity_bar.zig").ActivityBar;
 const Terminal = @import("terminal.zig").Terminal;
 const Explorer = @import("widgets/explorer.zig").Explorer;
@@ -19,6 +20,7 @@ const LazyWidget = @import("widgets/lazy.zig").LazyWidget;
 const GitDetailedWidget = @import("widgets/git_detailed.zig").GitDetailedWidget;
 
 pub const Mode = enum { ide, zen };
+pub const PanelPosition = enum { bottom, right };
 
 pub const TabInfo = struct {
     name: []const u8,
@@ -52,7 +54,9 @@ pub const App = struct {
     
     needs_resize: bool,
     terminal_panel_height: u16,
+    terminal_panel_width: u16, // For right-side panel
     active_terminal_panel_idx: u8, // 0=Terminal, 1=Debug, 2=Output
+    panel_position: PanelPosition,
 
     settings_widget: *settings.SettingsWidget,
     explorer: *Explorer,
@@ -74,7 +78,18 @@ pub const App = struct {
     was_settings_open: bool = false,
     last_explorer_refresh: i64 = 0,
 
+    layout_arena: std.heap.ArenaAllocator,
+    root_split: *SplitNode,
+
     pub fn init(allocator: std.mem.Allocator, term: *Terminal, ren: *renderer.Renderer, rpc: *rpc_client.RpcClient, rpc_term: *rpc_client.RpcClient, ui_state: *ui.UiState, ui_term: *ui.UiState) App {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const arena_alloc = arena.allocator();
+        
+        const editor_node = arena_alloc.create(SplitNode) catch unreachable;
+        editor_node.* = .{ .data = .{ .view = .editor } };
+        
+        const root_node = editor_node;
+        
         return App{
             .allocator = allocator,
             .term = term,
@@ -92,7 +107,9 @@ pub const App = struct {
             .show_terminal_panel = false,
             .needs_resize = true,
             .terminal_panel_height = 8,
+            .terminal_panel_width = 50,
             .active_terminal_panel_idx = 0,
+            .panel_position = .bottom,
             .settings_widget = undefined,
             .explorer = undefined,
             .git_panel = undefined,
@@ -103,6 +120,58 @@ pub const App = struct {
             .lazy_widget = undefined,
             .git_detailed_widget = undefined,
             .activity_bar = ActivityBar{ .active_idx = 0 },
+            .layout_arena = arena,
+            .root_split = root_node,
         };
+    }
+
+    pub fn deinit(self: *App) void {
+        self.layout_arena.deinit();
+    }
+
+    pub fn updateLayoutTree(self: *App) void {
+        _ = self.layout_arena.reset(.retain_capacity);
+        const alloc = self.layout_arena.allocator();
+        if (self.show_terminal_panel) {
+            const editor_node = alloc.create(SplitNode) catch return;
+            editor_node.* = .{ .data = .{ .view = .editor } };
+            const panel_node = alloc.create(SplitNode) catch return;
+            panel_node.* = .{ .data = .{ .view = .panel } };
+            
+            const split_node = alloc.create(SplitNode) catch return;
+            const total_w = self.ren.width;
+            const total_h = self.ren.height;
+            const content_h = if (total_h > 2) total_h - 2 else 1;
+            
+            if (self.panel_position == .bottom) {
+                const panel_h = @as(f32, @floatFromInt(self.terminal_panel_height));
+                const content_h_f = @as(f32, @floatFromInt(content_h));
+                const ratio = if (content_h_f > panel_h) (content_h_f - panel_h) / content_h_f else 0.7;
+                split_node.* = .{ .data = .{ .split = .{
+                    .dir = .vertical,
+                    .ratio = ratio,
+                    .child1 = editor_node,
+                    .child2 = panel_node,
+                }}};
+            } else {
+                const tree_w = if (self.show_file_tree) self.file_tree_width else 0;
+                const content_w = if (total_w > 5 + tree_w) total_w - 5 - tree_w else 1;
+                const panel_w = @as(f32, @floatFromInt(self.terminal_panel_width));
+                const content_w_f = @as(f32, @floatFromInt(content_w));
+                const ratio = if (content_w_f > panel_w) (content_w_f - panel_w) / content_w_f else 0.7;
+                split_node.* = .{ .data = .{ .split = .{
+                    .dir = .horizontal,
+                    .ratio = ratio,
+                    .child1 = editor_node,
+                    .child2 = panel_node,
+                }}};
+            }
+            
+            self.root_split = split_node;
+        } else {
+            const editor_node = alloc.create(SplitNode) catch return;
+            editor_node.* = .{ .data = .{ .view = .editor } };
+            self.root_split = editor_node;
+        }
     }
 };
