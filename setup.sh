@@ -22,23 +22,68 @@ echo "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝
 echo -e "${NC}"
 echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
 
-# 1. Check basic tools
-for cmd in git curl zig; do
+# 1 & 2. Check and install dependencies
+MISSING_DEPS=()
+for cmd in git curl zig nvim; do
     if ! command -v "$cmd" &>/dev/null; then
-        echo -e "${RED}Error: $cmd is required but not installed. Please install it first.${NC}"
-        exit 1
+        MISSING_DEPS+=("$cmd")
     fi
 done
 
-# 2. Check Neovim version
-if ! command -v nvim &>/dev/null; then
-    echo -e "${YELLOW}Warning: Neovim is not installed. Vide requires Neovim >= 0.10.0.${NC}"
-else
+if command -v nvim &>/dev/null; then
     NVIM_VER=$(nvim --version | head -n 1 | awk '{print $2}' | sed 's/v//')
-    # Compare versions
     IFS='.' read -r major minor patch <<< "$NVIM_VER"
     if [ "$major" -eq 0 ] && [ "$minor" -lt 10 ]; then
-        echo -e "${YELLOW}Warning: Neovim version $NVIM_VER is too old. Vide requires Neovim >= 0.10.0.${NC}"
+        MISSING_DEPS+=("nvim(>=0.10.0)")
+    fi
+fi
+
+if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
+    echo -e "${YELLOW}Missing dependencies: ${MISSING_DEPS[*]}${NC}"
+    echo -e "${YELLOW}Warning: Installing system dependencies will require sudo privileges.${NC}"
+    read -p "Would you like to install them now? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        OS_NAME="$(uname -s)"
+        if [ "$OS_NAME" = "Darwin" ]; then
+            if ! command -v brew &>/dev/null; then
+                echo -e "${RED}Homebrew is required on macOS. Please install Homebrew first.${NC}"
+                exit 1
+            fi
+            brew install git curl zig neovim
+        else
+            if command -v apt-get &>/dev/null; then
+                sudo apt-get update
+                sudo apt-get install -y git curl
+                # Use snap for nvim and zig if available, otherwise apt
+                if command -v snap &>/dev/null; then
+                    sudo snap install nvim --classic || sudo apt-get install -y neovim
+                    sudo snap install zig --classic || sudo apt-get install -y zig
+                else
+                    sudo apt-get install -y neovim zig
+                fi
+            elif command -v pacman &>/dev/null; then
+                sudo pacman -Sy --noconfirm git curl zig neovim
+            elif command -v dnf &>/dev/null; then
+                sudo dnf install -y git curl zig neovim
+            elif command -v zypper &>/dev/null; then
+                sudo zypper install -y git curl zig neovim
+            else
+                echo -e "${RED}Could not detect package manager. Please install dependencies manually.${NC}"
+                exit 1
+            fi
+        fi
+        
+        # Re-check basic tools after install
+        for cmd in git curl zig nvim; do
+            if ! command -v "$cmd" &>/dev/null; then
+                echo -e "${RED}Error: Failed to install $cmd. Please install it manually.${NC}"
+                exit 1
+            fi
+        done
+    else
+        echo -e "${RED}Please install dependencies manually to continue.${NC}"
+        exit 1
     fi
 fi
 
