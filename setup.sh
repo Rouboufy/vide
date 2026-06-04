@@ -22,7 +22,7 @@ echo "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝
 echo -e "${NC}"
 echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
 
-# 1 & 2. Check and install dependencies
+# Check and install dependencies
 MISSING_DEPS=()
 for cmd in git curl zig nvim; do
     if ! command -v "$cmd" &>/dev/null; then
