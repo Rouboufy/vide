@@ -11,12 +11,14 @@ pub const RpcClient = struct {
     io: std.Io,
     on_notification: ?*const fn (ctx: ?*anyopaque, method: []const u8, params: Value) anyerror!void = null,
     on_notification_ctx: ?*anyopaque = null,
+    reader: FdReader,
 
     pub fn init(process: NvimProcess, allocator: std.mem.Allocator, io: std.Io) RpcClient {
         return .{
             .process = process,
             .allocator = allocator,
             .io = io,
+            .reader = .{ .fd = process.stdout.handle },
         };
     }
 
@@ -25,32 +27,27 @@ pub const RpcClient = struct {
         return self.msg_id;
     }
 
-    fn writeThread(fd: posix.fd_t, data: []const u8, allocator: std.mem.Allocator) void {
+    fn send(self: *RpcClient, val: Value) !void {
+        var buf = std.Io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        try msgpack.encode(&buf.writer, val);
+        const data = buf.written();
         var total_written: usize = 0;
         while (total_written < data.len) {
-            const sub = data[total_written..];
-            const rc = posix.system.write(fd, sub.ptr, sub.len);
+            const rc = posix.system.write(self.process.stdin.handle, data[total_written..].ptr, data.len - total_written);
             const err = posix.errno(rc);
             switch (err) {
-                .SUCCESS => total_written += rc,
+                .SUCCESS => {
+                    if (rc > 0) total_written += rc else break;
+                },
                 .INTR => continue,
                 .AGAIN => {
-                    var fds = [1]posix.pollfd{.{ .fd = fd, .events = posix.POLL.OUT, .revents = 0 }};
+                    var fds = [1]posix.pollfd{.{ .fd = self.process.stdin.handle, .events = posix.POLL.OUT, .revents = 0 }};
                     _ = posix.poll(&fds, -1) catch 0;
                 },
                 else => break,
             }
         }
-        allocator.free(data);
-    }
-
-    fn send(self: *RpcClient, val: Value) !void {
-        var buf = std.Io.Writer.Allocating.init(self.allocator);
-        defer buf.deinit();
-        try msgpack.encode(&buf.writer, val);
-        const data = try self.allocator.dupe(u8, buf.written());
-        const thread = try std.Thread.spawn(.{}, writeThread, .{ self.process.stdin.handle, data, self.allocator });
-        thread.detach();
     }
 
     pub fn call(self: *RpcClient, method: []const u8, params: []const Value) !Value {
@@ -81,10 +78,9 @@ pub const RpcClient = struct {
     }
 
     fn waitResponse(self: *RpcClient, id: u32) !Value {
-        var fd_reader = FdReader{ .fd = self.process.stdout.handle };
         while (true) {
             // Blocking read here is safer than a strict timeout
-            const msg = try msgpack.decode(&fd_reader, self.allocator);
+            const msg = try msgpack.decode(&self.reader, self.allocator);
             errdefer msgpack.freeValue(msg, self.allocator);
             if (msg != .array or msg.array.len < 3) {
                 return error.InvalidRpcMessage;
@@ -119,9 +115,9 @@ pub const RpcClient = struct {
     }
 
     pub fn processNotifications(self: *RpcClient) !bool {
-        while (self.hasData()) {
-            var fd_reader = FdReader{ .fd = self.process.stdout.handle };
-            const msg = msgpack.decode(&fd_reader, self.allocator) catch |err| {
+        var msg_count: usize = 0;
+        while (self.hasData() and msg_count < 250) : (msg_count += 1) {
+            const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
                 if (err == error.EndOfStream) return false;
                 return err;
             };
@@ -140,7 +136,8 @@ pub const RpcClient = struct {
         return true;
     }
 
-    pub fn hasData(self: RpcClient) bool {
+    pub fn hasData(self: *RpcClient) bool {
+        if (self.reader.head < self.reader.tail) return true;
         var fds = [1]posix.pollfd{.{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 }};
         const rc = posix.poll(&fds, 0) catch return false;
         return rc > 0 and (fds[0].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR)) != 0;
@@ -149,30 +146,57 @@ pub const RpcClient = struct {
 
 pub const FdReader = struct {
     fd: posix.fd_t,
-    pub fn takeByte(self: *FdReader) !u8 {
-        var buf: [1]u8 = undefined;
-        try self.readSliceAll(&buf);
-        return buf[0];
-    }
-    pub fn takeInt(self: *FdReader, comptime T: type, endian: std.builtin.Endian) !T {
-        var buf: [@sizeOf(T)]u8 = undefined;
-        try self.readSliceAll(&buf);
-        return std.mem.readInt(T, &buf, endian);
-    }
-    pub fn readSliceAll(self: *FdReader, dest: []u8) !void {
-        var total_read: usize = 0;
-        while (total_read < dest.len) {
-            const sub = dest[total_read..];
-            const rc = posix.system.read(self.fd, sub.ptr, sub.len);
+    buf: [8192]u8 = undefined,
+    head: usize = 0,
+    tail: usize = 0,
+
+    fn fill(self: *FdReader) !void {
+        if (self.head < self.tail) return;
+        self.head = 0;
+        self.tail = 0;
+        while (true) {
+            const rc = posix.system.read(self.fd, &self.buf, self.buf.len);
             const err = posix.errno(rc);
             switch (err) {
                 .SUCCESS => {
                     if (rc == 0) return error.EndOfStream;
-                    total_read += rc;
+                    self.tail = rc;
+                    return;
                 },
                 .INTR => continue,
+                .AGAIN => {
+                    var fds = [1]posix.pollfd{.{ .fd = self.fd, .events = posix.POLL.IN, .revents = 0 }};
+                    _ = posix.poll(&fds, -1) catch 0;
+                    continue;
+                },
                 else => return error.ReadFailed,
             }
+        }
+    }
+
+    pub fn takeByte(self: *FdReader) !u8 {
+        if (self.head >= self.tail) try self.fill();
+        const b = self.buf[self.head];
+        self.head += 1;
+        return b;
+    }
+    
+    pub fn takeInt(self: *FdReader, comptime T: type, endian: std.builtin.Endian) !T {
+        var buf_int: [@sizeOf(T)]u8 = undefined;
+        try self.readSliceAll(&buf_int);
+        return std.mem.readInt(T, &buf_int, endian);
+    }
+    
+    pub fn readSliceAll(self: *FdReader, dest: []u8) !void {
+        var total_read: usize = 0;
+        while (total_read < dest.len) {
+            if (self.head >= self.tail) try self.fill();
+            const available = self.tail - self.head;
+            const needed = dest.len - total_read;
+            const to_copy = @min(available, needed);
+            @memcpy(dest[total_read .. total_read + to_copy], self.buf[self.head .. self.head + to_copy]);
+            self.head += to_copy;
+            total_read += to_copy;
         }
     }
 };
