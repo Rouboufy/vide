@@ -27,8 +27,11 @@ pub const NvimProcess = struct {
         _ = std.posix.system.fcntl(stdin.handle, F_SETPIPE_SZ, 1048576);
         _ = std.posix.system.fcntl(stdout.handle, F_SETPIPE_SZ, 1048576);
 
-        const flags = std.posix.system.fcntl(stdin.handle, std.posix.F.GETFL, 0);
-        _ = std.posix.system.fcntl(stdin.handle, std.posix.F.SETFL, flags | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))));
+        const flags_in = std.posix.system.fcntl(stdin.handle, std.posix.F.GETFL, 0);
+        _ = std.posix.system.fcntl(stdin.handle, std.posix.F.SETFL, flags_in | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))));
+
+        const flags_out = std.posix.system.fcntl(stdout.handle, std.posix.F.GETFL, 0);
+        _ = std.posix.system.fcntl(stdout.handle, std.posix.F.SETFL, flags_out | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))));
 
         return NvimProcess{
             .child = child,

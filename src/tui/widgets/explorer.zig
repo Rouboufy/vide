@@ -32,7 +32,7 @@ pub const ExplorerItem = struct {
     depth: u16,
 };
 
-pub const ActionState = enum { none, creating_file, creating_dir, deleting };
+pub const ActionState = enum { none, creating_file, creating_dir, deleting, renaming };
 
 pub const Explorer = struct {
     allocator: std.mem.Allocator,
@@ -49,6 +49,11 @@ pub const Explorer = struct {
     input_buf: [256]u8 = undefined,
     input_len: usize = 0,
     action_target_path: ?[]const u8 = null, // The directory in which to create, or file to delete
+
+    // Context Menu State
+    show_menu: bool = false,
+    menu_x: u16 = 0,
+    menu_y: u16 = 0,
 
     // Status tracking
     neovim_modified: std.StringHashMap(void),
@@ -250,6 +255,117 @@ pub const Explorer = struct {
         self.input_len = 0;
         try self.refresh();
     }
+    pub fn handleRename(self: *Explorer) !void {
+        if (self.input_len == 0 or self.action_target_path == null) {
+            self.action_state = .none;
+            return;
+        }
+        const new_name = self.input_buf[0..self.input_len];
+        const old_path = self.action_target_path.?;
+        
+        // Find parent directory of old_path
+        const dir_part = std.fs.path.dirname(old_path) orelse ".";
+        const new_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{dir_part, new_name});
+        defer self.allocator.free(new_path);
+        
+        const old_path_z = try self.allocator.dupeZ(u8, old_path);
+        defer self.allocator.free(old_path_z);
+        const new_path_z = try self.allocator.dupeZ(u8, new_path);
+        defer self.allocator.free(new_path_z);
+        
+        _ = std.os.linux.rename(old_path_z, new_path_z);
+        
+        self.action_state = .none;
+        self.action_target_path = null;
+        self.input_len = 0;
+        try self.refresh();
+    }
+
+    pub fn handleMenuClick(self: *Explorer, col: u16, row: u16) !bool {
+        if (!self.show_menu) return false;
+        
+        const mx = self.menu_x;
+        const my = self.menu_y;
+        const menu_w: u16 = 16;
+        const menu_h: u16 = if (self.selected_idx) |idx| 
+            (if (self.items.items[idx].is_dir) @as(u16, 4) else @as(u16, 2))
+        else 
+            @as(u16, 2);
+            
+        // Check if the click is within the menu boundaries
+        if (col >= mx and col < mx + menu_w and row > my and row <= my + menu_h) {
+            const rel_row = row - my - 1; // 0-indexed option index
+            
+            self.show_menu = false; // Close menu after choice
+            
+            if (self.selected_idx) |idx| {
+                const item = self.items.items[idx];
+                if (item.is_dir) {
+                    // Directory Options: New File, New Folder, Rename, Delete
+                    switch (rel_row) {
+                        0 => { // New File
+                            self.action_state = .creating_file;
+                            self.input_len = 0;
+                            self.action_target_path = item.path;
+                        },
+                        1 => { // New Folder
+                            self.action_state = .creating_dir;
+                            self.input_len = 0;
+                            self.action_target_path = item.path;
+                        },
+                        2 => { // Rename
+                            self.action_state = .renaming;
+                            const basename = std.fs.path.basename(item.path);
+                            const copy_len = @min(basename.len, self.input_buf.len);
+                            @memcpy(self.input_buf[0..copy_len], basename[0..copy_len]);
+                            self.input_len = copy_len;
+                            self.action_target_path = item.path;
+                        },
+                        3 => { // Delete
+                            self.action_state = .deleting;
+                            self.action_target_path = item.path;
+                        },
+                        else => {},
+                    }
+                } else {
+                    // File Options: Rename, Delete
+                    switch (rel_row) {
+                        0 => { // Rename
+                            self.action_state = .renaming;
+                            const basename = std.fs.path.basename(item.path);
+                            const copy_len = @min(basename.len, self.input_buf.len);
+                            @memcpy(self.input_buf[0..copy_len], basename[0..copy_len]);
+                            self.input_len = copy_len;
+                            self.action_target_path = item.path;
+                        },
+                        1 => { // Delete
+                            self.action_state = .deleting;
+                            self.action_target_path = item.path;
+                        },
+                        else => {},
+                    }
+                }
+            } else {
+                // Empty Space Options: New File, New Folder
+                switch (rel_row) {
+                    0 => { // New File
+                        self.action_state = .creating_file;
+                        self.input_len = 0;
+                        self.action_target_path = null;
+                    },
+                    1 => { // New Folder
+                        self.action_state = .creating_dir;
+                        self.input_len = 0;
+                        self.action_target_path = null;
+                    },
+                    else => {},
+                }
+            }
+            return true;
+        }
+        
+        return false;
+    }
 
     pub fn handleMouse(self: *Explorer, m_col: u16, m_row: u16, rect: Rect) !?[]const u8 {
         if (m_col >= rect.x and m_col < rect.x + rect.w and m_row >= rect.y and m_row < rect.y + rect.h) {
@@ -327,6 +443,8 @@ pub const Explorer = struct {
         if (std.mem.eql(u8, key, "<Enter>")) {
             if (self.action_state == .deleting) {
                 try self.handleDelete();
+            } else if (self.action_state == .renaming) {
+                try self.handleRename();
             } else {
                 try self.handleCreateFile();
             }
@@ -444,6 +562,7 @@ pub const Explorer = struct {
                 .creating_file => "New File:",
                 .creating_dir => "New Dir:",
                 .deleting => "Del? (Enter=Y):",
+                .renaming => "Rename:",
                 else => "",
             };
             drawTextClipped(rend, rect.x + 1, prompt_y - 1, ptext, rect.w - 2, colors.fg_accent, colors.bg_editor, true, false);
@@ -456,6 +575,39 @@ pub const Explorer = struct {
             
             const display_val = std.fmt.bufPrint(&val_buf, "{s}_", .{val_text}) catch val_text;
             drawTextClipped(rend, rect.x + 1, prompt_y, display_val, rect.w - 2, colors.fg_primary, colors.bg_editor, false, false);
+        }
+
+        // Draw context menu if show_menu == true
+        if (self.show_menu) {
+
+            const mx = self.menu_x;
+            const my = self.menu_y;
+            
+            const bg_menu = colors.bg_editor;
+            const fg_menu = colors.fg_primary;
+            const border_fg = colors.fg_accent;
+            
+            // Draw top border
+            rend.drawText(mx, my, "┌" ++ ("─" ** 14) ++ "┐", border_fg, bg_menu, false, false);
+            
+            // Draw options
+            if (self.selected_idx) |idx| {
+                if (self.items.items[idx].is_dir) {
+                    rend.drawText(mx, my + 1, "│ 󰝒 New File   │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 2, "│ 󰉋 New Folder │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 3, "│ 󰏫 Rename     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 4, "│ 󰆴 Delete     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 5, "└" ++ ("─" ** 14) ++ "┘", border_fg, bg_menu, false, false);
+                } else {
+                    rend.drawText(mx, my + 1, "│ 󰏫 Rename     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 2, "│ 󰆴 Delete     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 3, "└" ++ ("─" ** 14) ++ "┘", border_fg, bg_menu, false, false);
+                }
+            } else {
+                rend.drawText(mx, my + 1, "│ 󰝒 New File   │", fg_menu, bg_menu, false, false);
+                rend.drawText(mx, my + 2, "│ 󰉋 New Folder │", fg_menu, bg_menu, false, false);
+                rend.drawText(mx, my + 3, "└" ++ ("─" ** 14) ++ "┘", border_fg, bg_menu, false, false);
+            }
         }
     }
 };

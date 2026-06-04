@@ -128,6 +128,7 @@ pub const DecodeError = error{
     ReadFailed,
     InvalidMarker,
     OutOfMemory,
+    WouldBlock,
 };
 
 pub fn decode(reader: anytype, allocator: std.mem.Allocator) DecodeError!Value {

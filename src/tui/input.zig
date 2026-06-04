@@ -174,7 +174,9 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
             if (try readByteTimeout(fd, 20)) |b| {
                 seq_buf[len] = b;
                 len += 1;
-                if (len >= 3) {
+                if (len == 2) {
+                    if (b != '[' and b != 'O') break;
+                } else if (len >= 3) {
                     if (seq_buf[1] == '[' and seq_buf[2] == '<') {
                         if (b == 'M' or b == 'm') break;
                     } else {

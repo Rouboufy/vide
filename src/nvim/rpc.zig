@@ -86,16 +86,67 @@ pub const RpcClient = struct {
         try self.send(.{ .array = req_arr });
     }
 
+    /// Send an error response to a request message received from nvim.
+    /// Without this, nvim blocks forever waiting for the response (deadlock).
+    /// Uses a direct write (not send()) to avoid recursive processNotifications() calls.
+    fn replyError(self: *RpcClient, req_id: i64) void {
+        var resp_arr = self.allocator.alloc(Value, 4) catch return;
+        resp_arr[0] = .{ .integer = 1 };
+        resp_arr[1] = .{ .integer = req_id };
+        resp_arr[2] = .{ .string = "method not found" };
+        resp_arr[3] = .nil;
+        defer self.allocator.free(resp_arr);
+
+        var buf = std.Io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        msgpack.encode(&buf.writer, Value{ .array = resp_arr }) catch return;
+        const data = buf.written();
+
+        // Direct write without calling processNotifications() recursively.
+        var written: usize = 0;
+        while (written < data.len) {
+            var fds = [1]posix.pollfd{.{ .fd = self.process.stdin.handle, .events = posix.POLL.OUT, .revents = 0 }};
+            const rc_poll = posix.poll(&fds, 200) catch break;
+            if (rc_poll == 0) break; // timeout, give up
+            const rc = posix.system.write(self.process.stdin.handle, data[written..].ptr, data.len - written);
+            switch (posix.errno(rc)) {
+                .SUCCESS => { if (rc > 0) written += rc else break; },
+                .INTR => continue,
+                .AGAIN => continue,
+                else => break,
+            }
+        }
+    }
+
     fn waitResponse(self: *RpcClient, id: u32) !Value {
+        var retries: usize = 0;
+        const max_retries = 3;
         while (true) {
-            // Blocking read here is safer than a strict timeout
-            const msg = try msgpack.decode(&self.reader, self.allocator);
+            // Read with retry on WouldBlock (non-blocking stdout fd)
+            const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
+                if (err == error.WouldBlock) {
+                    if (retries >= max_retries) {
+                        return error.Timeout;
+                    }
+                    retries += 1;
+                    // No complete message yet: wait a bit and retry
+                    var fds = [1]posix.pollfd{.{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 }};
+                    _ = posix.poll(&fds, 100) catch {};
+                    continue;
+                }
+                return err;
+            };
             errdefer msgpack.freeValue(msg, self.allocator);
             if (msg != .array or msg.array.len < 3) {
                 return error.InvalidRpcMessage;
             }
             const msg_type = msg.array[0].integer;
-            if (msg_type == 1) {
+            if (msg_type == 0 and msg.array.len >= 4) {
+                // nvim sent a request to us — reply with an error to unblock it
+                const req_id = msg.array[1].integer;
+                self.replyError(req_id);
+                msgpack.freeValue(msg, self.allocator);
+            } else if (msg_type == 1) {
                 const resp_id = msg.array[1].integer;
                 if (resp_id == id) {
                     const err_val = msg.array[2];
@@ -111,6 +162,8 @@ pub const RpcClient = struct {
                     for (msg.array, 0..) |item, idx| { if (idx != 3) msgpack.freeValue(item, self.allocator); }
                     self.allocator.free(msg.array);
                     return result;
+                } else {
+                    msgpack.freeValue(msg, self.allocator);
                 }
             } else if (msg_type == 2) {
                 if (self.on_notification) |cb| {
@@ -128,12 +181,18 @@ pub const RpcClient = struct {
         while (self.hasData() and msg_count < 250) : (msg_count += 1) {
             const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
                 if (err == error.EndOfStream) return false;
+                // WouldBlock: partial message in buffer; will complete next cycle
+                if (err == error.WouldBlock) break;
                 return err;
             };
             defer msgpack.freeValue(msg, self.allocator);
             if (msg == .array and msg.array.len >= 3) {
                 const msg_type = msg.array[0].integer;
-                if (msg_type == 2) {
+                if (msg_type == 0 and msg.array.len >= 4) {
+                    // nvim sent a request to us — reply with an error to unblock it
+                    const req_id = msg.array[1].integer;
+                    self.replyError(req_id);
+                } else if (msg_type == 2) {
                     if (self.on_notification) |cb| {
                         const method = msg.array[1].string;
                         const params = msg.array[2];
@@ -174,8 +233,12 @@ pub const FdReader = struct {
                 },
                 .INTR => continue,
                 .AGAIN => {
+                    // Non-blocking fd: wait up to 50ms for data.
+                    // This prevents an infinite hang when only part of a
+                    // msgpack message has arrived in the pipe buffer.
                     var fds = [1]posix.pollfd{.{ .fd = self.fd, .events = posix.POLL.IN, .revents = 0 }};
-                    _ = posix.poll(&fds, -1) catch 0;
+                    const poll_rc = posix.poll(&fds, 50) catch return error.WouldBlock;
+                    if (poll_rc == 0) return error.WouldBlock; // timeout
                     continue;
                 },
                 else => return error.ReadFailed,

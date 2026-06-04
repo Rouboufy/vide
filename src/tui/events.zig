@@ -198,6 +198,15 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
 pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     a.last_click_x = m.col; a.last_click_y = m.row;
     
+    if (a.explorer.show_menu and m.action == .press) {
+        if (try a.explorer.handleMenuClick(m.col, m.row)) {
+            a.needs_resize = true;
+            return;
+        }
+        a.explorer.show_menu = false;
+        a.needs_resize = true;
+    }
+    
     if (a.mode == .ide) {
         if (a.mason_widget.is_open) {
             if (a.mason_widget.handleMouse(m, a.ren.width, a.ren.height, a.rpc)) {
@@ -284,24 +293,61 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 a.is_resizing_sidebar = true;
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h) {
                 if (a.activity_bar.active_idx == 0) {
-                    if (a.explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
-                        nvim_helpers.openFile(a.rpc, a.allocator, path) catch {};
-                        if (a.tabs.items.len == 0) {
-                            const basename = std.fs.path.basename(path);
-                            a.tabs.append(.{
-                                .name = a.allocator.dupe(u8, basename) catch "error",
-                                .path = a.allocator.dupe(u8, path) catch null,
-                            }) catch {};
-                            a.active_tab = 0;
-                        } else if (a.active_tab < a.tabs.items.len) {
-                            const basename = std.fs.path.basename(path);
-                            if (a.allocator.dupe(u8, basename) catch null) |new_name| {
-                                a.allocator.free(a.tabs.items[a.active_tab].name);
-                                a.tabs.items[a.active_tab].name = new_name;
+                    if (m.button == .right) {
+                        a.explorer.show_menu = true;
+                        
+                        const rel_y = m.row - layout.file_tree.y;
+                        var is_dir = false;
+                        if (rel_y > 0) {
+                            const item_idx = rel_y - 1 + a.explorer.scroll_y;
+                            if (item_idx < a.explorer.items.items.len) {
+                                a.explorer.selected_idx = item_idx;
+                                is_dir = a.explorer.items.items[item_idx].is_dir;
+                            } else {
+                                a.explorer.selected_idx = null;
                             }
-                            if (a.allocator.dupe(u8, path) catch null) |new_path| {
-                                if (a.tabs.items[a.active_tab].path) |p| a.allocator.free(p);
-                                a.tabs.items[a.active_tab].path = new_path;
+                        } else {
+                            a.explorer.selected_idx = null;
+                        }
+                        
+                        const menu_h: u16 = if (a.explorer.selected_idx != null)
+                            (if (is_dir) @as(u16, 5) else @as(u16, 3))
+                        else
+                            @as(u16, 3);
+                            
+                        a.explorer.menu_x = m.col;
+                        var my = m.row;
+                        if (layout.file_tree.h > 0 and my + menu_h >= layout.file_tree.y + layout.file_tree.h) {
+                            const limit = layout.file_tree.y + layout.file_tree.h;
+                            if (limit > menu_h + 1) {
+                                my = limit - menu_h - 1;
+                            } else {
+                                my = layout.file_tree.y;
+                            }
+                        }
+                        a.explorer.menu_y = my;
+                        
+                        a.needs_resize = true;
+                    } else if (m.button == .left) {
+                        if (a.explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
+                            nvim_helpers.openFile(a.rpc, a.allocator, path) catch {};
+                            if (a.tabs.items.len == 0) {
+                                const basename = std.fs.path.basename(path);
+                                a.tabs.append(.{
+                                    .name = a.allocator.dupe(u8, basename) catch "error",
+                                    .path = a.allocator.dupe(u8, path) catch null,
+                                }) catch {};
+                                a.active_tab = 0;
+                            } else if (a.active_tab < a.tabs.items.len) {
+                                const basename = std.fs.path.basename(path);
+                                if (a.allocator.dupe(u8, basename) catch null) |new_name| {
+                                    a.allocator.free(a.tabs.items[a.active_tab].name);
+                                    a.tabs.items[a.active_tab].name = new_name;
+                                }
+                                if (a.allocator.dupe(u8, path) catch null) |new_path| {
+                                    if (a.tabs.items[a.active_tab].path) |p| a.allocator.free(p);
+                                    a.tabs.items[a.active_tab].path = new_path;
+                                }
                             }
                         }
                     }
