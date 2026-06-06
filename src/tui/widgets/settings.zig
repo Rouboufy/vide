@@ -7,6 +7,8 @@ pub const Keybindings = struct {
     toggle_terminal: []const u8 = "<C-t>", // Ctrl-t
     toggle_zen: []const u8 = "<C-z>", // Ctrl-z
     new_file: []const u8 = "<C-n>", // Ctrl-n
+    find_file: []const u8 = "<C-f>", // Ctrl-f
+    quit: []const u8 = "<C-q>", // Ctrl-q
 };
 
 pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
@@ -38,19 +40,37 @@ pub const SettingsConfig = struct {
     clip: bool = true,
     zen: bool = false,
     ide: bool = true,
+    autocomplete: bool = true,
+    autoindent: bool = true,
     theme: []const u8 = "kanagawa",
     indent_size: u8 = 4,
     use_tabs: bool = false,
     wrap: bool = false,
     line_numbers: []const u8 = "relative",
+    split_separator: []const u8 = "│",
     keybindings: Keybindings = .{},
+    nerd_fonts: bool = true,
+    mode: []const u8 = "normal",
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !SettingsConfig {
         const path_z = try allocator.dupeZ(u8, path);
         defer allocator.free(path_z);
         
         const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
-            if (err == error.FileNotFound) return SettingsConfig{};
+            if (err == error.FileNotFound) {
+                var config = SettingsConfig{};
+                config.theme = try allocator.dupe(u8, config.theme);
+                config.line_numbers = try allocator.dupe(u8, config.line_numbers);
+                config.split_separator = try allocator.dupe(u8, config.split_separator);
+                config.keybindings.toggle_terminal = try allocator.dupe(u8, config.keybindings.toggle_terminal);
+                config.keybindings.toggle_explorer = try allocator.dupe(u8, config.keybindings.toggle_explorer);
+                config.keybindings.toggle_zen = try allocator.dupe(u8, config.keybindings.toggle_zen);
+                config.keybindings.new_file = try allocator.dupe(u8, config.keybindings.new_file);
+                config.keybindings.find_file = try allocator.dupe(u8, config.keybindings.find_file);
+                config.keybindings.quit = try allocator.dupe(u8, config.keybindings.quit);
+                config.mode = try allocator.dupe(u8, config.mode);
+                return config;
+            }
             return err;
         };
         defer _ = std.os.linux.close(fd);
@@ -62,12 +82,32 @@ pub const SettingsConfig = struct {
         defer parsed.deinit();
 
         var config = parsed.value;
+        // Backward compatibility mapping
+        if (config.zen) {
+            config.mode = "zen";
+        } else if (config.ide) {
+            config.mode = "ide";
+        } else if (std.mem.eql(u8, config.mode, "normal")) {
+            config.zen = false;
+            config.ide = false;
+        } else if (std.mem.eql(u8, config.mode, "zen")) {
+            config.zen = true;
+            config.ide = false;
+        } else if (std.mem.eql(u8, config.mode, "ide")) {
+            config.zen = false;
+            config.ide = true;
+        }
+
         config.theme = try allocator.dupe(u8, config.theme);
         config.line_numbers = try allocator.dupe(u8, config.line_numbers);
+        config.split_separator = try allocator.dupe(u8, config.split_separator);
         config.keybindings.toggle_terminal = try allocator.dupe(u8, config.keybindings.toggle_terminal);
         config.keybindings.toggle_explorer = try allocator.dupe(u8, config.keybindings.toggle_explorer);
         config.keybindings.toggle_zen = try allocator.dupe(u8, config.keybindings.toggle_zen);
         config.keybindings.new_file = try allocator.dupe(u8, config.keybindings.new_file);
+        config.keybindings.find_file = try allocator.dupe(u8, config.keybindings.find_file);
+        config.keybindings.quit = try allocator.dupe(u8, config.keybindings.quit);
+        config.mode = try allocator.dupe(u8, config.mode);
         return config;
     }
 
@@ -110,7 +150,9 @@ pub const SettingsWidget = struct {
     open_mason: bool = false,
     open_lazy: bool = false,
 
-    pub const DropdownType = enum { none, theme, indent_size, indent_type, line_numbers };
+    pub const DropdownType = enum { none, theme, indent_size, indent_type, line_numbers, split_separator, mode };
+
+    pub const supported_modes = [_][]const u8{ "normal", "ide", "zen" };
 
     pub const supported_themes = [_][]const u8{
         "vscode", "kanagawa", "tokyonight-night", "tokyonight-storm", "tokyonight-day", 
@@ -121,6 +163,7 @@ pub const SettingsWidget = struct {
     pub const supported_indents = [_]u8{ 2, 4, 8 };
     pub const supported_indent_types = [_][]const u8{ "spaces", "tabs" };
     pub const supported_line_nums = [_][]const u8{ "relative", "normal", "off" };
+    pub const supported_split_seps = [_][]const u8{ "│", "┃", "║", "┊", " " };
 
     pub const tabs = [_][]const u8{
         "General",
@@ -131,7 +174,19 @@ pub const SettingsWidget = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, settings_path: []const u8) SettingsWidget {
-        const config = SettingsConfig.load(allocator, settings_path) catch SettingsConfig{};
+        const config = SettingsConfig.load(allocator, settings_path) catch blk: {
+            var cfg = SettingsConfig{};
+            cfg.theme = allocator.dupe(u8, cfg.theme) catch cfg.theme;
+            cfg.line_numbers = allocator.dupe(u8, cfg.line_numbers) catch cfg.line_numbers;
+            cfg.split_separator = allocator.dupe(u8, cfg.split_separator) catch cfg.split_separator;
+            cfg.keybindings.toggle_terminal = allocator.dupe(u8, cfg.keybindings.toggle_terminal) catch cfg.keybindings.toggle_terminal;
+            cfg.keybindings.toggle_explorer = allocator.dupe(u8, cfg.keybindings.toggle_explorer) catch cfg.keybindings.toggle_explorer;
+            cfg.keybindings.toggle_zen = allocator.dupe(u8, cfg.keybindings.toggle_zen) catch cfg.keybindings.toggle_zen;
+            cfg.keybindings.new_file = allocator.dupe(u8, cfg.keybindings.new_file) catch cfg.keybindings.new_file;
+            cfg.keybindings.find_file = allocator.dupe(u8, cfg.keybindings.find_file) catch cfg.keybindings.find_file;
+            cfg.keybindings.quit = allocator.dupe(u8, cfg.keybindings.quit) catch cfg.keybindings.quit;
+            break :blk cfg;
+        };
         return .{
             .is_open = false,
             .active_tab = 0,
@@ -143,7 +198,16 @@ pub const SettingsWidget = struct {
     }
 
     pub fn deinit(self: *SettingsWidget) void {
-        _ = self;
+        self.allocator.free(self.config.theme);
+        self.allocator.free(self.config.line_numbers);
+        self.allocator.free(self.config.split_separator);
+        self.allocator.free(self.config.mode);
+        self.allocator.free(self.config.keybindings.toggle_terminal);
+        self.allocator.free(self.config.keybindings.toggle_explorer);
+        self.allocator.free(self.config.keybindings.toggle_zen);
+        self.allocator.free(self.config.keybindings.new_file);
+        self.allocator.free(self.config.keybindings.find_file);
+        self.allocator.free(self.config.keybindings.quit);
     }
 
     pub fn draw(self: *const SettingsWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
@@ -187,7 +251,7 @@ pub const SettingsWidget = struct {
         ren.drawText(x + 2, y, " Vide Settings ", theme.fg_accent, theme.bg_sidebar, true, false);
 
         // Close button
-        ren.drawText(x + w - 4, y, " 󰅖 ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
+        ren.drawText(x + w - 4, y, if (self.config.nerd_fonts) " 󰅖 " else " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
 
         // Save button
         const save_color = if (self.has_unsaved_changes) theme.fg_accent else theme.fg_secondary;
@@ -223,34 +287,62 @@ pub const SettingsWidget = struct {
                 const clip_str = std.fmt.bufPrint(&buf, "{s} System Clipboard", .{clip_t}) catch "System Clipboard";
                 ren.drawText(content_x, content_y + 2, clip_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
-                const zen_t = if (self.config.zen) "[x]" else "[ ]";
-                const zen_str = std.fmt.bufPrint(&buf, "{s} Zen Mode", .{zen_t}) catch "Zen Mode";
-                ren.drawText(content_x, content_y + 4, zen_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                const mode_str = if (self.config.nerd_fonts)
+                    std.fmt.bufPrint(&buf, "Mode:  [ {s} ▾ ]", .{self.config.mode}) catch "Mode: normal"
+                else
+                    std.fmt.bufPrint(&buf, "Mode:  [ {s} v ]", .{self.config.mode}) catch "Mode: normal";
+                ren.drawText(content_x, content_y + 4, mode_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
-                const ide_t = if (self.config.ide) "[x]" else "[ ]";
-                const ide_str = std.fmt.bufPrint(&buf, "{s} IDE Mode", .{ide_t}) catch "IDE Mode";
-                ren.drawText(content_x, content_y + 6, ide_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                const auto_t = if (self.config.autocomplete) "[x]" else "[ ]";
+                const auto_str = std.fmt.bufPrint(&buf, "{s} Autocomplete", .{auto_t}) catch "Autocomplete";
+                ren.drawText(content_x, content_y + 6, auto_str, theme.fg_primary, theme.bg_sidebar, false, false);
+
+                const indent_t = if (self.config.autoindent) "[x]" else "[ ]";
+                const indent_str = std.fmt.bufPrint(&buf, "{s} Autoindent", .{indent_t}) catch "Autoindent";
+                ren.drawText(content_x, content_y + 8, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             1 => {
                 ren.drawText(content_x, content_y, "Appearance", theme.fg_primary, theme.bg_sidebar, true, false);
                 
-                const theme_str = std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{self.config.theme}) catch "Theme: kanagawa";
+                const theme_str = if (self.config.nerd_fonts)
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{self.config.theme}) catch "Theme: kanagawa"
+                else
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{self.config.theme}) catch "Theme: kanagawa";
                 ren.drawText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
+
+                const sep_str = if (self.config.nerd_fonts)
+                    std.fmt.bufPrint(&buf, "Split Separator:  [ {s} ▾ ]", .{self.config.split_separator}) catch "Split Separator: │"
+                else
+                    std.fmt.bufPrint(&buf, "Split Separator:  [ {s} v ]", .{self.config.split_separator}) catch "Split Separator: │";
+                ren.drawText(content_x, content_y + 4, sep_str, theme.fg_primary, theme.bg_sidebar, false, false);
+
+                const nf_t = if (self.config.nerd_fonts) "[x]" else "[ ]";
+                const nf_str = std.fmt.bufPrint(&buf, "{s} Use Nerd Fonts (Icons)", .{nf_t}) catch "Use Nerd Fonts (Icons)";
+                ren.drawText(content_x, content_y + 6, nf_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             2 => {
                 ren.drawText(content_x, content_y, "Editor", theme.fg_primary, theme.bg_sidebar, true, false);
                 
-                const type_str = std.fmt.bufPrint(&buf, "Indent Type:  [ {s} ▾ ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces";
+                const type_str = if (self.config.nerd_fonts)
+                    std.fmt.bufPrint(&buf, "Indent Type:  [ {s} ▾ ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces"
+                else
+                    std.fmt.bufPrint(&buf, "Indent Type:  [ {s} v ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces";
                 ren.drawText(content_x, content_y + 2, type_str, theme.fg_primary, theme.bg_sidebar, false, false);
                 
-                const indent_str = std.fmt.bufPrint(&buf, "Indent Size:  [ {d} ▾ ]", .{self.config.indent_size}) catch "Indent Size: 4";
+                const indent_str = if (self.config.nerd_fonts)
+                    std.fmt.bufPrint(&buf, "Indent Size:  [ {d} ▾ ]", .{self.config.indent_size}) catch "Indent Size: 4"
+                else
+                    std.fmt.bufPrint(&buf, "Indent Size:  [ {d} v ]", .{self.config.indent_size}) catch "Indent Size: 4";
                 ren.drawText(content_x, content_y + 4, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
                 
                 const wrap_t = if (self.config.wrap) "[x]" else "[ ]";
                 const wrap_str = std.fmt.bufPrint(&buf, "{s} Text Wrap", .{wrap_t}) catch "Text Wrap";
                 ren.drawText(content_x, content_y + 6, wrap_str, theme.fg_primary, theme.bg_sidebar, false, false);
                 
-                const line_str = std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} ▾ ]", .{self.config.line_numbers}) catch "Line Numbers: relative";
+                const line_str = if (self.config.nerd_fonts)
+                    std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} ▾ ]", .{self.config.line_numbers}) catch "Line Numbers: relative"
+                else
+                    std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} v ]", .{self.config.line_numbers}) catch "Line Numbers: relative";
                 ren.drawText(content_x, content_y + 8, line_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             3 => {
@@ -267,12 +359,14 @@ pub const SettingsWidget = struct {
             4 => {
                 ren.drawText(content_x, content_y, "Keybindings (Click to edit)", theme.fg_primary, theme.bg_sidebar, true, false);
                 
-                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Explorer", "Toggle Zen Mode", "New File" };
+                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Explorer", "Toggle Zen Mode", "New File", "Find File", "Quit" };
                 const current_keys = [_][]const u8{
                     self.config.keybindings.toggle_terminal,
                     self.config.keybindings.toggle_explorer,
                     self.config.keybindings.toggle_zen,
                     self.config.keybindings.new_file,
+                    self.config.keybindings.find_file,
+                    self.config.keybindings.quit,
                 };
 
                 for (actions, 0..) |action, i| {
@@ -286,6 +380,22 @@ pub const SettingsWidget = struct {
                     const color = if (self.active_binding == i) theme.fg_accent else theme.fg_primary;
                     ren.drawText(content_x, content_y + 2 + @as(u16, @intCast(i * 2)), draw_str, color, theme.bg_sidebar, false, false);
                 }
+
+                const static_actions = [_][]const u8{
+                    "Split Vertically:        [ Alt+V ]",
+                    "Split Horizontally:      [ Alt+S ]",
+                    "Close Split Window:      [ Alt+C ]",
+                    "Move Focus Left/Right:   [ Alt+H / Alt+L ]",
+                    "Move Focus Up/Down:      [ Alt+K / Alt+J ]",
+                    "Cycle Window Focus:      [ Alt+O ]",
+                    "Resize Sidebar/Panel:    [ Alt+Arrow ]",
+                    "Toggle Panel Bottom/Right:[ Alt+P ]",
+                };
+                
+                ren.drawText(content_x, content_y + 14, "Window Splits & Layout (Static):", theme.fg_primary, theme.bg_sidebar, true, false);
+                for (static_actions, 0..) |sa, sa_idx| {
+                    ren.drawText(content_x, content_y + 15 + @as(u16, @intCast(sa_idx)), sa, theme.fg_secondary, theme.bg_sidebar, false, false);
+                }
             },
             else => {},
         }
@@ -293,19 +403,30 @@ pub const SettingsWidget = struct {
         // Draw active dropdown if any
         if (self.active_dropdown != .none) {
             const drop_x = content_x + 10;
-            const drop_y = content_y + 3; // roughly below the selector
+            var drop_y = content_y + 3; // roughly below the selector
             var items_len: usize = 0;
             var drop_w: u16 = 20;
 
             if (self.active_dropdown == .theme) {
                 items_len = supported_themes.len;
                 drop_w = 22;
+                drop_y = content_y + 3;
+            } else if (self.active_dropdown == .split_separator) {
+                items_len = supported_split_seps.len;
+                drop_y = content_y + 5;
             } else if (self.active_dropdown == .indent_size) {
                 items_len = supported_indents.len;
+                drop_y = content_y + 5;
             } else if (self.active_dropdown == .indent_type) {
                 items_len = supported_indent_types.len;
+                drop_y = content_y + 3;
             } else if (self.active_dropdown == .line_numbers) {
                 items_len = supported_line_nums.len;
+                drop_y = content_y + 9;
+            } else if (self.active_dropdown == .mode) {
+                items_len = supported_modes.len;
+                drop_w = 16;
+                drop_y = content_y + 5;
             }
 
             // clamp drop height to screen_h if it's too tall, or just draw
@@ -348,6 +469,15 @@ pub const SettingsWidget = struct {
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     item_y += 1;
                 }
+            } else if (self.active_dropdown == .split_separator) {
+                for (supported_split_seps) |s| {
+                    if (item_y >= screen_h) break;
+                    const is_sel = std.mem.eql(u8, self.config.split_separator, s);
+                    const prefix = if (is_sel) " * " else "   ";
+                    const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, s}) catch " error";
+                    ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    item_y += 1;
+                }
             } else if (self.active_dropdown == .indent_size) {
                 for (supported_indents) |i| {
                     if (item_y >= screen_h) break;
@@ -372,6 +502,15 @@ pub const SettingsWidget = struct {
                     const is_sel = std.mem.eql(u8, self.config.line_numbers, ln);
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, ln}) catch " error";
+                    ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    item_y += 1;
+                }
+            } else if (self.active_dropdown == .mode) {
+                for (supported_modes) |m| {
+                    if (item_y >= screen_h) break;
+                    const is_sel = std.mem.eql(u8, self.config.mode, m);
+                    const prefix = if (is_sel) " * " else "   ";
+                    const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, m}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     item_y += 1;
                 }
@@ -484,7 +623,9 @@ pub const SettingsWidget = struct {
                 (idx != 0 and std.mem.eql(u8, self.config.keybindings.toggle_terminal, key)) or
                 (idx != 1 and std.mem.eql(u8, self.config.keybindings.toggle_explorer, key)) or
                 (idx != 2 and std.mem.eql(u8, self.config.keybindings.toggle_zen, key)) or
-                (idx != 3 and std.mem.eql(u8, self.config.keybindings.new_file, key));
+                (idx != 3 and std.mem.eql(u8, self.config.keybindings.new_file, key)) or
+                (idx != 4 and std.mem.eql(u8, self.config.keybindings.find_file, key)) or
+                (idx != 5 and std.mem.eql(u8, self.config.keybindings.quit, key));
             
             if (is_duplicate) {
                 self.duplicate_warning = true;
@@ -506,6 +647,12 @@ pub const SettingsWidget = struct {
             } else if (idx == 3) {
                 self.allocator.free(self.config.keybindings.new_file);
                 self.config.keybindings.new_file = duped;
+            } else if (idx == 4) {
+                self.allocator.free(self.config.keybindings.find_file);
+                self.config.keybindings.find_file = duped;
+            } else if (idx == 5) {
+                self.allocator.free(self.config.keybindings.quit);
+                self.config.keybindings.quit = duped;
             }
             
             self.active_binding = null;
@@ -546,7 +693,19 @@ pub const SettingsWidget = struct {
             if (mx >= px and mx < px + pw and my >= py and my < py + ph) {
                 if (my == py + 5) {
                     if (mx >= px + 4 and mx <= px + 10) { // [ Yes ]
-                        self.config = SettingsConfig.load(self.allocator, self.settings_path) catch SettingsConfig{};
+                        const old_cfg = self.config;
+                        if (SettingsConfig.load(self.allocator, self.settings_path)) |new_cfg| {
+                            self.config = new_cfg;
+                            self.allocator.free(old_cfg.theme);
+                            self.allocator.free(old_cfg.line_numbers);
+                            self.allocator.free(old_cfg.split_separator);
+                            self.allocator.free(old_cfg.keybindings.toggle_terminal);
+                            self.allocator.free(old_cfg.keybindings.toggle_explorer);
+                            self.allocator.free(old_cfg.keybindings.toggle_zen);
+                            self.allocator.free(old_cfg.keybindings.new_file);
+                            self.allocator.free(old_cfg.keybindings.find_file);
+                            self.allocator.free(old_cfg.keybindings.quit);
+                        } else |_| {}
                         self.has_unsaved_changes = false;
                         self.popup_active = false;
                         self.is_open = false;
@@ -565,19 +724,30 @@ pub const SettingsWidget = struct {
 
         if (self.active_dropdown != .none) {
             const drop_x = content_x + 10;
-            const drop_y = content_y + 3;
+            var drop_y = content_y + 3;
             var items_len: usize = 0;
             var drop_w: u16 = 20;
 
             if (self.active_dropdown == .theme) {
                 items_len = supported_themes.len;
                 drop_w = 22;
+                drop_y = content_y + 3;
+            } else if (self.active_dropdown == .split_separator) {
+                items_len = supported_split_seps.len;
+                drop_y = content_y + 5;
             } else if (self.active_dropdown == .indent_size) {
                 items_len = supported_indents.len;
+                drop_y = content_y + 5;
             } else if (self.active_dropdown == .indent_type) {
                 items_len = supported_indent_types.len;
+                drop_y = content_y + 3;
             } else if (self.active_dropdown == .line_numbers) {
                 items_len = supported_line_nums.len;
+                drop_y = content_y + 9;
+            } else if (self.active_dropdown == .mode) {
+                items_len = supported_modes.len;
+                drop_w = 16;
+                drop_y = content_y + 5;
             }
 
             const drop_h = @as(u16, @intCast(items_len)) + 2;
@@ -587,7 +757,16 @@ pub const SettingsWidget = struct {
                 var changed = false;
                 if (self.active_dropdown == .theme) {
                     if (idx < supported_themes.len) {
-                        self.config.theme = supported_themes[idx];
+                        const new_theme = self.allocator.dupe(u8, supported_themes[idx]) catch return true;
+                        self.allocator.free(self.config.theme);
+                        self.config.theme = new_theme;
+                        changed = true;
+                    }
+                } else if (self.active_dropdown == .split_separator) {
+                    if (idx < supported_split_seps.len) {
+                        const new_sep = self.allocator.dupe(u8, supported_split_seps[idx]) catch return true;
+                        self.allocator.free(self.config.split_separator);
+                        self.config.split_separator = new_sep;
                         changed = true;
                     }
                 } else if (self.active_dropdown == .indent_size) {
@@ -602,7 +781,18 @@ pub const SettingsWidget = struct {
                     }
                 } else if (self.active_dropdown == .line_numbers) {
                     if (idx < supported_line_nums.len) {
-                        self.config.line_numbers = supported_line_nums[idx];
+                        const new_ln = self.allocator.dupe(u8, supported_line_nums[idx]) catch return true;
+                        self.allocator.free(self.config.line_numbers);
+                        self.config.line_numbers = new_ln;
+                        changed = true;
+                    }
+                } else if (self.active_dropdown == .mode) {
+                    if (idx < supported_modes.len) {
+                        const new_mode = self.allocator.dupe(u8, supported_modes[idx]) catch return true;
+                        self.allocator.free(self.config.mode);
+                        self.config.mode = new_mode;
+                        self.config.zen = std.mem.eql(u8, self.config.mode, "zen");
+                        self.config.ide = std.mem.eql(u8, self.config.mode, "ide");
                         changed = true;
                     }
                 }
@@ -665,16 +855,23 @@ pub const SettingsWidget = struct {
                             self.config.clip = !self.config.clip;
                             changed = true;
                         } else if (my == content_y + 4) {
-                            self.config.zen = !self.config.zen;
-                            changed = true;
+                            self.active_dropdown = .mode;
                         } else if (my == content_y + 6) {
-                            self.config.ide = !self.config.ide;
+                            self.config.autocomplete = !self.config.autocomplete;
+                            changed = true;
+                        } else if (my == content_y + 8) {
+                            self.config.autoindent = !self.config.autoindent;
                             changed = true;
                         }
                     },
                     1 => {
                         if (my == content_y + 2) {
                             self.active_dropdown = .theme;
+                        } else if (my == content_y + 4) {
+                            self.active_dropdown = .split_separator;
+                        } else if (my == content_y + 6) {
+                            self.config.nerd_fonts = !self.config.nerd_fonts;
+                            changed = true;
                         }
                     },
                     2 => {
@@ -697,7 +894,7 @@ pub const SettingsWidget = struct {
                         }
                     },
                     4 => {
-                        for (0..4) |i| {
+                        for (0..6) |i| {
                             if (my == content_y + 2 + @as(u16, @intCast(i * 2))) {
                                 self.active_binding = i;
                                 changed = true;
