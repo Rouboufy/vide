@@ -14,6 +14,7 @@ vim.opt.rtp:prepend(lazypath)
 vim.g.mapleader = " "
 vim.opt.hidden = true
 vim.opt.shortmess:append("A")
+vim.opt.completeopt = { "menu", "menuone", "noselect" }
 
 require("lazy").setup({
     {
@@ -32,11 +33,102 @@ require("lazy").setup({
             }
             dashboard.section.header.val = logo
             dashboard.section.header.opts.hl = "Statement"
-            dashboard.section.buttons.val = {
-                dashboard.button("n", "󰝒  New File", ":enew<CR>"),
-                dashboard.button("f", "  Find File", "<cmd>Telescope find_files<CR>"),
-                dashboard.button("q", "󰈆  Quit", ":qa<CR>"),
-            }
+
+            local function format_key(key)
+                if not key or key == "" then return "None" end
+                if key:sub(1, 1) == "<" and key:sub(-1) == ">" then
+                    local content = key:sub(2, -2)
+                    local parts = {}
+                    while true do
+                        if content:sub(1, 2) == "C-" then
+                            table.insert(parts, "Ctrl")
+                            content = content:sub(3)
+                        elseif content:sub(1, 2) == "M-" then
+                            table.insert(parts, "Alt")
+                            content = content:sub(3)
+                        elseif content:sub(1, 2) == "S-" then
+                            table.insert(parts, "Shift")
+                            content = content:sub(3)
+                        else
+                            break
+                        end
+                    end
+                    if #content == 1 then
+                        content = content:upper()
+                    elseif content:lower() == "esc" then
+                        content = "Esc"
+                    elseif content:lower() == "cr" or content:lower() == "enter" then
+                        content = "Enter"
+                    elseif content:lower() == "space" then
+                        content = "Space"
+                    end
+                    table.insert(parts, content)
+                    return table.concat(parts, "+")
+                end
+                return key
+            end
+
+            _G.vide_update_dashboard_keys = function()
+                local path = vim.fn.expand("~/.local/share/vide/settings.json")
+                local f = io.open(path, "r")
+                local state = {}
+                if f then
+                    local content = f:read("*a")
+                    f:close()
+                    local ok, s = pcall(vim.fn.json_decode, content)
+                    if ok and type(s) == "table" then
+                        state = s
+                    end
+                end
+                
+                local kb = state.keybindings or {}
+                local new_file_key = format_key(kb.new_file or "<C-n>")
+                local find_file_key = format_key(kb.find_file or "<C-f>")
+                local quit_key = format_key(kb.quit or "<C-q>")
+                
+                local term = os.getenv("TERM") or ""
+                local nerd_fonts = true
+                if state.nerd_fonts ~= nil then
+                    nerd_fonts = state.nerd_fonts
+                end
+                if term == "linux" then
+                    nerd_fonts = false
+                end
+                vim.g.vide_nerd_fonts = nerd_fonts
+
+                local new_file_icon = nerd_fonts and "󰝒 " or "+ "
+                local find_file_icon = nerd_fonts and " " or "/ "
+                local quit_icon = nerd_fonts and "󰈆 " or "x "
+
+                dashboard.section.buttons.val = {
+                    {
+                        type = "text",
+                        val = new_file_icon .. " New File      " .. new_file_key,
+                        opts = { hl = "Function", position = "center" }
+                    },
+                    {
+                        type = "padding",
+                        val = 1
+                    },
+                    {
+                        type = "text",
+                        val = find_file_icon .. " Find File     " .. find_file_key,
+                        opts = { hl = "Function", position = "center" }
+                    },
+                    {
+                        type = "padding",
+                        val = 1
+                    },
+                    {
+                        type = "text",
+                        val = quit_icon .. " Quit          " .. quit_key,
+                        opts = { hl = "Function", position = "center" }
+                    }
+                }
+            end
+
+            _G.vide_update_dashboard_keys()
+
             dashboard.opts.opts = {
                 noautocmd = true,
             }
@@ -46,7 +138,11 @@ require("lazy").setup({
                 group = group,
                 pattern = "alpha",
                 callback = function()
-                    vim.cmd("setlocal nonumber norelativenumber laststatus=0")
+                    vim.cmd("setlocal nonumber norelativenumber") ;
+                    if _G.vide_update_dashboard_keys then
+                        _G.vide_update_dashboard_keys()
+                        pcall(function() require("alpha").redraw() end)
+                    end
                 end,
             })
         end
@@ -85,6 +181,174 @@ require("lazy").setup({
         cmd = "Mason",
         keys = { { "<leader>cm", "<cmd>Mason<cr>", desc = "Mason" } },
         config = true,
+    },
+    {
+        "hrsh7th/nvim-cmp",
+        lazy = false,
+        cond = not vim.g.vide_is_terminal,
+        dependencies = {
+            "hrsh7th/cmp-nvim-lsp",
+            "hrsh7th/cmp-buffer",
+            "hrsh7th/cmp-path",
+            "L3MON4D3/LuaSnip",
+            "saadparwaiz1/cmp_luasnip",
+        },
+        config = function()
+            local cmp = require("cmp")
+            local luasnip = require("luasnip")
+
+            cmp.setup({
+                enabled = function()
+                    return vim.g.vide_autocomplete_enabled ~= false
+                end,
+                window = {
+                    completion = cmp.config.window.bordered(),
+                    documentation = false,
+                },
+
+                performance = {
+                    max_view_entries = 12,
+                },
+
+                snippet = {
+                    expand = function(args)
+                        luasnip.lsp_expand(args.body)
+                    end,
+                },
+                mapping = cmp.mapping.preset.insert({
+                    ["<C-b>"] = cmp.mapping.scroll_docs(-4),
+                    ["<C-f>"] = cmp.mapping.scroll_docs(4),
+                    ["<C-Space>"] = cmp.mapping.complete(),
+                    ["<C-e>"] = cmp.mapping.abort(),
+                    ["<CR>"] = cmp.mapping.confirm({ select = true }),
+                    ["<Tab>"] = cmp.mapping(function(fallback)
+                        if cmp.visible() then
+                            cmp.select_next_item()
+                        elseif luasnip.expand_or_locally_jumpable() then
+                            luasnip.expand_or_jump()
+                        else
+                            fallback()
+                        end
+                    end, { "i", "s" }),
+                    ["<S-Tab>"] = cmp.mapping(function(fallback)
+                        if cmp.visible() then
+                            cmp.select_prev_item()
+                        elseif luasnip.locally_jumpable(-1) then
+                            luasnip.jump(-1)
+                        else
+                            fallback()
+                        end
+                    end, { "i", "s" }),
+                }),
+                sources = cmp.config.sources({
+                    { name = "nvim_lsp", max_item_count = 15 },
+                    { name = "luasnip", max_item_count = 5 },
+                    { name = "path", max_item_count = 5 },
+                }, {
+                    { name = "buffer", max_item_count = 5 },
+                }),
+            })
+        end,
+    },
+    {
+        "neovim/nvim-lspconfig",
+        lazy = false,
+        cond = not vim.g.vide_is_terminal,
+        dependencies = {
+            "williamboman/mason.nvim",
+            "williamboman/mason-lspconfig.nvim",
+            "hrsh7th/cmp-nvim-lsp",
+        },
+        config = function()
+            local mason_lspconfig = require("mason-lspconfig")
+            local cmp_nvim_lsp = require("cmp_nvim_lsp")
+
+            local mason_bin = vim.fn.expand("~/.local/share/nvim/mason/bin")
+            if vim.fn.isdirectory(mason_bin) == 1 then
+                vim.env.PATH = mason_bin .. ":" .. vim.env.PATH
+            end
+
+            pcall(function()
+                require("mason").setup({
+                    install_root_dir = vim.fn.expand("~/.local/share/nvim/mason"),
+                })
+            end)
+
+            local capabilities = cmp_nvim_lsp.default_capabilities()
+
+            -- Apply completion capabilities + broad root_markers to all servers.
+            -- root_markers is how Neovim 0.12 native LSP determines the project root.
+            vim.lsp.config('*', {
+                capabilities = capabilities,
+                root_markers = {
+                    '.git',
+                    'pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile',
+                    'Cargo.toml', 'Cargo.lock',
+                    'package.json', 'yarn.lock', 'package-lock.json',
+                    'compile_commands.json', 'compile_flags.txt',
+                    '.clangd', '.clang-tidy',
+                    'build.zig', 'build.zig.zon',
+                    'pyrightconfig.json',
+                    'Makefile', 'CMakeLists.txt',
+                    'go.mod', 'go.sum',
+                    '.hg', '.svn',
+                },
+            })
+
+            -- Configure lua_ls settings natively
+            vim.lsp.config("lua_ls", {
+                settings = {
+                    Lua = {
+                        diagnostics = { globals = { "vim" } },
+                    },
+                },
+            })
+
+            mason_lspconfig.setup({
+                ensure_installed = { "lua_ls", "zls" },
+                automatic_enable = true,
+            })
+
+            -- Enable all installed servers immediately (mason-lspconfig's async refresh
+            -- sometimes misses servers on first load)
+            local function enable_all()
+                local servers = mason_lspconfig.get_installed_servers()
+                if #servers > 0 then
+                    vim.lsp.enable(servers)
+                    pcall(function()
+                        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+                            if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
+                                local ft = vim.bo[bufnr].filetype
+                                if ft and ft ~= "" then
+                                    vim.api.nvim_exec_autocmds("FileType", { buffer = bufnr })
+                                end
+                            end
+                        end
+                    end)
+                end
+            end
+
+            enable_all()
+            vim.defer_fn(enable_all, 500)
+
+            -- Also re-enable on BufReadPost so newly installed servers attach
+            vim.api.nvim_create_autocmd("BufReadPost", {
+                once = false,
+                callback = enable_all,
+            })
+
+            -- Trigger cmp-nvim-lsp registration on LspAttach, since Vide stays in insert mode
+            vim.api.nvim_create_autocmd("LspAttach", {
+                group = vim.api.nvim_create_augroup("VideCmpLspAttach", { clear = true }),
+                callback = function()
+                    local ok, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
+                    if ok and cmp_nvim_lsp._on_insert_enter then
+                        cmp_nvim_lsp._on_insert_enter()
+                    end
+                end,
+            })
+        end,
+
     },
     {
         "ThePrimeagen/harpoon",
@@ -152,14 +416,33 @@ _G.vide_disable_ide_mode = function()
 end
 
 _G.vide_save_settings = function()
-    local state = {
-        zen = vim.g.vide_zen_mode or false,
-        ide = vim.g.vide_ide_mode or false,
-        clip = vim.o.clipboard:match("unnamedplus") ~= nil,
-        theme = vim.g.colors_name or "vscode"
-    }
-    local f = io.open(vim.fn.expand("~/.local/share/vide/settings.json"), "w")
-    if f then f:write(vim.fn.json_encode(state)); f:close() end
+    local state = {}
+    local path = vim.fn.expand("~/.local/share/vide/settings.json")
+    local f = io.open(path, "r")
+    if f then
+        local content = f:read("*a")
+        f:close()
+        local ok, s = pcall(vim.fn.json_decode, content)
+        if ok and type(s) == "table" then
+            state = s
+        end
+    end
+    local mode = "normal"
+    if vim.g.vide_zen_mode then
+        mode = "zen"
+    elseif vim.g.vide_ide_mode then
+        mode = "ide"
+    end
+    state.mode = mode
+    state.zen = (mode == "zen")
+    state.ide = (mode == "ide")
+    state.clip = vim.o.clipboard:match("unnamedplus") ~= nil
+    state.theme = vim.g.colors_name or "vscode"
+    state.autocomplete = vim.g.vide_autocomplete_enabled ~= false
+    state.autoindent = vim.o.autoindent
+    state.nerd_fonts = vim.g.vide_nerd_fonts ~= false
+    local f_w = io.open(path, "w")
+    if f_w then f_w:write(vim.fn.json_encode(state)); f_w:close() end
 end
 
 _G.vide_load_settings = function()
@@ -169,15 +452,50 @@ _G.vide_load_settings = function()
         f:close()
         local ok, state = pcall(vim.fn.json_decode, content)
         if ok and type(state) == "table" then
-            if state.zen then
+            local mode = "normal"
+            if state.mode ~= nil then
+                mode = state.mode
+            elseif state.zen then
+                mode = "zen"
+            elseif state.ide then
+                mode = "ide"
+            end
+            
+            if mode == "zen" then
                 vim.g.vide_zen_mode = true
+                vim.g.vide_ide_mode = false
                 vim.schedule(function() vim.rpcnotify(1, "vide_toggle_zen") end)
-            end
-            if state.ide then
+            elseif mode == "ide" then
+                vim.g.vide_zen_mode = false
+                vim.g.vide_ide_mode = true
                 vim.schedule(_G.vide_enable_ide_mode)
+            else
+                vim.g.vide_zen_mode = false
+                vim.g.vide_ide_mode = false
+                vim.schedule(_G.vide_disable_ide_mode)
             end
+            
             if state.clip ~= nil then
                 vim.o.clipboard = state.clip and "unnamedplus" or ""
+            end
+            if state.autocomplete ~= nil then
+                vim.g.vide_autocomplete_enabled = state.autocomplete
+            else
+                vim.g.vide_autocomplete_enabled = true
+            end
+            local term = os.getenv("TERM") or ""
+            if state.nerd_fonts ~= nil then
+                vim.g.vide_nerd_fonts = state.nerd_fonts
+            else
+                vim.g.vide_nerd_fonts = true
+            end
+            if term == "linux" then
+                vim.g.vide_nerd_fonts = false
+            end
+            if state.autoindent ~= nil then
+                vim.o.autoindent = state.autoindent
+            else
+                vim.o.autoindent = true
             end
             if state.theme then
                 vim.schedule(function() vim.cmd("colorscheme " .. state.theme) end)
@@ -191,16 +509,31 @@ local themes = { "vscode", "tokyonight", "tokyonight-storm", "catppuccin", "gruv
 function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
-    local function get_toggle(is_on) return is_on and " " or " " end
+    if vim.g.vide_autocomplete_enabled == nil then vim.g.vide_autocomplete_enabled = true end
+    local nerd_fonts = vim.g.vide_nerd_fonts ~= false
+    local function get_toggle(is_on)
+        if nerd_fonts then
+            return is_on and " " or " "
+        else
+            return is_on and "[x] " or "[ ] "
+        end
+    end
     local current_theme = vim.g.colors_name or "vscode"
     
+    local is_zen = vim.g.vide_zen_mode == true
+    local is_ide = vim.g.vide_ide_mode == true
+    local is_normal = not is_zen and not is_ide
+
     local width = 45
     local lines = { 
-        string.rep(" ", width - 4) .. "󰅖 ",
+        string.rep(" ", width - 4) .. (nerd_fonts and "󰅖 " or "x "),
         "  General Settings",
-        "  " .. get_toggle(vim.g.vide_zen_mode) .. " Zen Mode                      [z]", 
-        "  " .. get_toggle(vim.g.vide_ide_mode) .. " IDE Mode                      [i]", 
+        "  " .. get_toggle(is_zen) .. " Zen Mode                      [z]", 
+        "  " .. get_toggle(is_ide) .. " IDE Mode                      [i]", 
+        "  " .. get_toggle(is_normal) .. " Normal Mode                   [o]",
         "  " .. get_toggle(vim.o.clipboard:match("unnamedplus")) .. " System Clipboard              [c]",
+        "  " .. get_toggle(vim.g.vide_autocomplete_enabled) .. " Autocomplete                 [a]",
+        "  " .. get_toggle(vim.o.autoindent) .. " Autoindent                   [n]",
         "", 
         "  Themes",
     }
@@ -220,25 +553,28 @@ function M.open()
     vim.bo[buf].modifiable = false
     vim.cmd("stopinsert")
     
-    local function toggle_zen()
-        vim.g.vide_zen_mode = not vim.g.vide_zen_mode
-        vim.rpcnotify(1, "vide_toggle_zen")
-        if _G.vide_save_settings then _G.vide_save_settings() end
-        pcall(vim.api.nvim_win_close, win, true)
-        require('vide_settings').open()
-    end
-    
-    local function toggle_ide()
-        if vim.g.vide_ide_mode then
+    local function select_mode(mode)
+        if mode == "zen" then
+            vim.g.vide_zen_mode = true
+            vim.g.vide_ide_mode = false
             _G.vide_disable_ide_mode()
-            print("Beginner Mode: OFF (Normal Vim)")
-        else
+            vim.rpcnotify(1, "vide_toggle_zen")
+        elseif mode == "ide" then
+            vim.g.vide_zen_mode = false
+            vim.g.vide_ide_mode = true
             _G.vide_enable_ide_mode()
-            print("Beginner Mode: ON (VSCode Style)")
+            vim.rpcnotify(1, "vide_toggle_ide")
+        elseif mode == "normal" then
+            vim.g.vide_zen_mode = false
+            vim.g.vide_ide_mode = false
+            _G.vide_disable_ide_mode()
+            vim.rpcnotify(1, "vide_settings_changed")
         end
         if _G.vide_save_settings then _G.vide_save_settings() end
         pcall(vim.api.nvim_win_close, win, true)
-        require('vide_settings').open()
+        if mode ~= "zen" then
+            require('vide_settings').open()
+        end
     end
     
     local function toggle_clipboard()
@@ -250,6 +586,22 @@ function M.open()
             print("System Clipboard: ON")
         end
         if _G.vide_save_settings then _G.vide_save_settings() end
+        pcall(vim.api.nvim_win_close, win, true)
+        require('vide_settings').open()
+    end
+
+    local function toggle_autocomplete()
+        vim.g.vide_autocomplete_enabled = not vim.g.vide_autocomplete_enabled
+        if _G.vide_save_settings then _G.vide_save_settings() end
+        vim.rpcnotify(1, "vide_settings_changed")
+        pcall(vim.api.nvim_win_close, win, true)
+        require('vide_settings').open()
+    end
+
+    local function toggle_autoindent()
+        vim.o.autoindent = not vim.o.autoindent
+        if _G.vide_save_settings then _G.vide_save_settings() end
+        vim.rpcnotify(1, "vide_settings_changed")
         pcall(vim.api.nvim_win_close, win, true)
         require('vide_settings').open()
     end
@@ -266,23 +618,42 @@ function M.open()
 
     local function handle_click()
         local line = vim.api.nvim_get_current_line()
-        if line:match("󰅖") or line:match("%[x%]") then pcall(vim.api.nvim_win_close, win, true)
-        elseif line:match("Zen Mode") then toggle_zen()
-        elseif line:match("IDE Mode") then toggle_ide()
+        if line:match("󰅖") or line:match("x ") or line:match("%[x%]") or vim.api.nvim_win_get_cursor(win)[1] == 1 then pcall(vim.api.nvim_win_close, win, true)
+        elseif line:match("Zen Mode") then select_mode("zen")
+        elseif line:match("IDE Mode") then select_mode("ide")
+        elseif line:match("Normal Mode") then select_mode("normal")
         elseif line:match("System Clipboard") then toggle_clipboard()
+        elseif line:match("Autocomplete") then toggle_autocomplete()
+        elseif line:match("Autoindent") then toggle_autoindent()
         else set_theme() end
     end
 
-    vim.keymap.set('n', 'z', toggle_zen, { buffer = buf, silent = true })
-    vim.keymap.set('n', 'i', toggle_ide, { buffer = buf, silent = true })
-    vim.keymap.set('n', 'c', toggle_clipboard, { buffer = buf, silent = true })
-    vim.keymap.set('n', 't', set_theme, { buffer = buf, silent = true })
+    local function do_click()
+        vim.cmd("stopinsert")
+        handle_click()
+    end
+
+    vim.keymap.set({'n', 'v', 'i'}, 'z', function() select_mode("zen") end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'i', function() select_mode("ide") end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'o', function() select_mode("normal") end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'c', toggle_clipboard, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'a', toggle_autocomplete, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'n', toggle_autoindent, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 't', set_theme, { buffer = buf, silent = true })
     
-    vim.keymap.set('n', '<LeftRelease>', handle_click, { buffer = buf, silent = true })
-    vim.keymap.set('n', '<2-LeftMouse>', handle_click, { buffer = buf, silent = true })
-    vim.keymap.set('n', '<CR>', handle_click, { buffer = buf, silent = true })
-    vim.keymap.set('n', 'q', function() vim.api.nvim_win_close(win, true) end, { buffer = buf, silent = true })
-    vim.keymap.set('n', '<Esc>', function() vim.api.nvim_win_close(win, true) end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, '<LeftMouse>', function()
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true), "ntx", false)
+        vim.schedule(do_click)
+    end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, '<LeftRelease>', function()
+        vim.schedule(do_click)
+    end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, '<2-LeftMouse>', function()
+        vim.schedule(do_click)
+    end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, '<CR>', do_click, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'q', function() pcall(vim.api.nvim_win_close, win, true) end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, '<Esc>', function() pcall(vim.api.nvim_win_close, win, true) end, { buffer = buf, silent = true })
 end
 
 function M.sync_theme()
@@ -373,7 +744,10 @@ function M.sync_theme()
         f:write("sync_theme bg_editor=" .. bg_editor .. " default_bg=" .. (get_color("Normal", "bg") or "nil") .. "\n")
         f:close()
     end
-    vim.rpcnotify(1, "vide_theme_changed", {
+    vim.api.nvim_set_hl(0, "NormalFloat", { fg = fg_primary, bg = bg_sidebar })
+    vim.api.nvim_set_hl(0, "FloatBorder", { fg = border_color, bg = bg_sidebar })
+
+    pcall(vim.rpcnotify, 1, "vide_theme_changed", {
         bg_editor = bg_editor, bg_sidebar = bg_sidebar, bg_tab_active = bg_editor,
         bg_tab_inactive = bg_tab_inactive, bg_statusbar = bg_accent, fg_statusbar = fg_statusbar, bg_accent = bg_accent,
         fg_primary = fg_primary, fg_secondary = fg_secondary, fg_accent = fg_primary, border_color = border_color,
@@ -396,7 +770,7 @@ _G.vide_alpha_start = function()
 end
 
 -- Force dashboard on initial empty load
-if vim.fn.argc() == 0 then
+if vim.fn.argc() == 0 and not vim.g.vide_is_terminal then
     vim.schedule(function()
         _G.vide_alpha_start()
     end)
@@ -418,32 +792,69 @@ vim.keymap.set("n", "<leader>th", "<cmd>lua require('vide_settings').open()<cr>"
 local telescope_timer = nil
 
 local function notify_telescope()
-    local mt_top, mt_left, mt_bottom, mt_right = 9999, 9999, -1, -1
-    local pr_top, pr_left, pr_bottom, pr_right = 9999, 9999, -1, -1
-    local found_mt = false
-    local found_pr = false
+    pcall(function()
+        local mt_top, mt_left, mt_bottom, mt_right = 9999, 9999, -1, -1
+        local pr_top, pr_left, pr_bottom, pr_right = 9999, 9999, -1, -1
+        local found_mt = false
+        local found_pr = false
 
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_is_valid(w) then
-            local cfg = vim.api.nvim_win_get_config(w)
-            if cfg.relative ~= "" then
-                local buf = vim.api.nvim_win_get_buf(w)
-                local ft = vim.bo[buf].filetype
-                local r = math.floor(cfg.row or 0)
-                local c = math.floor(cfg.col or 0)
-                local h = math.floor(cfg.height or 0)
-                local w_w = math.floor(cfg.width or 0)
-                
-                if r < 0 then r = 0 end
-                if c < 0 then c = 0 end
+        local has_telescope, action_state = pcall(require, "telescope.actions.state")
+        local picker = nil
+        if has_telescope and action_state then
+            for _, w in ipairs(vim.api.nvim_list_wins()) do
+                if vim.api.nvim_win_is_valid(w) then
+                    local buf = vim.api.nvim_win_get_buf(w)
+                    if buf and vim.api.nvim_buf_is_valid(buf) then
+                        local ok_ft, ft = pcall(function() return vim.bo[buf].filetype end)
+                        if ok_ft and ft == "TelescopePrompt" then
+                            local ok_picker, p = pcall(action_state.get_current_picker, buf)
+                            if ok_picker and p then
+                                picker = p
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end
 
-                if ft == "TelescopePrompt" or ft == "TelescopeResults" then
-                    found_mt = true
-                    if r < mt_top then mt_top = r end
-                    if c < mt_left then mt_left = c end
-                    if r + h > mt_bottom then mt_bottom = r + h end
-                    if c + w_w > mt_right then mt_right = c + w_w end
-                elseif ft ~= "neo-tree" and ft ~= "mason" and ft ~= "lazy" then
+        if picker then
+            local prompt_win = picker.prompt_win
+            local results_win = picker.results_win
+            local preview_win = picker.preview_win or (picker.previewer and picker.previewer.state and picker.previewer.state.winid)
+
+            for _, w in ipairs({ prompt_win, results_win }) do
+                if w and vim.api.nvim_win_is_valid(w) then
+                    local cfg = vim.api.nvim_win_get_config(w)
+                    if cfg and cfg.relative ~= "" then
+                        local r = math.floor(cfg.row or 0)
+                        local c = math.floor(cfg.col or 0)
+                        local h = math.floor(cfg.height or 0)
+                        local w_w = math.floor(cfg.width or 0)
+                        
+                        if r < 0 then r = 0 end
+                        if c < 0 then c = 0 end
+
+                        found_mt = true
+                        if r < mt_top then mt_top = r end
+                        if c < mt_left then mt_left = c end
+                        if r + h > mt_bottom then mt_bottom = r + h end
+                        if c + w_w > mt_right then mt_right = c + w_w end
+                    end
+                end
+            end
+
+            if preview_win and vim.api.nvim_win_is_valid(preview_win) then
+                local cfg = vim.api.nvim_win_get_config(preview_win)
+                if cfg and cfg.relative ~= "" then
+                    local r = math.floor(cfg.row or 0)
+                    local c = math.floor(cfg.col or 0)
+                    local h = math.floor(cfg.height or 0)
+                    local w_w = math.floor(cfg.width or 0)
+                    
+                    if r < 0 then r = 0 end
+                    if c < 0 then c = 0 end
+
                     found_pr = true
                     if r < pr_top then pr_top = r end
                     if c < pr_left then pr_left = c end
@@ -452,29 +863,56 @@ local function notify_telescope()
                 end
             end
         end
-    end
 
-    local mt_rect = found_mt and { mt_top, mt_left, mt_right - mt_left, mt_bottom - mt_top } or vim.NIL
-    local pr_rect = found_pr and { pr_top, pr_left, pr_right - pr_left, pr_bottom - pr_top } or vim.NIL
+        local mt_rect = found_mt and { mt_top, mt_left, mt_right - mt_left, mt_bottom - mt_top } or vim.NIL
+        local pr_rect = found_pr and { pr_top, pr_left, pr_right - pr_left, pr_bottom - pr_top } or vim.NIL
 
-    if found_mt or found_pr then
-        if not telescope_timer then
-            telescope_timer = vim.uv.new_timer()
-            telescope_timer:start(50, 50, vim.schedule_wrap(notify_telescope))
+        if found_mt or found_pr then
+            if not telescope_timer then
+                telescope_timer = vim.uv.new_timer()
+                telescope_timer:start(50, 50, vim.schedule_wrap(notify_telescope))
+            end
+            vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect)
+        else
+            if telescope_timer then
+                telescope_timer:stop()
+                telescope_timer:close()
+                telescope_timer = nil
+            end
+            vim.rpcnotify(1, "vide_telescope_rect", vim.NIL, vim.NIL)
         end
-        vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect)
-    else
-        if telescope_timer then
-            telescope_timer:stop()
-            telescope_timer:close()
-            telescope_timer = nil
+    end)
+end
+
+local function notify_win_positions()
+    local win_list = {}
+    local cur_win = vim.api.nvim_get_current_win()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(w) then
+            local cfg = vim.api.nvim_win_get_config(w)
+            if cfg.relative == "" then
+                local pos = vim.api.nvim_win_get_position(w) -- [row, col]
+                local width = vim.api.nvim_win_get_width(w)
+                local height = vim.api.nvim_win_get_height(w)
+                table.insert(win_list, {
+                    id = w,
+                    row = pos[1],
+                    col = pos[2],
+                    width = width,
+                    height = height,
+                    active = (w == cur_win)
+                })
+            end
         end
-        vim.rpcnotify(1, "vide_telescope_rect", vim.NIL, vim.NIL)
     end
+    vim.rpcnotify(1, "vide_win_positions", win_list)
 end
 
 vim.api.nvim_create_autocmd({"WinNew", "WinClosed", "WinEnter", "WinLeave"}, {
-    callback = function() vim.schedule(notify_telescope) end
+    callback = function()
+        vim.schedule(notify_telescope)
+        vim.schedule(notify_win_positions)
+    end
 })
 
 -- Configure Telescope to use no borders so Vide can draw its own widget frame
@@ -485,3 +923,73 @@ pcall(function()
         }
     })
 end)
+
+_G.vide_wincmd = function(dir)
+    local current_win = vim.api.nvim_get_current_win()
+    vim.cmd("wincmd " .. dir)
+    if vim.api.nvim_get_current_win() == current_win then
+        vim.rpcnotify(1, "vide_boundary_hit", dir)
+    end
+end
+
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-h>', function() _G.vide_wincmd('h') end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-j>', function() _G.vide_wincmd('j') end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-k>', function() _G.vide_wincmd('k') end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-l>', function() _G.vide_wincmd('l') end, { silent = true })
+
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-v>', function() vim.cmd("vsplit") end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<C-\\>', function() vim.cmd("vsplit") end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-s>', function() vim.cmd("split") end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-c>', function() vim.cmd("close") end, { silent = true })
+vim.keymap.set({'i', 'n', 'v', 't'}, '<M-o>', function() vim.cmd("wincmd w") end, { silent = true })
+
+vim.schedule(function() pcall(notify_win_positions) end)
+
+-- Native auto-pairs implementation
+local autopairs = {
+    ["("] = ")",
+    ["["] = "]",
+    ["{"] = "}",
+    ['"'] = '"',
+    ["'"] = "'",
+    ['`'] = '`',
+}
+
+for open_char, close_char in pairs(autopairs) do
+    vim.keymap.set('i', open_char, function()
+        local line = vim.api.nvim_get_current_line()
+        local col = vim.api.nvim_win_get_cursor(0)[2]
+        local next_char = line:sub(col + 1, col + 1)
+        if open_char == close_char and next_char == close_char then
+            return "<Right>"
+        else
+            return open_char .. close_char .. "<Left>"
+        end
+    end, { expr = true, replace_keycodes = true })
+end
+
+local closers = { ')', ']', '}', '"', "'", '`' }
+for _, close_char in ipairs(closers) do
+    vim.keymap.set('i', close_char, function()
+        local line = vim.api.nvim_get_current_line()
+        local col = vim.api.nvim_win_get_cursor(0)[2]
+        local next_char = line:sub(col + 1, col + 1)
+        if next_char == close_char then
+            return "<Right>"
+        else
+            return close_char
+        end
+    end, { expr = true, replace_keycodes = true })
+end
+
+vim.keymap.set('i', '<BS>', function()
+    local line = vim.api.nvim_get_current_line()
+    local col = vim.api.nvim_win_get_cursor(0)[2]
+    local prev_char = line:sub(col, col)
+    local next_char = line:sub(col + 1, col + 1)
+    if autopairs[prev_char] == next_char then
+        return "<BS><Del>"
+    else
+        return "<BS>"
+    end
+end, { expr = true, replace_keycodes = true })
