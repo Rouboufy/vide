@@ -61,14 +61,15 @@ pub const Layout = struct {
 
     pub fn compute(cols: u16, rows: u16, is_zen: bool, show_file_tree: bool, file_tree_width: u16, content_tree: ?*SplitNode) Layout {
         if (is_zen) {
+            const editor_h = if (rows > 1) rows - 1 else 0;
             var layout = Layout{
                 .total = .{ .x = 0, .y = 0, .w = cols, .h = rows },
                 .tab_bar = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
                 .activity_bar = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
                 .file_tree = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                .editor = .{ .x = 0, .y = 0, .w = cols, .h = rows },
+                .editor = .{ .x = 0, .y = 0, .w = cols, .h = editor_h },
                 .panel = null,
-                .status_bar = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+                .status_bar = .{ .x = 0, .y = editor_h, .w = cols, .h = 1 },
             };
             if (content_tree) |tree| {
                 tree.compute(layout.editor, &layout.editor, &layout.panel);

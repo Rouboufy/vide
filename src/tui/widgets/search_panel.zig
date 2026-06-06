@@ -54,7 +54,16 @@ pub const SearchPanel = struct {
             row_rect.h = 1;
             rend.drawRect(row_rect, " ", fg, bg);
 
-            rend.drawText(rect.x + 2, rect.y + y, item.icon, fg, bg, false, false);
+            const icon_str = if (colors.nerd_fonts) item.icon else switch (idx) {
+                0 => "f ",
+                1 => "g ",
+                2 => "b ",
+                3 => "h ",
+                4 => "c ",
+                5 => "s ",
+                else => "  ",
+            };
+            rend.drawText(rect.x + 2, rect.y + y, icon_str, fg, bg, false, false);
             rend.drawText(rect.x + 5, rect.y + y, item.label, fg, bg, false, false);
 
             y += 1;

@@ -18,6 +18,7 @@ pub const ActivityBar = struct {
         fg_primary: Color,
         fg_secondary: Color,
         border_color: Color,
+        nerd_fonts: bool = true,
     };
 
     pub const items = [_]Item{
@@ -46,13 +47,19 @@ pub const ActivityBar = struct {
             const icon_y = rect.y + @as(u16, @intCast(idx)) * 3 + 1;
             const is_active = (idx == self.active_idx);
             const fg = if (is_active) theme.fg_primary else theme.fg_secondary;
+            const icon_str = if (theme.nerd_fonts) item.icon else switch (idx) {
+                0 => "E ",
+                1 => "S ",
+                2 => "G ",
+                else => "  ",
+            };
 
             if (is_active) {
                 // Vertical blue accent indicator on the left side
                 renderer.drawText(rect.x, icon_y, "▋", theme.bg_accent, theme.bg_sidebar, true, false);
-                renderer.drawText(rect.x + 2, icon_y, item.icon, fg, theme.bg_sidebar, true, false);
+                renderer.drawText(rect.x + 2, icon_y, icon_str, fg, theme.bg_sidebar, true, false);
             } else {
-                renderer.drawText(rect.x + 2, icon_y, item.icon, fg, theme.bg_sidebar, true, false);
+                renderer.drawText(rect.x + 2, icon_y, icon_str, fg, theme.bg_sidebar, true, false);
             }
         }
 
@@ -60,8 +67,10 @@ pub const ActivityBar = struct {
         if (rect.h > 4) {
             const settings_y = rect.y + rect.h - 4;
             const profile_y = rect.y + rect.h - 2;
-            renderer.drawText(rect.x + 2, settings_y, " ", theme.fg_secondary, theme.bg_sidebar, true, false);
-            renderer.drawText(rect.x + 2, profile_y, " ", theme.fg_secondary, theme.bg_sidebar, true, false);
+            const settings_icon = if (theme.nerd_fonts) " " else "* ";
+            const profile_icon = if (theme.nerd_fonts) " " else "U ";
+            renderer.drawText(rect.x + 2, settings_y, settings_icon, theme.fg_secondary, theme.bg_sidebar, true, false);
+            renderer.drawText(rect.x + 2, profile_y, profile_icon, theme.fg_secondary, theme.bg_sidebar, true, false);
         }
     }
 

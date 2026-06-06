@@ -521,7 +521,7 @@ pub const Explorer = struct {
             const is_session_saved = self.session_saved.contains(item.path);
 
             // Icon
-            const icon = if (item.is_dir) "󰉋 " else getFileIcon(item.name);
+            const icon = if (colors.nerd_fonts) (if (item.is_dir) "󰉋 " else getFileIcon(item.name)) else "";
             const text_x = rect.x + 1 + @as(u16, @intCast(@min(32000, indent)));
             
             var avail_w: u16 = 0;
@@ -593,19 +593,19 @@ pub const Explorer = struct {
             // Draw options
             if (self.selected_idx) |idx| {
                 if (self.items.items[idx].is_dir) {
-                    rend.drawText(mx, my + 1, "│ 󰝒 New File   │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 2, "│ 󰉋 New Folder │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 3, "│ 󰏫 Rename     │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 4, "│ 󰆴 Delete     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 1, if (colors.nerd_fonts) "│ 󰝒 New File   │" else "│ + New File   │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 2, if (colors.nerd_fonts) "│ 󰉋 New Folder │" else "│ + New Folder │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 3, if (colors.nerd_fonts) "│ 󰏫 Rename     │" else "│ ~ Rename     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 4, if (colors.nerd_fonts) "│ 󰆴 Delete     │" else "│ - Delete     │", fg_menu, bg_menu, false, false);
                     rend.drawText(mx, my + 5, "└" ++ ("─" ** 14) ++ "┘", border_fg, bg_menu, false, false);
                 } else {
-                    rend.drawText(mx, my + 1, "│ 󰏫 Rename     │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 2, "│ 󰆴 Delete     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 1, if (colors.nerd_fonts) "│ 󰏫 Rename     │" else "│ ~ Rename     │", fg_menu, bg_menu, false, false);
+                    rend.drawText(mx, my + 2, if (colors.nerd_fonts) "│ 󰆴 Delete     │" else "│ - Delete     │", fg_menu, bg_menu, false, false);
                     rend.drawText(mx, my + 3, "└" ++ ("─" ** 14) ++ "┘", border_fg, bg_menu, false, false);
                 }
             } else {
-                rend.drawText(mx, my + 1, "│ 󰝒 New File   │", fg_menu, bg_menu, false, false);
-                rend.drawText(mx, my + 2, "│ 󰉋 New Folder │", fg_menu, bg_menu, false, false);
+                rend.drawText(mx, my + 1, if (colors.nerd_fonts) "│ 󰝒 New File   │" else "│ + New File   │", fg_menu, bg_menu, false, false);
+                rend.drawText(mx, my + 2, if (colors.nerd_fonts) "│ 󰉋 New Folder │" else "│ + New Folder │", fg_menu, bg_menu, false, false);
                 rend.drawText(mx, my + 3, "└" ++ ("─" ** 14) ++ "┘", border_fg, bg_menu, false, false);
             }
         }
