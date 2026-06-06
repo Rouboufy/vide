@@ -6,9 +6,11 @@ const input = @import("../tui/input.zig");
 const ui_protocol = @import("ui_protocol.zig");
 const UiState = ui_protocol.UiState;
 const App = @import("../tui/app.zig").App;
+const WinInfo = @import("../tui/app.zig").WinInfo;
 const RpcContext = @import("../tui/app.zig").RpcContext;
 const theme = @import("../tui/theme.zig");
 const Rect = @import("../tui/layout.zig").Rect;
+const settings = @import("../tui/widgets/settings.zig");
 
 pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseEvent, rel_col: u16, rel_row: u16) void {
     const button_str: []const u8 = switch (m.button) {
@@ -75,6 +77,95 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
         ui_state.toggle_zen_requested = true;
     } else if (std.mem.eql(u8, method, "vide_toggle_ide")) {
         ui_state.toggle_ide_requested = true;
+    } else if (std.mem.eql(u8, method, "vide_settings_changed")) {
+        const old_cfg = app.settings_widget.config;
+        if (settings.SettingsConfig.load(app.settings_widget.allocator, app.settings_widget.settings_path)) |new_cfg| {
+            app.settings_widget.config = new_cfg;
+            app.settings_widget.allocator.free(old_cfg.theme);
+            app.settings_widget.allocator.free(old_cfg.line_numbers);
+            app.settings_widget.allocator.free(old_cfg.split_separator);
+            app.settings_widget.allocator.free(old_cfg.mode);
+            app.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
+            app.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
+            app.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
+            app.settings_widget.allocator.free(old_cfg.keybindings.new_file);
+            app.settings_widget.allocator.free(old_cfg.keybindings.find_file);
+            app.settings_widget.allocator.free(old_cfg.keybindings.quit);
+            
+            if (std.mem.eql(u8, app.settings_widget.config.mode, "zen")) {
+                app.mode = .zen;
+            } else if (std.mem.eql(u8, app.settings_widget.config.mode, "ide")) {
+                app.mode = .ide;
+            } else {
+                app.mode = .normal;
+            }
+            if (app.mode != .zen) {
+                app.prev_mode = app.mode;
+            } else {
+                app.settings_widget.is_open = false;
+                app.mason_widget.is_open = false;
+                app.lazy_widget.is_open = false;
+                app.git_detailed_widget.is_open = false;
+            }
+        } else |_| {}
+        app.needs_resize = true;
+    } else if (std.mem.eql(u8, method, "vide_win_count") and params == .array and params.array.len > 0) {
+        if (params.array[0] == .integer) {
+            app.editor_win_count = @as(usize, @intCast(@max(1, params.array[0].integer)));
+            app.needs_resize = true;
+        }
+    } else if (std.mem.eql(u8, method, "vide_win_positions") and params == .array and params.array.len > 0) {
+        const wins = if (ui_state == app.ui_state) &app.editor_wins else &app.terminal_wins;
+        wins.clearRetainingCapacity();
+        const list_val = params.array[0];
+        if (list_val == .array) {
+            for (list_val.array) |w_val| {
+                if (w_val == .map) {
+                    var info = WinInfo{ .id = 0, .row = 0, .col = 0, .width = 0, .height = 0, .active = false };
+                    for (w_val.map) |kv| {
+                        if (kv.key == .string) {
+                            const key = kv.key.string;
+                            if (std.mem.eql(u8, key, "id") and kv.value == .integer) {
+                                info.id = kv.value.integer;
+                            } else if (std.mem.eql(u8, key, "row") and kv.value == .integer) {
+                                info.row = @as(u16, @intCast(kv.value.integer));
+                            } else if (std.mem.eql(u8, key, "col") and kv.value == .integer) {
+                                info.col = @as(u16, @intCast(kv.value.integer));
+                            } else if (std.mem.eql(u8, key, "width") and kv.value == .integer) {
+                                info.width = @as(u16, @intCast(kv.value.integer));
+                            } else if (std.mem.eql(u8, key, "height") and kv.value == .integer) {
+                                info.height = @as(u16, @intCast(kv.value.integer));
+                            } else if (std.mem.eql(u8, key, "active") and kv.value == .bool) {
+                                info.active = kv.value.bool;
+                            }
+                        }
+                    }
+                    wins.append(info) catch {};
+                }
+            }
+        }
+        if (ui_state == app.ui_state) {
+            app.editor_win_count = app.editor_wins.items.len;
+        } else {
+            app.terminal_win_count = app.terminal_wins.items.len;
+        }
+
+        app.needs_resize = true;
+    } else if (std.mem.eql(u8, method, "vide_boundary_hit") and params == .array and params.array.len > 0) {
+        if (params.array[0] == .string) {
+            const dir = params.array[0].string;
+            if (std.mem.eql(u8, dir, "j")) {
+                if (app.show_terminal_panel and app.panel_position == .bottom) {
+                    app.terminal_focus = true;
+                    app.needs_resize = true;
+                }
+            } else if (std.mem.eql(u8, dir, "l")) {
+                if (app.show_terminal_panel and app.panel_position == .right) {
+                    app.terminal_focus = true;
+                    app.needs_resize = true;
+                }
+            }
+        }
     } else if (std.mem.eql(u8, method, "vide_theme_changed") and params == .array and params.array.len > 0) {
         if (params.array[0] == .map) {
             ui_state.theme_changed = true;

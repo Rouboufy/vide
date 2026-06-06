@@ -195,7 +195,7 @@ require("lazy").setup({
         group = group,
         pattern = "alpha",
         callback = function()
-          vim.cmd("setlocal nonumber norelativenumber laststatus=0")
+          vim.cmd("setlocal nonumber norelativenumber")
         end,
       })
       end

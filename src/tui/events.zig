@@ -5,19 +5,146 @@ const input = @import("input.zig");
 const nvim_helpers = @import("../nvim/helpers.zig");
 const Value = @import("../nvim/msgpack.zig").Value;
 const Layout = @import("layout.zig").Layout;
+const settings = @import("widgets/settings.zig");
 
 pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
+    if (a.terminal_focus) {
+        if (std.mem.eql(u8, k.raw, "\x1bv") or std.mem.eql(u8, k.raw, "\x1c")) { // Alt+v or Ctrl+\ -> Vertical Split
+            var cmd_p = try a.allocator.alloc(Value, 1);
+            defer a.allocator.free(cmd_p);
+            cmd_p[0] = .{ .string = "vnew | terminal" };
+            var res = try a.rpc_term.call("nvim_command", cmd_p);
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+            cmd_p[0] = .{ .string = "startinsert" };
+            res = try a.rpc_term.call("nvim_command", cmd_p);
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+            a.terminal_win_count += 1;
+            a.needs_resize = true;
+            return true;
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bs")) { // Alt+s -> Horizontal Split
+            var cmd_p = try a.allocator.alloc(Value, 1);
+            defer a.allocator.free(cmd_p);
+            cmd_p[0] = .{ .string = "new | terminal" };
+            var res = try a.rpc_term.call("nvim_command", cmd_p);
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+            cmd_p[0] = .{ .string = "startinsert" };
+            res = try a.rpc_term.call("nvim_command", cmd_p);
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+            a.terminal_win_count += 1;
+            a.needs_resize = true;
+            return true;
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bc")) { // Alt+c -> Close Split
+            const win_list = try a.rpc_term.call("nvim_list_wins", &[_]Value{});
+            defer @import("../nvim/msgpack.zig").freeValue(win_list, a.allocator);
+            if (win_list == .array and win_list.array.len > 1) {
+                var cmd_p = try a.allocator.alloc(Value, 1);
+                defer a.allocator.free(cmd_p);
+                cmd_p[0] = .{ .string = "close" };
+                const res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                a.terminal_win_count = win_list.array.len - 1;
+            } else {
+                a.show_terminal_panel = false;
+                a.terminal_focus = false;
+                a.terminal_win_count = 1;
+                a.updateLayoutTree();
+                a.needs_resize = true;
+            }
+            return true;
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bo")) { // Alt+o -> Cycle Focus
+            var cmd_p = try a.allocator.alloc(Value, 1);
+            defer a.allocator.free(cmd_p);
+            cmd_p[0] = .{ .string = "wincmd w" };
+            var res = try a.rpc_term.call("nvim_command", cmd_p);
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+            cmd_p[0] = .{ .string = "startinsert" };
+            res = try a.rpc_term.call("nvim_command", cmd_p);
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+            return true;
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bk")) { // Alt+k -> Focus Up (to Editor)
+            if (a.panel_position == .bottom) {
+                a.terminal_focus = false;
+                a.needs_resize = true;
+                return true;
+            }
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bh")) { // Alt+h -> Focus Left (to Editor if on right)
+            if (a.panel_position == .right) {
+                a.terminal_focus = false;
+                a.needs_resize = true;
+                return true;
+            } else {
+                var cmd_p = try a.allocator.alloc(Value, 1);
+                defer a.allocator.free(cmd_p);
+                cmd_p[0] = .{ .string = "wincmd h" };
+                var res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                cmd_p[0] = .{ .string = "startinsert" };
+                res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                return true;
+            }
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bl")) { // Alt+l -> Focus Right
+            if (a.panel_position != .right) {
+                var cmd_p = try a.allocator.alloc(Value, 1);
+                defer a.allocator.free(cmd_p);
+                cmd_p[0] = .{ .string = "wincmd l" };
+                var res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                cmd_p[0] = .{ .string = "startinsert" };
+                res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                return true;
+            }
+        }
+        if (std.mem.eql(u8, k.raw, "\x1bj")) { // Alt+j -> Focus Down
+            if (a.panel_position != .bottom) {
+                var cmd_p = try a.allocator.alloc(Value, 1);
+                defer a.allocator.free(cmd_p);
+                cmd_p[0] = .{ .string = "wincmd j" };
+                var res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                cmd_p[0] = .{ .string = "startinsert" };
+                res = try a.rpc_term.call("nvim_command", cmd_p);
+                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                return true;
+            }
+        }
+    }
+
+    var alt_buf: [10]u8 = undefined;
     const nk = get_key: {
         if (k.raw.len == 1) {
             const b = k.raw[0];
             if (b == 0x0d or b == 0x0a) break :get_key "<Enter>";
             if (b == 0x1b) break :get_key "<Esc>";
             if (b == 0x7f or b == 0x08) break :get_key "<BS>";
-            if (b == 5) break :get_key "<C-e>";
-            if (b == 14) break :get_key "<C-n>";
-            if (b == 19) break :get_key "<C-s>";
-            if (b == 20) break :get_key "<C-t>";
-            if (b == 26) break :get_key "<C-z>";
+            if (b >= 1 and b <= 26) {
+                const ctrl_keys = [_][]const u8{
+                    "<C-a>", "<C-b>", "<C-c>", "<C-d>", "<C-e>", "<C-f>", "<C-g>", "<C-h>",
+                    "<C-i>", "<C-j>", "<C-k>", "<C-l>", "<C-m>", "<C-n>", "<C-o>", "<C-p>",
+                    "<C-q>", "<C-r>", "<C-s>", "<C-t>", "<C-u>", "<C-v>", "<C-w>", "<C-x>",
+                    "<C-y>", "<C-z>",
+                };
+                const ctrl_name = ctrl_keys[b - 1];
+                const is_editing_keys = a.settings_widget.is_open and a.settings_widget.active_binding != null;
+                const kb = &a.settings_widget.config.keybindings;
+                if (is_editing_keys or
+                    std.mem.eql(u8, ctrl_name, kb.toggle_terminal) or
+                    std.mem.eql(u8, ctrl_name, kb.toggle_explorer) or
+                    std.mem.eql(u8, ctrl_name, kb.toggle_zen) or
+                    std.mem.eql(u8, ctrl_name, kb.new_file) or
+                    std.mem.eql(u8, ctrl_name, kb.find_file) or
+                    std.mem.eql(u8, ctrl_name, kb.quit))
+                {
+                    break :get_key ctrl_name;
+                }
+            }
             break :get_key k.raw;
         }
         if (std.mem.eql(u8, k.raw, "\x1b[A") or std.mem.eql(u8, k.raw, "\x1bOA")) break :get_key "<Up>";
@@ -29,6 +156,23 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1b[5~")) break :get_key "<PageUp>";
         if (std.mem.eql(u8, k.raw, "\x1b[6~")) break :get_key "<PageDown>";
         if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
+        if (k.raw.len == 2 and k.raw[0] == 0x1b) {
+            const b = k.raw[1];
+            const key_str = switch (b) {
+                0x0d, 0x0a => "CR",
+                0x7f, 0x08 => "BS",
+                0x1b => "Esc",
+                0x09 => "Tab",
+                else => null,
+            };
+            if (key_str) |ks| {
+                const alt_key = std.fmt.bufPrint(&alt_buf, "<M-{s}>", .{ks}) catch k.raw;
+                break :get_key alt_key;
+            } else {
+                const alt_key = std.fmt.bufPrint(&alt_buf, "<M-{c}>", .{b}) catch k.raw;
+                break :get_key alt_key;
+            }
+        }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3A")) { // Alt+Up
             if (layout.panel != null) {
                 if (a.panel_position == .bottom) {
@@ -126,20 +270,54 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     var toggle_explorer = false;
     var toggle_terminal_panel = false;
     var new_file = false;
+    var find_file = false;
+    var quit = false;
     
-    if (std.mem.eql(u8, nk, a.settings_widget.config.keybindings.toggle_terminal)) toggle_terminal_panel = true;
-    if (std.mem.eql(u8, nk, a.settings_widget.config.keybindings.toggle_explorer)) toggle_explorer = true;
-    if (std.mem.eql(u8, nk, a.settings_widget.config.keybindings.toggle_zen)) toggle_zen = true;
-    if (std.mem.eql(u8, nk, a.settings_widget.config.keybindings.new_file)) new_file = true;
+    const kb = &a.settings_widget.config.keybindings;
+    if (std.mem.eql(u8, nk, kb.toggle_terminal) or std.mem.eql(u8, k.raw, kb.toggle_terminal)) toggle_terminal_panel = true;
+    if (std.mem.eql(u8, nk, kb.toggle_explorer) or std.mem.eql(u8, k.raw, kb.toggle_explorer)) toggle_explorer = true;
+    if (std.mem.eql(u8, nk, kb.toggle_zen) or std.mem.eql(u8, k.raw, kb.toggle_zen)) toggle_zen = true;
+    if (std.mem.eql(u8, nk, kb.new_file) or std.mem.eql(u8, k.raw, kb.new_file)) new_file = true;
+    if (std.mem.eql(u8, nk, kb.find_file) or std.mem.eql(u8, k.raw, kb.find_file)) find_file = true;
+    if (std.mem.eql(u8, nk, kb.quit) or std.mem.eql(u8, k.raw, kb.quit)) quit = true;
 
     if (toggle_zen) {
-        a.mode = if (a.mode == .ide) .zen else .ide;
+        if (a.mode == .zen) {
+            a.mode = a.prev_mode;
+        } else {
+            a.prev_mode = a.mode;
+            a.mode = .zen;
+        }
+        
+        a.settings_widget.config.zen = (a.mode == .zen);
+        a.settings_widget.config.ide = (a.mode == .ide);
+        a.settings_widget.allocator.free(a.settings_widget.config.mode);
+        a.settings_widget.config.mode = try a.settings_widget.allocator.dupe(u8, switch (a.mode) {
+            .zen => "zen",
+            .ide => "ide",
+            .normal => "normal",
+        });
+        
         if (a.mode == .zen) {
             a.settings_widget.is_open = false;
             a.mason_widget.is_open = false;
             a.lazy_widget.is_open = false;
             a.git_detailed_widget.is_open = false;
         }
+        
+        var cmd_p = try a.settings_widget.allocator.alloc(Value, 1);
+        defer a.settings_widget.allocator.free(cmd_p);
+        
+        if (a.mode == .zen) {
+            cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+        } else if (a.mode == .ide) {
+            cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = true; _G.vide_enable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+        } else {
+            cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+        }
+        a.rpc.notify("nvim_command", cmd_p) catch {};
+        
+        a.settings_widget.config.save(a.settings_widget.settings_path) catch {};
         a.needs_resize = true;
     } else if (toggle_explorer) {
         a.show_file_tree = !a.show_file_tree;
@@ -172,6 +350,31 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         }
         a.allocator.free(cmd_p);
         return true;
+    } else if (find_file) {
+        var cmd_p = try a.allocator.alloc(Value, 1);
+        cmd_p[0] = .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('Telescope find_files')" };
+        var params = try a.allocator.alloc(Value, 2);
+        defer a.allocator.free(params);
+        params[0] = cmd_p[0];
+        params[1] = .{ .array = &[_]Value{} };
+        if (a.rpc.call("nvim_exec_lua", params) catch null) |res| {
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+        }
+        a.allocator.free(cmd_p);
+        return true;
+    } else if (quit) {
+        a.quit_requested = true;
+        var cmd_p = try a.allocator.alloc(Value, 1);
+        cmd_p[0] = .{ .string = "vim.cmd('qa')" };
+        var params = try a.allocator.alloc(Value, 2);
+        defer a.allocator.free(params);
+        params[0] = cmd_p[0];
+        params[1] = .{ .array = &[_]Value{} };
+        if (a.rpc.call("nvim_exec_lua", params) catch null) |res| {
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+        }
+        a.allocator.free(cmd_p);
+        return true;
     }
 
     if (nk.len > 0) {
@@ -187,9 +390,10 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 return true;
             }
         }
+        const sent_key = if (std.mem.eql(u8, nk, "<")) @as([]const u8, "<lt>") else nk;
         var ip = try a.allocator.alloc(Value, 1);
         defer a.allocator.free(ip);
-        ip[0] = .{ .string = nk };
+        ip[0] = .{ .string = sent_key };
         (if (a.terminal_focus) a.rpc_term else a.rpc).notify("nvim_input", ip) catch {};
     }
     return true;
@@ -197,6 +401,159 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
 
 pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     a.last_click_x = m.col; a.last_click_y = m.row;
+
+    // Handle split menu click if open
+    if (a.show_split_menu and m.action == .press) {
+        const mx = a.split_menu_x;
+        const my = a.split_menu_y;
+        const mw: u16 = 24;
+        const mh: u16 = 6;
+        if (m.col >= mx and m.col < mx + mw and m.row >= my and m.row < my + mh) {
+            const row_offset = m.row - my;
+            var cmd_p = try a.allocator.alloc(Value, 1);
+            defer a.allocator.free(cmd_p);
+            
+            var run_term = false;
+            var is_split = false;
+            
+            // Map row click to the action
+            if (row_offset == 1) { // Terminal (Right/Bottom)
+                run_term = true;
+                cmd_p[0] = if (a.split_menu_dir == .right)
+                    .{ .string = if (a.terminal_focus) "rightb vnew | terminal" else "rightb vsplit | terminal" }
+                else
+                    .{ .string = if (a.terminal_focus) "belowright new | terminal" else "belowright split | terminal" };
+            } else if (row_offset == 2) { // Terminal (Left/Top)
+                run_term = true;
+                cmd_p[0] = if (a.split_menu_dir == .right)
+                    .{ .string = if (a.terminal_focus) "lefta vnew | terminal" else "lefta vsplit | terminal" }
+                else
+                    .{ .string = if (a.terminal_focus) "aboveleft new | terminal" else "aboveleft split | terminal" };
+            } else if (row_offset == 3) { // Editor (Right/Bottom)
+                cmd_p[0] = if (a.split_menu_dir == .right)
+                    .{ .string = if (a.terminal_focus) "rightb vnew" else "rightb vsplit" }
+                else
+                    .{ .string = if (a.terminal_focus) "belowright new" else "belowright split" };
+            } else if (row_offset == 4) { // Editor (Left/Top)
+                cmd_p[0] = if (a.split_menu_dir == .right)
+                    .{ .string = if (a.terminal_focus) "lefta vnew" else "lefta vsplit" }
+                else
+                    .{ .string = if (a.terminal_focus) "aboveleft new" else "aboveleft split" };
+            } else {
+                is_split = false;
+            }
+            
+            if (row_offset >= 1 and row_offset <= 4) {
+                is_split = true;
+            }
+            
+            if (is_split) {
+                if (a.terminal_focus) {
+                    var res = try a.rpc_term.call("nvim_command", cmd_p);
+                    @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                    if (run_term) {
+                        cmd_p[0] = .{ .string = "startinsert" };
+                        res = try a.rpc_term.call("nvim_command", cmd_p);
+                        @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                    }
+                    a.terminal_win_count += 1;
+                } else {
+                    var res = try a.rpc.call("nvim_command", cmd_p);
+                    @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                    if (run_term) {
+                        cmd_p[0] = .{ .string = "startinsert" };
+                        res = try a.rpc.call("nvim_command", cmd_p);
+                        @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                    }
+                }
+            }
+        }
+        a.show_split_menu = false;
+        a.needs_resize = true;
+        return;
+    }
+    // Handle Telescope close click
+    if (m.action == .press) {
+        for (a.ui_state.telescope_rects) |rect_opt| {
+            if (rect_opt) |rect| {
+                const t_x = layout.editor.x + rect.x;
+                const t_y = layout.editor.y + rect.y;
+                const wx = if (t_x > 0) t_x - 1 else 0;
+                const wy = if (t_y > 0) t_y - 1 else 0;
+                if (m.row == wy and m.col >= wx + rect.w - 3 and m.col <= wx + rect.w + 1) {
+                    var cmd_p = try a.allocator.alloc(Value, 1);
+                    defer a.allocator.free(cmd_p);
+                    cmd_p[0] = .{ .string = "lua for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do if vim.bo[bufnr].filetype == 'TelescopePrompt' then pcall(require('telescope.actions').close, bufnr) end end" };
+                    a.rpc.notify("nvim_command", cmd_p) catch {};
+                    a.ui_state.telescope_rects[0] = null;
+                    a.ui_state.telescope_rects[1] = null;
+                    a.needs_resize = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    // Handle split window close button click
+    if (m.action == .press) {
+        if (a.terminal_focus) {
+            if (layout.panel != null and a.terminal_wins.items.len > 1) {
+                for (a.terminal_wins.items) |win| {
+                    if (win.width > 4 and win.height > 1) {
+                        const bx = layout.panel.?.x + win.col + win.width - 2;
+                        const by = layout.panel.?.y + 1 + win.row;
+                        if (m.col >= bx - 1 and m.col <= bx + 1 and m.row == by) {
+                            var params = try a.allocator.alloc(Value, 2);
+                            defer a.allocator.free(params);
+                            params[0] = .{ .integer = win.id };
+                            params[1] = .{ .bool = true };
+                            const res = try a.rpc_term.call("nvim_win_close", params);
+                            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                            return;
+                        }
+                    }
+                }
+            }
+        } else {
+            if (a.editor_wins.items.len > 1) {
+                for (a.editor_wins.items) |win| {
+                    if (win.width > 4 and win.height > 1) {
+                        const bx = layout.editor.x + win.col + win.width - 2;
+                        const by = layout.editor.y + win.row;
+                        if (m.col >= bx - 1 and m.col <= bx + 1 and m.row == by) {
+                            var params = try a.allocator.alloc(Value, 2);
+                            defer a.allocator.free(params);
+                            params[0] = .{ .integer = win.id };
+                            params[1] = .{ .bool = true };
+                            const res = try a.rpc.call("nvim_win_close", params);
+                            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Handle split button click
+    if (m.action == .press and m.row == layout.tab_bar.y and layout.tab_bar.w > 15) {
+        const right_edge = layout.tab_bar.x + layout.tab_bar.w;
+        if (m.col >= right_edge - 12 and m.col <= right_edge - 8) { // Split Vertically
+            a.show_split_menu = true;
+            a.split_menu_dir = .right;
+            a.split_menu_x = right_edge - 26;
+            a.split_menu_y = layout.tab_bar.y + 1;
+            a.needs_resize = true;
+            return;
+        } else if (m.col >= right_edge - 6 and m.col <= right_edge - 2) { // Split Horizontally
+            a.show_split_menu = true;
+            a.split_menu_dir = .bottom;
+            a.split_menu_x = right_edge - 26;
+            a.split_menu_y = layout.tab_bar.y + 1;
+            a.needs_resize = true;
+            return;
+        }
+    }
     
     if (a.explorer.show_menu and m.action == .press) {
         if (try a.explorer.handleMenuClick(m.col, m.row)) {
@@ -207,76 +564,60 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         a.needs_resize = true;
     }
     
-    if (a.mode == .ide) {
-        if (a.mason_widget.is_open) {
-            if (a.mason_widget.handleMouse(m, a.ren.width, a.ren.height, a.rpc)) {
-                a.needs_resize = true;
-                return;
-            } else if (m.action == .press) {
-                a.mason_widget.is_open = false;
-                a.needs_resize = true;
-                return;
-            }
+    if (a.mason_widget.is_open) {
+        if (a.mason_widget.handleMouse(m, a.ren.width, a.ren.height, a.rpc)) {
+            a.needs_resize = true;
+            return;
+        } else if (m.action == .press) {
+            a.mason_widget.is_open = false;
+            a.needs_resize = true;
+            return;
         }
-        if (a.lazy_widget.is_open) {
-            if (a.lazy_widget.handleMouse(m, a.ren.width, a.ren.height)) {
-                a.needs_resize = true;
-                return;
-            } else if (m.action == .press) {
-                a.lazy_widget.is_open = false;
-                a.needs_resize = true;
-            }
+    }
+    if (a.lazy_widget.is_open) {
+        if (a.lazy_widget.handleMouse(m, a.ren.width, a.ren.height)) {
+            a.needs_resize = true;
+            return;
+        } else if (m.action == .press) {
+            a.lazy_widget.is_open = false;
+            a.needs_resize = true;
         }
-        if (a.git_detailed_widget.is_open) {
-            if (a.git_detailed_widget.handleMouse(m, a.ren.width, a.ren.height)) {
-                a.needs_resize = true;
-                return;
-            } else if (m.action == .press) {
-                a.git_detailed_widget.is_open = false;
-                a.needs_resize = true;
-            }
+    }
+    if (a.git_detailed_widget.is_open) {
+        if (a.git_detailed_widget.handleMouse(m, a.ren.width, a.ren.height)) {
+            a.needs_resize = true;
+            return;
+        } else if (m.action == .press) {
+            a.git_detailed_widget.is_open = false;
+            a.needs_resize = true;
         }
+    }
 
+    if (a.settings_widget.is_open) {
         if (m.action == .press) {
-            for (a.ui_state.telescope_rects) |rect_opt| {
-                if (rect_opt) |rect| {
-                    const t_x = layout.editor.x + rect.x;
-                    const t_y = layout.editor.y + rect.y;
-                    const wx = if (t_x > 0) t_x - 1 else 0;
-                    const wy = if (t_y > 0) t_y - 1 else 0;
-                    if (m.row == wy and m.col >= wx + rect.w - 2 and m.col <= wx + rect.w) {
-                        var ip = try a.allocator.alloc(Value, 1);
-                        defer a.allocator.free(ip);
-                        ip[0] = .{ .string = "<Esc><Esc>" };
-                        a.rpc.notify("nvim_input", ip) catch {};
-                        a.ui_state.telescope_rects[0] = null;
-                        a.ui_state.telescope_rects[1] = null;
-                        a.needs_resize = true;
-                        return;
-                    }
-                }
-            }
-
-            if (a.settings_widget.is_open) {
-                if (a.settings_widget.handleMouse(m.col, m.row, a.ren.width, a.ren.height)) {
-                    a.needs_resize = true;
-                    if (a.settings_widget.open_mason) {
-                        a.settings_widget.open_mason = false;
-                        a.settings_widget.is_open = false;
-                        a.mason_widget.is_open = true;
-                        a.mason_widget.refresh(a.rpc);
-                    } else if (a.settings_widget.open_lazy) {
-                        a.settings_widget.open_lazy = false;
-                        a.settings_widget.is_open = false;
-                        a.lazy_widget.is_open = true;
-                        a.lazy_widget.refresh(a.rpc);
-                    }
-                } else {
+            if (a.settings_widget.handleMouse(m.col, m.row, a.ren.width, a.ren.height)) {
+                a.needs_resize = true;
+                if (a.settings_widget.open_mason) {
+                    a.settings_widget.open_mason = false;
                     a.settings_widget.is_open = false;
-                    a.needs_resize = true;
+                    a.mason_widget.is_open = true;
+                    a.mason_widget.refresh(a.rpc);
+                } else if (a.settings_widget.open_lazy) {
+                    a.settings_widget.open_lazy = false;
+                    a.settings_widget.is_open = false;
+                    a.lazy_widget.is_open = true;
+                    a.lazy_widget.refresh(a.rpc);
                 }
-                return;
+            } else {
+                a.settings_widget.is_open = false;
+                a.needs_resize = true;
             }
+        }
+        return;
+    }
+
+    if (a.mode != .zen) {
+        if (m.action == .press) {
             if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 0 and m.button == .wheel_up) {
                 a.explorer.handleScroll(-1);
                 a.needs_resize = true;
@@ -419,6 +760,19 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 if (a.activity_bar.handleMouse(m.col, m.row, layout.activity_bar)) |new_idx| {
                     if (prev_idx != new_idx) a.needs_resize = true;
                     if (new_idx == 99) {
+                        const old_cfg = a.settings_widget.config;
+                        if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
+                            a.settings_widget.config = new_cfg;
+                            a.settings_widget.allocator.free(old_cfg.theme);
+                            a.settings_widget.allocator.free(old_cfg.line_numbers);
+                            a.settings_widget.allocator.free(old_cfg.split_separator);
+                            a.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
+                            a.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
+                            a.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
+                            a.settings_widget.allocator.free(old_cfg.keybindings.new_file);
+                            a.settings_widget.allocator.free(old_cfg.keybindings.find_file);
+                            a.settings_widget.allocator.free(old_cfg.keybindings.quit);
+                        } else |_| {}
                         a.settings_widget.is_open = true;
                         a.needs_resize = true;
                         a.activity_bar.active_idx = prev_idx; // Revert active idx visually

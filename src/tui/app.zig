@@ -19,8 +19,17 @@ const MasonWidget = @import("widgets/mason.zig").MasonWidget;
 const LazyWidget = @import("widgets/lazy.zig").LazyWidget;
 const GitDetailedWidget = @import("widgets/git_detailed.zig").GitDetailedWidget;
 
-pub const Mode = enum { ide, zen };
+pub const Mode = enum { ide, zen, normal };
 pub const PanelPosition = enum { bottom, right };
+
+pub const WinInfo = struct {
+    id: i64,
+    row: u16,
+    col: u16,
+    width: u16,
+    height: u16,
+    active: bool = false,
+};
 
 pub const TabInfo = struct {
     name: []const u8,
@@ -44,6 +53,7 @@ pub const App = struct {
     
     active_theme: theme.Theme,
     mode: Mode,
+    prev_mode: Mode,
     
     tabs: std.array_list.Managed(TabInfo),
     active_tab: usize,
@@ -78,6 +88,18 @@ pub const App = struct {
     was_settings_open: bool = false,
     last_explorer_refresh: i64 = 0,
 
+    show_split_menu: bool = false,
+    quit_requested: bool = false,
+    split_menu_dir: enum { right, bottom } = .right,
+    split_menu_x: u16 = 0,
+    split_menu_y: u16 = 0,
+
+    editor_win_count: usize = 1,
+    terminal_win_count: usize = 1,
+
+    editor_wins: std.array_list.Managed(WinInfo),
+    terminal_wins: std.array_list.Managed(WinInfo),
+
     layout_arena: std.heap.ArenaAllocator,
     root_split: *SplitNode,
 
@@ -99,7 +121,8 @@ pub const App = struct {
             .ui_state = ui_state,
             .ui_term = ui_term,
             .active_theme = theme.Theme{},
-            .mode = .ide,
+            .mode = .normal,
+            .prev_mode = .normal,
             .tabs = std.array_list.Managed(TabInfo).init(allocator),
             .active_tab = 0,
             .terminal_focus = false,
@@ -122,10 +145,14 @@ pub const App = struct {
             .activity_bar = ActivityBar{ .active_idx = 0 },
             .layout_arena = arena,
             .root_split = root_node,
+            .editor_wins = std.array_list.Managed(WinInfo).init(allocator),
+            .terminal_wins = std.array_list.Managed(WinInfo).init(allocator),
         };
     }
 
     pub fn deinit(self: *App) void {
+        self.editor_wins.deinit();
+        self.terminal_wins.deinit();
         self.layout_arena.deinit();
     }
 

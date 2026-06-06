@@ -11,28 +11,29 @@ pub const Highlight = struct {
     italic: bool = false,
 };
 
-pub const NvimGrid = struct {
+pub const GridData = struct {
     width: u16 = 0,
     height: u16 = 0,
     cells: []Cell = &[_]Cell{},
+    /// Screen position (in Neovim coordinate space, i.e. within the editor area)
+    row: i32 = 0,
+    col: i32 = 0,
+    visible: bool = true,
+    is_float: bool = false,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) NvimGrid {
-        return .{
-            .allocator = allocator,
-        };
+    pub fn init(allocator: std.mem.Allocator) GridData {
+        return .{ .allocator = allocator };
     }
 
-    pub fn deinit(self: *NvimGrid) void {
+    pub fn deinit(self: *GridData) void {
         self.allocator.free(self.cells);
     }
 
-    pub fn resize(self: *NvimGrid, new_w: u16, new_h: u16) !void {
+    pub fn resize(self: *GridData, new_w: u16, new_h: u16) !void {
         const size = @as(usize, new_w) * @as(usize, new_h);
         const new_cells = try self.allocator.alloc(Cell, size);
         @memset(new_cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
-
-        // Copy old contents
         const min_h = @min(self.height, new_h);
         const min_w = @min(self.width, new_w);
         for (0..min_h) |y| {
@@ -40,25 +41,36 @@ pub const NvimGrid = struct {
                 new_cells[y * new_w + x] = self.cells[y * self.width + x];
             }
         }
-
         self.allocator.free(self.cells);
         self.cells = new_cells;
         self.width = new_w;
         self.height = new_h;
     }
 
-    pub fn clear(self: *NvimGrid) void {
+    pub fn clear(self: *GridData) void {
         @memset(self.cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
     }
 };
 
+/// Entry in the grid map
+const GridEntry = struct {
+    id: i64,
+    data: GridData,
+};
+
 pub const UiState = struct {
-    grid: NvimGrid,
+    /// Grid 1 (global/cmdline area) kept separate for clarity
+    grid: GridData,
+    /// All secondary grids (windows + floats), keyed by grid_id > 1
+    secondary_grids: std.ArrayListUnmanaged(GridEntry),
     highlights: std.AutoHashMap(i64, Highlight),
     default_fg: Color = .none,
     default_bg: Color = .none,
+    /// Cursor position within its own grid
     cursor_x: u16 = 0,
     cursor_y: u16 = 0,
+    /// Which grid currently has the cursor
+    cursor_grid: i64 = 1,
     allocator: std.mem.Allocator,
     current_buf_path: ?[]const u8 = null,
     buf_path_changed: bool = false,
@@ -69,7 +81,8 @@ pub const UiState = struct {
 
     pub fn init(allocator: std.mem.Allocator) UiState {
         return .{
-            .grid = NvimGrid.init(allocator),
+            .grid = GridData.init(allocator),
+            .secondary_grids = .empty,
             .highlights = std.AutoHashMap(i64, Highlight).init(allocator),
             .allocator = allocator,
         };
@@ -77,8 +90,53 @@ pub const UiState = struct {
 
     pub fn deinit(self: *UiState) void {
         self.grid.deinit();
+        for (self.secondary_grids.items) |*e| e.data.deinit();
+        self.secondary_grids.deinit(self.allocator);
         self.highlights.deinit();
         if (self.current_buf_path) |p| self.allocator.free(p);
+    }
+
+    fn getOrCreate(self: *UiState, id: i64) !*GridData {
+        for (self.secondary_grids.items) |*e| {
+            if (e.id == id) return &e.data;
+        }
+        try self.secondary_grids.append(self.allocator, .{ .id = id, .data = GridData.init(self.allocator) });
+        return &self.secondary_grids.items[self.secondary_grids.items.len - 1].data;
+    }
+
+    fn get(self: *UiState, id: i64) ?*GridData {
+        for (self.secondary_grids.items) |*e| {
+            if (e.id == id) return &e.data;
+        }
+        return null;
+    }
+
+    fn remove(self: *UiState, id: i64) void {
+        for (self.secondary_grids.items, 0..) |*e, i| {
+            if (e.id == id) {
+                e.data.deinit();
+                _ = self.secondary_grids.orderedRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// Returns the final screen cursor position in Neovim-space coordinates
+    /// (i.e., relative to the editor area top-left).
+    /// Caller adds layout.editor.x / .y to get screen coords.
+    pub fn cursorScreenPos(self: *const UiState) struct { x: i32, y: i32 } {
+        if (self.cursor_grid == 1) {
+            return .{ .x = @as(i32, self.cursor_x), .y = @as(i32, self.cursor_y) };
+        }
+        for (self.secondary_grids.items) |*e| {
+            if (e.id == self.cursor_grid) {
+                return .{
+                    .x = e.data.col + @as(i32, self.cursor_x),
+                    .y = e.data.row + @as(i32, self.cursor_y),
+                };
+            }
+        }
+        return .{ .x = @as(i32, self.cursor_x), .y = @as(i32, self.cursor_y) };
     }
 
     pub fn handleRedraw(self: *UiState, events: []const Value) !void {
@@ -108,12 +166,7 @@ pub const UiState = struct {
                     if (arg != .array or arg.array.len < 2) continue;
                     const id = arg.array[0].integer;
                     const rgb_attrs = arg.array[1];
-                    
-                    var hl = Highlight{
-                        .fg = .none,
-                        .bg = .none,
-                    };
-
+                    var hl = Highlight{ .fg = .none, .bg = .none };
                     if (rgb_attrs == .map) {
                         for (rgb_attrs.map) |kv| {
                             if (kv.key != .string) continue;
@@ -139,73 +192,123 @@ pub const UiState = struct {
                             }
                         }
                     }
-
                     try self.highlights.put(id, hl);
                 }
             } else if (std.mem.eql(u8, name, "grid_resize")) {
                 for (args) |arg| {
                     if (arg != .array or arg.array.len < 3) continue;
-                    const grid_id = arg.array[0].integer;
-                    if (grid_id == 1) {
-                        const w = @as(u16, @intCast(arg.array[1].integer));
-                        const h = @as(u16, @intCast(arg.array[2].integer));
+                    const id = arg.array[0].integer;
+                    const w = @as(u16, @intCast(arg.array[1].integer));
+                    const h = @as(u16, @intCast(arg.array[2].integer));
+                    if (id == 1) {
                         try self.grid.resize(w, h);
+                    } else {
+                        const g = try self.getOrCreate(id);
+                        try g.resize(w, h);
                     }
                 }
             } else if (std.mem.eql(u8, name, "grid_clear")) {
                 for (args) |arg| {
                     if (arg != .array or arg.array.len < 1) continue;
-                    const grid_id = arg.array[0].integer;
-                    if (grid_id == 1) {
+                    const id = arg.array[0].integer;
+                    if (id == 1) {
                         self.grid.clear();
+                    } else {
+                        if (self.get(id)) |g| g.clear();
                     }
+                }
+            } else if (std.mem.eql(u8, name, "grid_destroy")) {
+                for (args) |arg| {
+                    if (arg != .array or arg.array.len < 1) continue;
+                    const id = arg.array[0].integer;
+                    if (id != 1) self.remove(id);
+                }
+            } else if (std.mem.eql(u8, name, "win_pos")) {
+                // win_pos [grid, win, start_row, start_col, width, height]
+                for (args) |arg| {
+                    if (arg != .array or arg.array.len < 4) continue;
+                    const id = arg.array[0].integer;
+                    if (id == 1) continue;
+                    const g = try self.getOrCreate(id);
+                    g.row = @as(i32, @intCast(arg.array[2].integer));
+                    g.col = @as(i32, @intCast(arg.array[3].integer));
+                    g.is_float = false;
+                    g.visible = true;
+                }
+            } else if (std.mem.eql(u8, name, "win_float_pos")) {
+                // win_float_pos [grid, win, anchor, anchor_grid, anchor_row, anchor_col,
+                //                focusable, zindex, mouse_in_float, win_row, win_col]
+                // With ext_multigrid: win_row=arg[9], win_col=arg[10]
+                for (args) |arg| {
+                    if (arg != .array or arg.array.len < 1) continue;
+                    const id = arg.array[0].integer;
+                    if (id == 1) continue;
+                    const g = try self.getOrCreate(id);
+                    g.is_float = true;
+                    g.visible = true;
+                    if (arg.array.len >= 11 and
+                        arg.array[9] == .integer and
+                        arg.array[10] == .integer)
+                    {
+                        g.row = @as(i32, @intCast(arg.array[9].integer));
+                        g.col = @as(i32, @intCast(arg.array[10].integer));
+                    }
+                }
+            } else if (std.mem.eql(u8, name, "win_hide")) {
+                for (args) |arg| {
+                    if (arg != .array or arg.array.len < 1) continue;
+                    const id = arg.array[0].integer;
+                    if (self.get(id)) |g| g.visible = false;
+                }
+            } else if (std.mem.eql(u8, name, "win_close")) {
+                for (args) |arg| {
+                    if (arg != .array or arg.array.len < 1) continue;
+                    self.remove(arg.array[0].integer);
                 }
             } else if (std.mem.eql(u8, name, "grid_cursor_goto")) {
                 for (args) |arg| {
                     if (arg != .array or arg.array.len < 3) continue;
-                    const grid_id = arg.array[0].integer;
-                    if (grid_id == 1) {
-                        self.cursor_y = @as(u16, @intCast(arg.array[1].integer));
-                        self.cursor_x = @as(u16, @intCast(arg.array[2].integer));
-                    }
+                    self.cursor_grid = arg.array[0].integer;
+                    self.cursor_y = @as(u16, @intCast(arg.array[1].integer));
+                    self.cursor_x = @as(u16, @intCast(arg.array[2].integer));
                 }
             } else if (std.mem.eql(u8, name, "grid_scroll")) {
                 for (args) |arg| {
                     if (arg != .array or arg.array.len < 7) continue;
-                    const grid_id = arg.array[0].integer;
-                    if (grid_id != 1) continue;
+                    const id = arg.array[0].integer;
+                    const target: *GridData = if (id == 1) &self.grid else blk: {
+                        if (self.get(id)) |g| break :blk g;
+                        continue;
+                    };
                     const top: u16 = @as(u16, @intCast(@max(0, arg.array[1].integer)));
                     const bot: u16 = @as(u16, @intCast(@max(0, arg.array[2].integer)));
                     const left: u16 = @as(u16, @intCast(@max(0, arg.array[3].integer)));
                     const right: u16 = @as(u16, @intCast(@max(0, arg.array[4].integer)));
                     const rows: i64 = arg.array[5].integer;
-                    
-                    if (top >= self.grid.height or bot > self.grid.height or left >= self.grid.width or right > self.grid.width or top >= bot or left >= right) {
-                        continue;
-                    }
-                    // const cols = arg.array[6].integer; // Always 0 in current Nvim
-
+                    if (top >= target.height or bot > target.height or
+                        left >= target.width or right > target.width or
+                        top >= bot or left >= right) continue;
                     if (rows > 0) {
-                        // Scroll up: move rows from [top+rows, bot) to [top, bot-rows)
                         var y = top;
                         const ur = @as(u16, @intCast(rows));
                         if (bot > ur) {
                             while (y < bot - ur) : (y += 1) {
                                 const src_y = y + ur;
                                 for (left..right) |x| {
-                                    self.grid.cells[@as(usize, y) * @as(usize, self.grid.width) + x] = self.grid.cells[@as(usize, src_y) * @as(usize, self.grid.width) + x];
+                                    target.cells[@as(usize, y) * @as(usize, target.width) + x] =
+                                        target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
                                 }
                             }
                         }
                     } else if (rows < 0) {
-                        // Scroll down: move rows from [top, bot+rows) to [top-rows, bot)
                         const abs_rows = @as(u16, @intCast(-rows));
                         if (bot > 0) {
                             var y = bot - 1;
                             while (y >= top + abs_rows) : (y -= 1) {
                                 const src_y = y - abs_rows;
                                 for (left..right) |x| {
-                                    self.grid.cells[@as(usize, y) * @as(usize, self.grid.width) + x] = self.grid.cells[@as(usize, src_y) * @as(usize, self.grid.width) + x];
+                                    target.cells[@as(usize, y) * @as(usize, target.width) + x] =
+                                        target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
                                 }
                             }
                         }
@@ -214,41 +317,32 @@ pub const UiState = struct {
             } else if (std.mem.eql(u8, name, "grid_line")) {
                 for (args) |arg| {
                     if (arg != .array or arg.array.len < 4) continue;
-                    const grid_id = arg.array[0].integer;
-                    if (grid_id != 1) continue;
+                    const id = arg.array[0].integer;
                     const row = @as(u16, @intCast(arg.array[1].integer));
                     var col = @as(u16, @intCast(arg.array[2].integer));
-                    const cells = arg.array[3];
+                    const cells_val = arg.array[3];
+                    if (cells_val != .array) continue;
 
-                    if (cells != .array) continue;
+                    const target: *GridData = if (id == 1) &self.grid else blk: {
+                        if (self.get(id)) |g| break :blk g;
+                        const g = self.getOrCreate(id) catch continue;
+                        break :blk g;
+                    };
 
                     var current_hl_id: i64 = 0;
-
-                    for (cells.array) |c| {
+                    for (cells_val.array) |c| {
                         if (c != .array or c.array.len < 1) continue;
                         const text = if (c.array[0] == .string) c.array[0].string else " ";
-                        if (c.array.len >= 2) {
-                            current_hl_id = c.array[1].integer;
-                        }
+                        if (c.array.len >= 2) current_hl_id = c.array[1].integer;
                         const repeat_i = if (c.array.len >= 3) c.array[2].integer else 1;
                         const repeat: usize = if (repeat_i > 0) @as(usize, @intCast(repeat_i)) else 1;
-
-                        const hl = self.highlights.get(current_hl_id) orelse Highlight{
-                            .fg = .none,
-                            .bg = .none,
-                        };
-
+                        const hl = self.highlights.get(current_hl_id) orelse Highlight{ .fg = .none, .bg = .none };
                         var rep: usize = 0;
                         while (rep < repeat) : (rep += 1) {
-                            if (row < self.grid.height and col < self.grid.width) {
-                                var cell = Cell{
-                                    .fg = hl.fg,
-                                    .bg = hl.bg,
-                                    .bold = hl.bold,
-                                    .italic = hl.italic,
-                                };
+                            if (row < target.height and col < target.width) {
+                                var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic };
                                 cell.setChar(text);
-                                self.grid.cells[@as(usize, row) * @as(usize, self.grid.width) + col] = cell;
+                                target.cells[@as(usize, row) * @as(usize, target.width) + col] = cell;
                             }
                             col += 1;
                         }

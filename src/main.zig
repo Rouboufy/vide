@@ -112,6 +112,7 @@ fn runNvimSession(
             if (t.path) |p| alloc.free(p);
         }
         app.tabs.deinit();
+        app.deinit();
     }
 
     var rpc_ctx_main = RpcContext{ .app = &app, .ui_state = ui_state };
@@ -151,8 +152,22 @@ fn runNvimSession(
     defer alloc.free(settings_path);
     defer alloc.free(preview_path);
     var settings_widget = SettingsWidget.init(alloc, settings_path);
+    const term_env = init.environ_map.get("TERM") orelse "";
+    const is_linux_console = std.mem.eql(u8, term_env, "linux");
+    if (is_linux_console) {
+        settings_widget.config.nerd_fonts = false;
+    }
     defer settings_widget.deinit();
     app.settings_widget = &settings_widget;
+    
+    if (std.mem.eql(u8, settings_widget.config.mode, "zen")) {
+        app.mode = .zen;
+    } else if (std.mem.eql(u8, settings_widget.config.mode, "ide")) {
+        app.mode = .ide;
+    } else {
+        app.mode = .normal;
+    }
+    app.prev_mode = if (app.mode == .zen) .normal else app.mode;
     
     var mason_widget = MasonWidget.init(alloc);
     defer mason_widget.deinit();
@@ -166,10 +181,11 @@ fn runNvimSession(
 
     const initial_layout = Layout.compute(ren.width, ren.height, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
 
-    var opt_kvs = try alloc.alloc(Value.KV, 2);
+    var opt_kvs = try alloc.alloc(Value.KV, 3);
     defer alloc.free(opt_kvs);
     opt_kvs[0] = .{ .key = .{ .string = "rgb" }, .value = .{ .bool = true } };
     opt_kvs[1] = .{ .key = .{ .string = "ext_linegrid" }, .value = .{ .bool = true } };
+    opt_kvs[2] = .{ .key = .{ .string = "ext_multigrid" }, .value = .{ .bool = true } };
 
     var attach_params = try alloc.alloc(Value, 3);
     defer alloc.free(attach_params);
@@ -196,6 +212,11 @@ fn runNvimSession(
         const r1 = try rpc_term.call("nvim_command", cp);
         msgpack.freeValue(r1, alloc);
 
+        // Set editor laststatus based on mode: show in zen/normal, hide in IDE
+        cp[0] = .{ .string = if (app.mode == .ide) "set laststatus=0" else "set laststatus=2" };
+        const r_ls = try rpc.call("nvim_command", cp);
+        msgpack.freeValue(r_ls, alloc);
+
         cp[0] = .{ .string = "autocmd BufEnter * call rpcnotify(1, 'vide_buf_enter', expand('%:p'))" };
         const r_au = try rpc.call("nvim_command", cp);
         msgpack.freeValue(r_au, alloc);
@@ -219,13 +240,8 @@ fn runNvimSession(
 
     var seq_buf: [4096]u8 = undefined;
 
-    if (initial_file) |f| {
-        try app.tabs.append(.{
-            .name = try alloc.dupe(u8, std.fs.path.basename(f)),
-            .path = try alloc.dupe(u8, f),
-        });
-        nvim_helpers.openFile(rpc, alloc, f) catch {};
-    } else {
+    // Load vide_init.lua always on both editor and terminal instances
+    {
         var params = try alloc.alloc(Value, 2);
         params[0] = .{ .string = @embedFile("nvim/vide_init.lua") };
         params[1] = .{ .array = &[_]Value{} };
@@ -233,6 +249,32 @@ fn runNvimSession(
             msgpack.freeValue(res, alloc);
         } else |_| {}
         alloc.free(params);
+    }
+    {
+        var params = try alloc.alloc(Value, 2);
+        params[0] = .{ .string = "vim.g.vide_is_terminal = true" };
+        params[1] = .{ .array = &[_]Value{} };
+        if (rpc_term.call("nvim_exec_lua", params)) |res| {
+            msgpack.freeValue(res, alloc);
+        } else |_| {}
+        alloc.free(params);
+    }
+    {
+        var params = try alloc.alloc(Value, 2);
+        params[0] = .{ .string = @embedFile("nvim/vide_init.lua") };
+        params[1] = .{ .array = &[_]Value{} };
+        if (rpc_term.call("nvim_exec_lua", params)) |res| {
+            msgpack.freeValue(res, alloc);
+        } else |_| {}
+        alloc.free(params);
+    }
+
+    if (initial_file) |f| {
+        try app.tabs.append(.{
+            .name = try alloc.dupe(u8, std.fs.path.basename(f)),
+            .path = try alloc.dupe(u8, f),
+        });
+        nvim_helpers.openFile(rpc, alloc, f) catch {};
     }
 
     while (true) {
@@ -272,7 +314,10 @@ fn runNvimSession(
         }
 
         const nvim_alive = try nvim_helpers.processNvimEvents(rpc);
-        if (!nvim_alive) return;
+        if (!nvim_alive) {
+            if (app.quit_requested) return error.QuitApplication;
+            return;
+        }
         _ = try nvim_helpers.processNvimEvents(rpc_term);
 
         views.drawWorkspace(&app, layout);
@@ -286,14 +331,15 @@ fn runNvimSession(
         app.was_settings_open = app.settings_widget.is_open;
 
         try ren.flush();
+        const cursor_pos = ui_state.cursorScreenPos();
         const final_cursor_x = if (app.terminal_focus and app.active_terminal_panel_idx == 0 and layout.panel != null) panel_info: {
             const panel = layout.panel.?;
             break :panel_info panel.x + ui_term.cursor_x;
-        } else layout.editor.x + ui_state.cursor_x;
+        } else @as(u16, @intCast(@max(0, @as(i32, @intCast(layout.editor.x)) + cursor_pos.x)));
         const final_cursor_y = if (app.terminal_focus and app.active_terminal_panel_idx == 0 and layout.panel != null) panel_info: {
             const panel = layout.panel.?;
             break :panel_info panel.y + 1 + ui_term.cursor_y;
-        } else layout.editor.y + ui_state.cursor_y;
+        } else @as(u16, @intCast(@max(0, @as(i32, @intCast(layout.editor.y)) + cursor_pos.y)));
         try term.writer().print("\x1b[{d};{d}H\x1b[?25h", .{ final_cursor_y + 1, final_cursor_x + 1 });
 
         var fds = [4]std.posix.pollfd{
@@ -354,27 +400,65 @@ fn runNvimSession(
             }
             if ((fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                 const alive = try nvim_helpers.processNvimEvents(rpc);
-                if (!alive) return;
+                if (!alive) {
+                    if (app.quit_requested) return error.QuitApplication;
+                    return;
+                }
             }
             if ((fds[2].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                 const alive_term = try nvim_helpers.processNvimEvents(rpc_term);
-                if (!alive_term) return;
+                if (!alive_term) {
+                    if (app.quit_requested) return error.QuitApplication;
+                    return;
+                }
             }
             
             if (ui_state.toggle_zen_requested) {
                 ui_state.toggle_zen_requested = false;
-                app.mode = if (app.mode == .zen) .ide else .zen;
+                if (app.mode == .zen) {
+                    app.mode = app.prev_mode;
+                } else {
+                    app.prev_mode = app.mode;
+                    app.mode = .zen;
+                }
+                app.settings_widget.config.zen = (app.mode == .zen);
+                app.settings_widget.config.ide = (app.mode == .ide);
+                app.settings_widget.allocator.free(app.settings_widget.config.mode);
+                app.settings_widget.config.mode = try app.settings_widget.allocator.dupe(u8, switch (app.mode) {
+                    .zen => "zen",
+                    .ide => "ide",
+                    .normal => "normal",
+                });
                 if (app.mode == .zen) {
                     app.settings_widget.is_open = false;
                     app.mason_widget.is_open = false;
                     app.lazy_widget.is_open = false;
                     app.git_detailed_widget.is_open = false;
                 }
+                // Toggle Neovim statusline: show in zen/normal, hide in IDE
+                {
+                    var ls_p = try alloc.alloc(Value, 1);
+                    ls_p[0] = .{ .string = if (app.mode == .ide) "set laststatus=0" else "set laststatus=2" };
+                    rpc.notify("nvim_command", ls_p) catch {};
+                    alloc.free(ls_p);
+                }
                 app.needs_resize = true;
             }
             if (ui_state.toggle_ide_requested) {
                 ui_state.toggle_ide_requested = false;
                 app.mode = .ide;
+                app.prev_mode = .ide;
+                app.settings_widget.config.zen = false;
+                app.settings_widget.config.ide = true;
+                app.settings_widget.allocator.free(app.settings_widget.config.mode);
+                app.settings_widget.config.mode = try app.settings_widget.allocator.dupe(u8, "ide");
+                // Hide Neovim statusline in IDE mode
+                {
+                    var ls_p = try alloc.alloc(Value, 1);
+                    ls_p[0] = .{ .string = "set laststatus=0" };
+                    rpc.notify("nvim_command", ls_p) catch {};
+                    alloc.free(ls_p);
+                }
                 app.needs_resize = true;
             }
             if (ui_state.theme_changed) {
@@ -388,13 +472,32 @@ fn runNvimSession(
                 
                 app.needs_resize = true; // force redraw
                 
-                if (app.settings_widget.config.zen) {
+                if (std.mem.eql(u8, app.settings_widget.config.mode, "zen")) {
                     app.mode = .zen;
-                } else if (app.settings_widget.config.ide) {
+                } else if (std.mem.eql(u8, app.settings_widget.config.mode, "ide")) {
                     app.mode = .ide;
+                } else {
+                    app.mode = .normal;
+                }
+                if (app.mode != .zen) {
+                    app.prev_mode = app.mode;
                 }
                 
                 var cmd_p = try alloc.alloc(Value, 1);
+                
+                if (app.mode == .zen) {
+                    cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+                } else if (app.mode == .ide) {
+                    cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = true; _G.vide_enable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+                } else {
+                    cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+                }
+                rpc.notify("nvim_command", cmd_p) catch {};
+
+                // Toggle Neovim statusline: show in zen/normal, hide in IDE
+                cmd_p[0] = .{ .string = if (app.mode == .ide) "set laststatus=0" else "set laststatus=2" };
+                rpc.notify("nvim_command", cmd_p) catch {};
+
                 var cmd_buf: [256]u8 = undefined;
                 
                 if (std.fmt.bufPrint(&cmd_buf, "colorscheme {s}", .{app.settings_widget.config.theme})) |cmd_str| {
@@ -425,6 +528,23 @@ fn runNvimSession(
                     cmd_p[0] = .{ .string = "set clipboard=unnamedplus" };
                 } else {
                     cmd_p[0] = .{ .string = "set clipboard=" };
+                }
+                rpc.notify("nvim_command", cmd_p) catch {};
+
+                if (std.fmt.bufPrint(&cmd_buf, "lua vim.g.vide_autocomplete_enabled = {s}", .{if (app.settings_widget.config.autocomplete) @as([]const u8, "true") else @as([]const u8, "false")})) |cmd_str| {
+                    cmd_p[0] = .{ .string = cmd_str };
+                    rpc.notify("nvim_command", cmd_p) catch {};
+                } else |_| {}
+
+                if (std.fmt.bufPrint(&cmd_buf, "lua vim.g.vide_nerd_fonts = {s}", .{if (app.settings_widget.config.nerd_fonts) @as([]const u8, "true") else @as([]const u8, "false")})) |cmd_str| {
+                    cmd_p[0] = .{ .string = cmd_str };
+                    rpc.notify("nvim_command", cmd_p) catch {};
+                } else |_| {}
+
+                if (app.settings_widget.config.autoindent) {
+                    cmd_p[0] = .{ .string = "setglobal autoindent" };
+                } else {
+                    cmd_p[0] = .{ .string = "setglobal noautoindent" };
                 }
                 rpc.notify("nvim_command", cmd_p) catch {};
 
