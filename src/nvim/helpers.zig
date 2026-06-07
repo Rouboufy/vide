@@ -55,8 +55,8 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             ui_state.buf_path_changed = true;
         }
     } else if (std.mem.eql(u8, method, "vide_telescope_rect")) {
-        if (params == .array and params.array.len == 2) {
-            for (params.array, 0..) |p, i| {
+        if (params == .array and params.array.len >= 2) {
+            for (params.array[0..2], 0..) |p, i| {
                 if (p == .array and p.array.len == 4) {
                     const arr = p.array;
                     ui_state.telescope_rects[i] = Rect{
@@ -69,9 +69,18 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
                     ui_state.telescope_rects[i] = null;
                 }
             }
+            if (params.array.len >= 3 and params.array[2] == .string) {
+                const title = params.array[2].string;
+                const len = @min(title.len, 32);
+                std.mem.copyForwards(u8, ui_state.widget_title[0..len], title[0..len]);
+                ui_state.widget_title_len = len;
+            } else {
+                ui_state.widget_title_len = 0;
+            }
         } else {
             ui_state.telescope_rects[0] = null;
             ui_state.telescope_rects[1] = null;
+            ui_state.widget_title_len = 0;
         }
     } else if (std.mem.eql(u8, method, "vide_toggle_zen")) {
         ui_state.toggle_zen_requested = true;

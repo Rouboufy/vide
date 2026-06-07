@@ -29,6 +29,41 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
     const t = &a.active_theme;
     drawRect(a.ren, layout.total, " ", t.fg_primary, t.bg_editor);
 
+    // Draw grid 1 (global grid) first for cmdline, messages, and global statusline
+    if (a.ui_state.grid.width > 0 and a.ui_state.grid.height > 0) {
+        var gy: u16 = 0;
+        while (gy < a.ui_state.grid.height) : (gy += 1) {
+            const sy_i = @as(i32, @intCast(layout.editor.y)) + @as(i32, @intCast(gy));
+            if (sy_i < 0 or sy_i >= @as(i32, @intCast(layout.editor.y + layout.editor.h))) continue;
+            const sy = @as(u16, @intCast(sy_i));
+            var gx: u16 = 0;
+            while (gx < a.ui_state.grid.width) : (gx += 1) {
+                const sx_i = @as(i32, @intCast(layout.editor.x)) + @as(i32, @intCast(gx));
+                if (sx_i < 0 or sx_i >= @as(i32, @intCast(layout.editor.x + layout.editor.w))) continue;
+                const sx = @as(u16, @intCast(sx_i));
+                var cell = a.ui_state.grid.cells[@as(usize, gy) * @as(usize, a.ui_state.grid.width) + gx];
+                
+                // Only draw if there's actual content or different background
+                if (cell.char[0] == ' ' and cell.char[1] == 0 and std.meta.activeTag(cell.bg) == .none) {
+                    continue;
+                }
+                
+                if (std.meta.eql(cell.bg, a.ui_state.default_bg) or std.meta.activeTag(cell.bg) == .none) {
+                    cell.bg = t.bg_editor;
+                }
+                if (std.meta.eql(cell.fg, a.ui_state.default_fg) or std.meta.activeTag(cell.fg) == .none) {
+                    cell.fg = t.fg_primary;
+                }
+                if (cell.reverse) {
+                    const tmp = cell.fg;
+                    cell.fg = cell.bg;
+                    cell.bg = tmp;
+                }
+                a.ren.setCell(sx, sy, cell);
+            }
+        }
+    }
+
     // With ext_multigrid, editor content lives on secondary grids (grid 2+).
     // Render regular (non-float) windows first, then floats on top.
     // Two passes: pass 0 = regular windows, pass 1 = floats
@@ -55,6 +90,11 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                     }
                     if (std.meta.eql(cell.fg, a.ui_state.default_fg) or std.meta.activeTag(cell.fg) == .none) {
                         cell.fg = t.fg_primary;
+                    }
+                    if (cell.reverse) {
+                        const tmp = cell.fg;
+                        cell.fg = cell.bg;
+                        cell.bg = tmp;
                     }
                     a.ren.setCell(sx, sy, cell);
                 }
@@ -215,6 +255,11 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             active_file_name;
         drawText(a.ren, layout.status_bar.x + file_x, layout.status_bar.y, file_str, t.fg_statusbar, t.bg_statusbar, false, false);
 
+        // Draw Help Button in Status Bar (Right aligned)
+        const help_btn = if (a.settings_widget.config.nerd_fonts) " 󰋖 Help " else " [?] Help ";
+        const help_x = layout.status_bar.w - @as(u16, @intCast(help_btn.len));
+        drawText(a.ren, layout.status_bar.x + help_x, layout.status_bar.y, help_btn, t.fg_statusbar, t.bg_statusbar, true, false);
+
         if (layout.panel) |panel| {
             // Draw terminal panel background
             drawRect(a.ren, panel, " ", t.fg_primary, t.bg_terminal);
@@ -337,7 +382,11 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
 
                 if (idx == 0) {
                     // Top bar text
-                    a.ren.drawText(wx + 5, wy, " Telescope ", t.fg_primary, t.border_color, true, false);
+                    if (a.ui_state.widget_title_len > 0) {
+                        a.ren.drawText(wx + 5, wy, a.ui_state.widget_title[0..a.ui_state.widget_title_len], t.fg_primary, t.border_color, true, false);
+                    } else {
+                        a.ren.drawText(wx + 5, wy, " Telescope ", t.fg_primary, t.border_color, true, false);
+                    }
                 } else {
                     // Top bar text
                     a.ren.drawText(wx + 5, wy, " Preview ", t.fg_primary, t.border_color, true, false);

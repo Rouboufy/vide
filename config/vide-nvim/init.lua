@@ -53,48 +53,7 @@ require("lazy").setup({
       })
     end
   },
-  -- Rich Visual Statusline
-  {
-    "nvim-lualine/lualine.nvim",
-    dependencies = { "nvim-tree/nvim-web-devicons" },
-    config = function()
-      -- Custom theme for VSCode status bar coloring
-      local custom_vscode_theme = {
-        normal = {
-          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
-          b = { fg = "#FFFFFF", bg = "#252526" },
-          c = { fg = "#FFFFFF", bg = "#252526" },
-        },
-        insert = {
-          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
-        },
-        visual = {
-          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
-        },
-        replace = {
-          a = { fg = "#FFFFFF", bg = "#007ACC", gui = "bold" },
-        },
-        inactive = {
-          c = { fg = "#858585", bg = "#252526" },
-        },
-      }
-      require("lualine").setup({
-        options = {
-          theme = custom_vscode_theme,
-          component_separators = { left = "", right = "" },
-          section_separators = { left = "", right = "" },
-        },
-        sections = {
-          lualine_a = { "mode" },
-          lualine_b = { "branch", "diff" },
-          lualine_c = { { "filename", path = 1 } },
-          lualine_x = { "diagnostics", "encoding", "fileformat", "filetype" },
-          lualine_y = { "progress" },
-          lualine_z = { "location" },
-        }
-      })
-    end
-  },
+
   -- Rich Tabline / Bufferline
   {
     "akinsho/bufferline.nvim",
@@ -542,3 +501,39 @@ vim.api.nvim_create_autocmd("VimEnter", {
     end)
   end
 })
+
+-- ==============================================================================
+-- Nmux42 Ported Keybinds & Custom Help Widget
+-- ==============================================================================
+
+-- Move lines up/down in Visual mode (Alt Up/Down in VSCode)
+vim.keymap.set("v", "J", ":m '>+1<CR>gv=gv", { desc = "Move line down" })
+vim.keymap.set("v", "K", ":m '<-2<CR>gv=gv", { desc = "Move line up" })
+
+-- Join lines without moving cursor
+vim.keymap.set("n", "J", "mzJ`z", { desc = "Join lines" })
+
+-- Page Up/Down and keep cursor centered
+vim.keymap.set("n", "<C-d>", "<C-d>zz", { desc = "Page down and center" })
+vim.keymap.set("n", "<C-u>", "<C-u>zz", { desc = "Page up and center" })
+
+-- Next/Prev search result and keep centered
+vim.keymap.set("n", "n", "nzzzv", { desc = "Next search result" })
+vim.keymap.set("n", "N", "Nzzzv", { desc = "Prev search result" })
+
+-- Paste without overwriting clipboard
+vim.keymap.set("x", "<leader>p", [["_dP]], { desc = "Paste without overwriting" })
+
+-- Delete to black hole
+vim.keymap.set({ "n", "v" }, "<leader>d", [["_d]], { desc = "Delete without copying" })
+
+-- Disable Ex mode
+vim.keymap.set("n", "Q", "<nop>", { desc = "Disable Ex mode" })
+
+-- Substitute word under cursor
+vim.keymap.set("n", "<leader>s", [[:s/\<<C-r><C-w>\>//gI<Left><Left><Left>]], { desc = "Substitute word under cursor" })
+
+-- Make file executable
+vim.keymap.set("n", "<leader>x", "<cmd>!chmod +x %<CR>", { silent = true, desc = "Make file executable" })
+
+require("vide_help").setup()

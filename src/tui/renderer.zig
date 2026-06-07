@@ -13,6 +13,7 @@ pub const Cell = struct {
     bg: Color = .none,
     bold: bool = false,
     italic: bool = false,
+    reverse: bool = false,
 
     pub fn setChar(self: *Cell, slice: []const u8) void {
         const copy_len = @min(slice.len, 4);
@@ -133,8 +134,8 @@ pub const Renderer = struct {
         var cur_bold: bool = false;
         var cur_italic: bool = false;
 
-        // Reset terminal attributes initially
-        try self.writer.writeAll("\x1b[0m");
+        // Hide cursor and reset terminal attributes initially
+        try self.writer.writeAll("\x1b[?25l\x1b[0m");
 
         for (0..self.height) |y| {
             for (0..self.width) |x| {

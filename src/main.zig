@@ -68,6 +68,7 @@ fn innerMain(init: std.process.Init) !void {
     var renderer = try Renderer.init(alloc, size[0], size[1], term.writer());
     defer renderer.deinit(alloc);
 
+    var is_resuming = false;
     app_loop: while (true) {
         var nvim = try NvimProcess.spawn(init.io, alloc);
         defer nvim.deinit(init.io);
@@ -85,9 +86,34 @@ fn innerMain(init: std.process.Init) !void {
         _ = args.skip(); // skip executable name
         const initial_file: ?[]const u8 = args.next();
 
-        runNvimSession(initial_file, init, alloc, &term, &renderer, &rpc, &ui_state, &rpc_term, &ui_term, sigwinch_pipe[0]) catch |err| {
+        if (is_resuming) {
+            var src_cmd = [_]Value{.{ .string = "source /tmp/vide_session.vim" }};
+            rpc.notify("nvim_command", &src_cmd) catch {};
+            // Optional: wait a moment for the session to load
+        }
+
+        runNvimSession(if (is_resuming) null else initial_file, init, alloc, &term, &renderer, &rpc, &ui_state, &rpc_term, &ui_term, sigwinch_pipe[0]) catch |err| {
             if (err == error.EndOfStream) continue :app_loop;
             if (err == error.QuitApplication) break :app_loop;
+            if (err == error.ZenModeHandoff) {
+                term.deinit();
+                const argv = [_][]const u8{ "nvim", "-S", "/tmp/vide_session.vim", "-c", "nnoremap <silent> <leader><C-a> :wa<CR>:mksession! /tmp/vide_session.vim<CR>:qa<CR>" };
+                if (std.process.spawn(init.io, .{ .argv = &argv, .stdin = .inherit, .stdout = .inherit, .stderr = .inherit })) |c| {
+                    var child = c;
+                    _ = child.wait(init.io) catch {};
+                } else |_| {}
+                
+                term = try Terminal.init();
+                renderer.writer = term.writer();
+                for (renderer.prev) |*cell| {
+                    cell.char[0] = ' ';
+                    cell.len = 1;
+                    cell.fg = .none;
+                    cell.bg = .none;
+                }
+                is_resuming = true;
+                continue :app_loop;
+            }
             return err;
         };
     }
@@ -415,34 +441,13 @@ fn runNvimSession(
             
             if (ui_state.toggle_zen_requested) {
                 ui_state.toggle_zen_requested = false;
-                if (app.mode == .zen) {
-                    app.mode = app.prev_mode;
-                } else {
-                    app.prev_mode = app.mode;
-                    app.mode = .zen;
-                }
-                app.settings_widget.config.zen = (app.mode == .zen);
-                app.settings_widget.config.ide = (app.mode == .ide);
-                app.settings_widget.allocator.free(app.settings_widget.config.mode);
-                app.settings_widget.config.mode = try app.settings_widget.allocator.dupe(u8, switch (app.mode) {
-                    .zen => "zen",
-                    .ide => "ide",
-                    .normal => "normal",
-                });
-                if (app.mode == .zen) {
-                    app.settings_widget.is_open = false;
-                    app.mason_widget.is_open = false;
-                    app.lazy_widget.is_open = false;
-                    app.git_detailed_widget.is_open = false;
-                }
-                // Toggle Neovim statusline: show in zen/normal, hide in IDE
-                {
-                    var ls_p = try alloc.alloc(Value, 1);
-                    ls_p[0] = .{ .string = if (app.mode == .ide) "set laststatus=0" else "set laststatus=2" };
-                    rpc.notify("nvim_command", ls_p) catch {};
-                    alloc.free(ls_p);
-                }
-                app.needs_resize = true;
+                var wa_cmd = [_]Value{.{ .string = "wa" }};
+                _ = rpc.call("nvim_command", &wa_cmd) catch {};
+                
+                var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
+                _ = rpc.call("nvim_command", &mks_cmd) catch {};
+                
+                return error.ZenModeHandoff;
             }
             if (ui_state.toggle_ide_requested) {
                 ui_state.toggle_ide_requested = false;

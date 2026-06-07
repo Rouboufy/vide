@@ -152,7 +152,7 @@ pub const SettingsWidget = struct {
 
     pub const DropdownType = enum { none, theme, indent_size, indent_type, line_numbers, split_separator, mode };
 
-    pub const supported_modes = [_][]const u8{ "normal", "ide", "zen" };
+    pub const supported_modes = [_][]const u8{ "normal", "ide" };
 
     pub const supported_themes = [_][]const u8{
         "vscode", "kanagawa", "tokyonight-night", "tokyonight-storm", "tokyonight-day", 
@@ -255,7 +255,7 @@ pub const SettingsWidget = struct {
 
         // Save button
         const save_color = if (self.has_unsaved_changes) theme.fg_accent else theme.fg_secondary;
-        ren.drawText(x + w - 11, y + h - 2, "[ Save ]", save_color, theme.bg_sidebar, false, false);
+        ren.drawText(x + w - 18, y + h - 2, "[ Save & Close ]", save_color, theme.bg_sidebar, false, false);
 
         // Tabs
         var tab_y: u16 = y + 2;
@@ -378,7 +378,7 @@ pub const SettingsWidget = struct {
                     
                     const draw_str = std.fmt.bufPrint(&buf, "{s}:  [ {s} ]", .{action, key_str}) catch action;
                     const color = if (self.active_binding == i) theme.fg_accent else theme.fg_primary;
-                    ren.drawText(content_x, content_y + 2 + @as(u16, @intCast(i * 2)), draw_str, color, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
                 }
 
                 const static_actions = [_][]const u8{
@@ -392,9 +392,9 @@ pub const SettingsWidget = struct {
                     "Toggle Panel Bottom/Right:[ Alt+P ]",
                 };
                 
-                ren.drawText(content_x, content_y + 14, "Window Splits & Layout (Static):", theme.fg_primary, theme.bg_sidebar, true, false);
+                ren.drawText(content_x, content_y + 9, "Window Splits & Layout (Static):", theme.fg_primary, theme.bg_sidebar, true, false);
                 for (static_actions, 0..) |sa, sa_idx| {
-                    ren.drawText(content_x, content_y + 15 + @as(u16, @intCast(sa_idx)), sa, theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 10 + @as(u16, @intCast(sa_idx)), sa, theme.fg_secondary, theme.bg_sidebar, false, false);
                 }
             },
             else => {},
@@ -825,12 +825,13 @@ pub const SettingsWidget = struct {
             }
 
             // Save button
-            if (my == y + h - 2 and mx >= x + w - 11 and mx <= x + w - 3) {
+            if (my == y + h - 2 and mx >= x + w - 18 and mx <= x + w - 2) {
                 if (self.has_unsaved_changes) {
                     self.config.save(self.settings_path) catch {};
                     self.has_unsaved_changes = false;
                     self.needs_apply = true;
                 }
+                self.is_open = false; // Save & Close
                 return true;
             }
 
@@ -895,7 +896,7 @@ pub const SettingsWidget = struct {
                     },
                     4 => {
                         for (0..6) |i| {
-                            if (my == content_y + 2 + @as(u16, @intCast(i * 2))) {
+                            if (my == content_y + 2 + @as(u16, @intCast(i))) {
                                 self.active_binding = i;
                                 changed = true;
                             }

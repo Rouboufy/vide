@@ -282,43 +282,14 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     if (std.mem.eql(u8, nk, kb.quit) or std.mem.eql(u8, k.raw, kb.quit)) quit = true;
 
     if (toggle_zen) {
-        if (a.mode == .zen) {
-            a.mode = a.prev_mode;
-        } else {
-            a.prev_mode = a.mode;
-            a.mode = .zen;
-        }
+        // Handoff to native nvim: save session
+        var wa_cmd = [_]Value{.{ .string = "wa" }};
+        _ = a.rpc.call("nvim_command", &wa_cmd) catch {};
         
-        a.settings_widget.config.zen = (a.mode == .zen);
-        a.settings_widget.config.ide = (a.mode == .ide);
-        a.settings_widget.allocator.free(a.settings_widget.config.mode);
-        a.settings_widget.config.mode = try a.settings_widget.allocator.dupe(u8, switch (a.mode) {
-            .zen => "zen",
-            .ide => "ide",
-            .normal => "normal",
-        });
+        var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
+        _ = a.rpc.call("nvim_command", &mks_cmd) catch {};
         
-        if (a.mode == .zen) {
-            a.settings_widget.is_open = false;
-            a.mason_widget.is_open = false;
-            a.lazy_widget.is_open = false;
-            a.git_detailed_widget.is_open = false;
-        }
-        
-        var cmd_p = try a.settings_widget.allocator.alloc(Value, 1);
-        defer a.settings_widget.allocator.free(cmd_p);
-        
-        if (a.mode == .zen) {
-            cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
-        } else if (a.mode == .ide) {
-            cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = true; _G.vide_enable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
-        } else {
-            cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
-        }
-        a.rpc.notify("nvim_command", cmd_p) catch {};
-        
-        a.settings_widget.config.save(a.settings_widget.settings_path) catch {};
-        a.needs_resize = true;
+        return error.ZenModeHandoff;
     } else if (toggle_explorer) {
         a.show_file_tree = !a.show_file_tree;
         a.needs_resize = true;
@@ -483,7 +454,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 if (m.row == wy and m.col >= wx + rect.w - 3 and m.col <= wx + rect.w + 1) {
                     var cmd_p = try a.allocator.alloc(Value, 1);
                     defer a.allocator.free(cmd_p);
-                    cmd_p[0] = .{ .string = "lua for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do if vim.bo[bufnr].filetype == 'TelescopePrompt' then pcall(require('telescope.actions').close, bufnr) end end" };
+                    cmd_p[0] = .{ .string = "lua for _, winid in ipairs(vim.api.nvim_list_wins()) do local ok, bufnr = pcall(vim.api.nvim_win_get_buf, winid); if ok then if vim.bo[bufnr].filetype == 'TelescopePrompt' then pcall(require('telescope.actions').close, bufnr) elseif vim.bo[bufnr].filetype == 'vimbindings' then pcall(vim.api.nvim_win_close, winid, true) end end end" };
                     a.rpc.notify("nvim_command", cmd_p) catch {};
                     a.ui_state.telescope_rects[0] = null;
                     a.ui_state.telescope_rects[1] = null;
@@ -782,6 +753,18 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     } else if (!a.show_file_tree) {
                         a.show_file_tree = true;
                         a.needs_resize = true;
+                    }
+                }
+                
+                // Handle status bar clicks
+                if (m.row == layout.status_bar.y) {
+                    const help_btn_len: u16 = if (a.settings_widget.config.nerd_fonts) 8 else 10;
+                    if (m.col >= layout.status_bar.x + layout.status_bar.w - help_btn_len) {
+                        var cmd_p = try a.allocator.alloc(Value, 1);
+                        cmd_p[0] = .{ .string = "HelpMenu" };
+                        a.rpc.notify("nvim_command", cmd_p) catch {};
+                        a.allocator.free(cmd_p);
+                        return;
                     }
                 }
                 

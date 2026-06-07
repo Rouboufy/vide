@@ -24,11 +24,22 @@ echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
 
 # Check and install dependencies
 MISSING_DEPS=()
-for cmd in git curl zig nvim; do
+for cmd in git curl nvim; do
     if ! command -v "$cmd" &>/dev/null; then
         MISSING_DEPS+=("$cmd")
     fi
 done
+
+if ! command -v zig &>/dev/null; then
+    MISSING_DEPS+=("zig")
+else
+    ZIG_VER=$(zig version | cut -d. -f1,2)
+    if [[ "$ZIG_VER" == "0.14" || "$ZIG_VER" == "0.13" || "$ZIG_VER" == "0.12" || "$ZIG_VER" == "0.11" || "$ZIG_VER" == "0.10" || "$ZIG_VER" == "0.9" ]]; then
+        MISSING_DEPS+=("zig")
+        echo -e "${YELLOW}Zig $ZIG_VER is too old (requires 0.15+). Will be upgraded.${NC}"
+        if command -v snap &>/dev/null; then sudo snap remove zig &>/dev/null || true; fi
+    fi
+fi
 
 if command -v nvim &>/dev/null; then
     NVIM_VER=$(nvim --version | head -n 1 | awk '{print $2}' | sed 's/v//')
@@ -50,28 +61,41 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
                 echo -e "${RED}Homebrew is required on macOS. Please install Homebrew first.${NC}"
                 exit 1
             fi
-            brew install git curl zig neovim
+            brew install git curl neovim
         else
             if command -v apt-get &>/dev/null; then
                 sudo apt-get update
-                sudo apt-get install -y git curl
-                # Use snap for nvim and zig if available, otherwise apt
+                sudo apt-get install -y git curl python3
                 if command -v snap &>/dev/null; then
                     sudo snap install nvim --classic || sudo apt-get install -y neovim
-                    sudo snap install zig --classic || sudo apt-get install -y zig
                 else
-                    sudo apt-get install -y neovim zig
+                    sudo apt-get install -y neovim
                 fi
             elif command -v pacman &>/dev/null; then
-                sudo pacman -Sy --noconfirm git curl zig neovim
+                sudo pacman -Sy --noconfirm git curl neovim python
             elif command -v dnf &>/dev/null; then
-                sudo dnf install -y git curl zig neovim
+                sudo dnf install -y git curl neovim python3
             elif command -v zypper &>/dev/null; then
-                sudo zypper install -y git curl zig neovim
+                sudo zypper install -y git curl neovim python3
             else
                 echo -e "${RED}Could not detect package manager. Please install dependencies manually.${NC}"
                 exit 1
             fi
+        fi
+
+        if [[ " ${MISSING_DEPS[*]} " =~ " zig " ]]; then
+            echo -e "${BLUE}Installing Zig (master branch) manually...${NC}"
+            if [ "$OS_NAME" = "Darwin" ]; then
+                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["aarch64-macos"]["tarball"])')
+            else
+                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["x86_64-linux"]["tarball"])')
+            fi
+            curl -fLo "/tmp/zig.tar.xz" "$ZIG_URL"
+            sudo rm -rf /usr/local/zig
+            sudo mkdir -p /usr/local/zig
+            sudo tar -xf "/tmp/zig.tar.xz" -C /usr/local/zig --strip-components=1
+            sudo ln -sfn /usr/local/zig/zig /usr/local/bin/zig
+            rm "/tmp/zig.tar.xz"
         fi
         
         # Re-check basic tools after install

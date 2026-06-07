@@ -9,6 +9,7 @@ pub const Highlight = struct {
     bg: Color = .none,
     bold: bool = false,
     italic: bool = false,
+    reverse: bool = false,
 };
 
 pub const GridData = struct {
@@ -75,6 +76,8 @@ pub const UiState = struct {
     current_buf_path: ?[]const u8 = null,
     buf_path_changed: bool = false,
     telescope_rects: [2]?@import("../tui/layout.zig").Rect = .{ null, null },
+    widget_title: [32]u8 = undefined,
+    widget_title_len: usize = 0,
     toggle_zen_requested: bool = false,
     toggle_ide_requested: bool = false,
     theme_changed: bool = false,
@@ -189,6 +192,8 @@ pub const UiState = struct {
                                 hl.bold = kv.value.bool;
                             } else if (std.mem.eql(u8, key, "italic")) {
                                 hl.italic = kv.value.bool;
+                            } else if (std.mem.eql(u8, key, "reverse")) {
+                                hl.reverse = kv.value.bool;
                             }
                         }
                     }
@@ -233,6 +238,16 @@ pub const UiState = struct {
                     g.row = @as(i32, @intCast(arg.array[2].integer));
                     g.col = @as(i32, @intCast(arg.array[3].integer));
                     g.is_float = false;
+                    g.visible = true;
+                }
+            } else if (std.mem.eql(u8, name, "msg_set_pos")) {
+                for (args) |arg| {
+                    if (arg != .array or arg.array.len < 3) continue;
+                    const id = arg.array[0].integer;
+                    const g = try self.getOrCreate(id);
+                    g.row = @as(i32, @intCast(arg.array[1].integer));
+                    g.col = 0;
+                    g.is_float = true;
                     g.visible = true;
                 }
             } else if (std.mem.eql(u8, name, "win_float_pos")) {
@@ -340,7 +355,7 @@ pub const UiState = struct {
                         var rep: usize = 0;
                         while (rep < repeat) : (rep += 1) {
                             if (row < target.height and col < target.width) {
-                                var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic };
+                                var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic, .reverse = hl.reverse };
                                 cell.setChar(text);
                                 target.cells[@as(usize, row) * @as(usize, target.width) + col] = cell;
                             }
