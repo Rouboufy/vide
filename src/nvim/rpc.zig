@@ -48,7 +48,7 @@ pub const RpcClient = struct {
                     const err = posix.errno(rc);
                     switch (err) {
                         .SUCCESS => {
-                            if (rc > 0) total_written += rc else return error.Closed;
+                            if (rc > 0) total_written += @as(usize, @intCast(rc)) else return error.Closed;
                         },
                         .INTR => continue,
                         .AGAIN => continue,
@@ -110,7 +110,7 @@ pub const RpcClient = struct {
             if (rc_poll == 0) break; // timeout, give up
             const rc = posix.system.write(self.process.stdin.handle, data[written..].ptr, data.len - written);
             switch (posix.errno(rc)) {
-                .SUCCESS => { if (rc > 0) written += rc else break; },
+                .SUCCESS => { if (rc > 0) written += @as(usize, @intCast(rc)) else break; },
                 .INTR => continue,
                 .AGAIN => continue,
                 else => break,
