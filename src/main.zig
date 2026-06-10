@@ -60,8 +60,9 @@ fn innerMain(init: std.process.Init) !void {
     };
     std.posix.sigaction(std.posix.SIG.WINCH, &sa, null);
 
-    var sigwinch_pipe: [2]std.posix.fd_t = undefined;
-    _ = std.os.linux.pipe2(&sigwinch_pipe, .{ .NONBLOCK = true });
+    var sigwinch_pipe = try std.posix.pipe();
+    const flags_0 = std.posix.fcntl(sigwinch_pipe[0], std.posix.F.GETFL, 0) catch 0;
+    _ = std.posix.fcntl(sigwinch_pipe[0], std.posix.F.SETFL, flags_0 | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })))) catch 0;
     input.sigwinch_pipe_write_fd = sigwinch_pipe[1];
 
     const size = try term.getSize();
@@ -354,7 +355,7 @@ fn runNvimSession(
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
             if (alloc.dupeZ(u8, preview_path)) |p| {
-                _ = std.os.linux.unlinkat(std.posix.AT.FDCWD, p, 0);
+                std.posix.unlinkatZ(std.posix.AT.FDCWD, p, 0) catch {};
                 alloc.free(p);
             } else |_| {}
         }

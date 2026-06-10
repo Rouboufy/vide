@@ -74,10 +74,10 @@ pub const SettingsConfig = struct {
             }
             return err;
         };
-        defer _ = std.os.linux.close(fd);
+        defer std.posix.close(fd);
 
         var buf: [4096]u8 = undefined;
-        const len = std.os.linux.read(fd, &buf, buf.len);
+        const len = std.posix.read(fd, &buf) catch 0;
 
         const parsed = try std.json.parseFromSlice(SettingsConfig, allocator, buf[0..len], .{ .ignore_unknown_fields = true });
         defer parsed.deinit();
@@ -119,7 +119,7 @@ pub const SettingsConfig = struct {
         
         const path_z = try alloc.dupeZ(u8, path);
         const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-        defer _ = std.os.linux.close(fd);
+        defer std.posix.close(fd);
 
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(alloc);
@@ -128,7 +128,7 @@ pub const SettingsConfig = struct {
         try std.json.Stringify.value(self.*, .{}, &aw.writer);
         var out_buf = aw.toArrayList();
         defer out_buf.deinit(alloc);
-        _ = std.os.linux.write(fd, out_buf.items.ptr, out_buf.items.len);
+        _ = std.posix.write(fd, out_buf.items) catch 0;
     }
 };
 
