@@ -77,9 +77,21 @@ Vide leverages the full capability of Neovim. Language Server Protocol (LSP), Tr
 * A terminal emulator with True Color support
 * A Nerd Font (e.g., JetBrainsMono) for proper icon rendering
 
-### Automated Installation (Linux & macOS)
+### Automated Installation
+
+**Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash
+```
+
+**Linux (Latest Dev):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/dev/setup.sh | bash
+```
+
+**macOS (Experimental):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/macos/setup_macos.sh | bash
 ```
 
 ### Manual Build
