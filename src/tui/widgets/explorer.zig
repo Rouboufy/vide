@@ -437,8 +437,85 @@ pub const Explorer = struct {
         }
     }
 
-    pub fn handleKey(self: *Explorer, key: []const u8) !bool {
-        if (self.action_state == .none) return false;
+    pub fn handleKey(self: *Explorer, key: []const u8, rpc: ?*RpcClient) !bool {
+        if (self.action_state == .none) {
+            if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
+                if (self.items.items.len > 0) {
+                    if (self.selected_idx) |idx| {
+                        self.selected_idx = @min(idx + 1, self.items.items.len - 1);
+                    } else {
+                        self.selected_idx = 0;
+                    }
+                    if (self.selected_idx.? >= self.scroll_y + 30) self.scroll_y += 1; // Basic scrolling boundary
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
+                if (self.items.items.len > 0) {
+                    if (self.selected_idx) |idx| {
+                        self.selected_idx = if (idx == 0) 0 else idx - 1;
+                    } else {
+                        self.selected_idx = 0;
+                    }
+                    if (self.selected_idx.? < self.scroll_y) self.scroll_y = self.selected_idx.?;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "o")) {
+                if (self.selected_idx) |idx| {
+                    if (idx < self.items.items.len) {
+                        const item = self.items.items[idx];
+                        if (item.is_dir) {
+                            try self.toggleExpand(item.path);
+                            try self.refresh();
+                        } else {
+                            if (rpc) |client| {
+                                var cmd_buf: [512]u8 = undefined;
+                                const cmd = std.fmt.bufPrint(&cmd_buf, "edit {s}", .{item.path}) catch "edit .";
+                                var p = [_]Value{.{ .string = cmd }};
+                                _ = client.call("nvim_command", &p) catch {};
+                            }
+                        }
+                    }
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "c")) {
+                self.action_state = .creating_file;
+                self.input_len = 0;
+                if (self.selected_idx) |idx| {
+                    const sel = self.items.items[idx];
+                    self.action_target_path = if (sel.is_dir) sel.path else std.fs.path.dirname(sel.path) orelse ".";
+                } else {
+                    self.action_target_path = null;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "d")) {
+                self.action_state = .creating_dir;
+                self.input_len = 0;
+                if (self.selected_idx) |idx| {
+                    const sel = self.items.items[idx];
+                    self.action_target_path = if (sel.is_dir) sel.path else std.fs.path.dirname(sel.path) orelse ".";
+                } else {
+                    self.action_target_path = null;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "r")) {
+                if (self.selected_idx) |idx| {
+                    self.action_state = .renaming;
+                    self.action_target_path = self.items.items[idx].path;
+                    self.input_len = 0;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "x")) {
+                if (self.selected_idx) |idx| {
+                    self.action_state = .deleting;
+                    self.action_target_path = self.items.items[idx].path;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "R")) {
+                try self.refresh();
+                return true;
+            }
+            return false;
+        }
 
         if (std.mem.eql(u8, key, "<Enter>")) {
             if (self.action_state == .deleting) {
@@ -511,6 +588,7 @@ pub const Explorer = struct {
             // Highlight selected row
             if (is_selected) {
                 rend.drawRect(Rect{ .x = rect.x, .y = rect.y + y, .w = rect.w, .h = 1 }, " ", colors.fg_primary, bg);
+                rend.drawText(rect.x, rect.y + y, "▋", colors.fg_accent, bg, true, false);
             }
 
             const indent = @as(usize, item.depth) * 2;

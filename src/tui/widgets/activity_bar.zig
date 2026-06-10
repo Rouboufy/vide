@@ -25,6 +25,7 @@ pub const ActivityBar = struct {
         .{ .icon = "󰙅 ", .label = "Explorer" },
         .{ .icon = " ", .label = "Search" },
         .{ .icon = " ", .label = "Source Control" },
+        .{ .icon = "󰚩 ", .label = "AI Assistants" },
     };
 
     pub fn draw(self: *const ActivityBar, renderer: *Renderer, rect: Rect, theme: Theme) void {

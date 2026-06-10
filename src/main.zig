@@ -164,6 +164,10 @@ fn runNvimSession(
     defer search_panel.deinit();
     app.search_panel = &search_panel;
 
+    var ai_panel = @import("tui/widgets/ai_panel.zig").AiPanel.init(alloc);
+    defer ai_panel.deinit();
+    app.ai_panel = &ai_panel;
+
     var output_panel = OutputPanel.init(alloc);
     defer output_panel.deinit();
     app.output_panel = &output_panel;
@@ -441,13 +445,27 @@ fn runNvimSession(
             
             if (ui_state.toggle_zen_requested) {
                 ui_state.toggle_zen_requested = false;
-                var wa_cmd = [_]Value{.{ .string = "wa" }};
-                _ = rpc.call("nvim_command", &wa_cmd) catch {};
-                
-                var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
-                _ = rpc.call("nvim_command", &mks_cmd) catch {};
-                
-                return error.ZenModeHandoff;
+                if (app.settings_widget.config.zen_handoff) {
+                    var wa_cmd = [_]Value{.{ .string = "wa" }};
+                    _ = rpc.call("nvim_command", &wa_cmd) catch {};
+                    
+                    var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
+                    _ = rpc.call("nvim_command", &mks_cmd) catch {};
+                    
+                    return error.ZenModeHandoff;
+                } else {
+                    app.mode = .zen;
+                    app.prev_mode = .zen;
+                    app.settings_widget.config.zen = true;
+                    app.settings_widget.config.ide = false;
+                    app.settings_widget.allocator.free(app.settings_widget.config.mode);
+                    app.settings_widget.config.mode = try app.settings_widget.allocator.dupe(u8, "zen");
+                    
+                    var cmd_p = [_]Value{.{ .string = "set laststatus=3" }};
+                    _ = rpc.call("nvim_command", &cmd_p) catch {};
+                    cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+                    _ = rpc.call("nvim_command", &cmd_p) catch {};
+                }
             }
             if (ui_state.toggle_ide_requested) {
                 ui_state.toggle_ide_requested = false;

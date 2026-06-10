@@ -13,6 +13,7 @@ const Terminal = @import("terminal.zig").Terminal;
 const Explorer = @import("widgets/explorer.zig").Explorer;
 const GitPanel = @import("widgets/git_panel.zig").GitPanel;
 const SearchPanel = @import("widgets/search_panel.zig").SearchPanel;
+const AiPanel = @import("widgets/ai_panel.zig").AiPanel;
 const OutputPanel = @import("widgets/output_panel.zig").OutputPanel;
 const DebugConsole = @import("widgets/debug_console.zig").DebugConsole;
 const MasonWidget = @import("widgets/mason.zig").MasonWidget;
@@ -72,6 +73,7 @@ pub const App = struct {
     explorer: *Explorer,
     git_panel: *GitPanel,
     search_panel: *SearchPanel,
+    ai_panel: *AiPanel,
     output_panel: *OutputPanel,
     debug_console: *DebugConsole,
     mason_widget: *MasonWidget,
@@ -96,6 +98,8 @@ pub const App = struct {
 
     editor_win_count: usize = 1,
     terminal_win_count: usize = 1,
+
+    sidebar_focus: bool = false,
 
     editor_wins: std.array_list.Managed(WinInfo),
     terminal_wins: std.array_list.Managed(WinInfo),
@@ -126,6 +130,7 @@ pub const App = struct {
             .tabs = std.array_list.Managed(TabInfo).init(allocator),
             .active_tab = 0,
             .terminal_focus = false,
+            .sidebar_focus = false,
             .show_file_tree = true,
             .show_terminal_panel = false,
             .needs_resize = true,
@@ -137,6 +142,7 @@ pub const App = struct {
             .explorer = undefined,
             .git_panel = undefined,
             .search_panel = undefined,
+            .ai_panel = undefined,
             .output_panel = undefined,
             .debug_console = undefined,
             .mason_widget = undefined,

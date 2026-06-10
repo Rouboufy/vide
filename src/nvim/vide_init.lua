@@ -16,6 +16,35 @@ vim.opt.hidden = true
 vim.opt.shortmess:append("A")
 vim.opt.completeopt = { "menu", "menuone", "noselect" }
 
+local set = vim.opt
+set.relativenumber = true
+set.number = true
+set.tabstop = 4
+set.shiftwidth = 4
+set.autoindent = true
+set.expandtab = true
+set.ignorecase = true
+set.smartcase = true
+set.termguicolors = true
+set.background = "dark"
+set.signcolumn = "yes"
+set.cursorline = true
+set.colorcolumn = "80"
+set.clipboard:append("unnamedplus")
+set.backspace = "indent,eol,start"
+set.splitbelow = true
+set.splitright = true
+set.iskeyword:append("-")
+set.scrolloff = 8
+set.swapfile = false
+set.backup = false
+local undodir = vim.fn.stdpath("data") .. "/undo"
+vim.fn.mkdir(undodir, "p")
+set.undodir = undodir
+set.undofile = true
+set.incsearch = true
+set.updatetime = 50
+
 require("lazy").setup({
     {
         "goolord/alpha-nvim",
@@ -31,8 +60,31 @@ require("lazy").setup({
                 " ╚████╔╝ ██║██████╔╝███████╗",
                 "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝",
             }
-            dashboard.section.header.val = logo
-            dashboard.section.header.opts.hl = "Statement"
+            local colors = {
+                "DiagnosticError",
+                "DiagnosticWarning",
+                "DiagnosticInfo",
+                "DiagnosticHint",
+                "Type",
+                "String",
+            }
+            local header_elements = {}
+            for i, line in ipairs(logo) do
+                table.insert(header_elements, {
+                    type = "text",
+                    val = line,
+                    opts = {
+                        position = "center",
+                        hl = colors[i],
+                    }
+                })
+            end
+            dashboard.config.layout[2] = header_elements[1]
+            table.insert(dashboard.config.layout, 3, header_elements[2])
+            table.insert(dashboard.config.layout, 4, header_elements[3])
+            table.insert(dashboard.config.layout, 5, header_elements[4])
+            table.insert(dashboard.config.layout, 6, header_elements[5])
+            table.insert(dashboard.config.layout, 7, header_elements[6])
 
             local function format_key(key)
                 if not key or key == "" then return "None" end
@@ -82,9 +134,19 @@ require("lazy").setup({
                 end
                 
                 local kb = state.keybindings or {}
-                local new_file_key = format_key(kb.new_file or "<C-n>")
-                local find_file_key = format_key(kb.find_file or "<C-f>")
-                local quit_key = format_key(kb.quit or "<C-q>")
+                local raw_new = kb.new_file or "<C-n>"
+                local raw_find = kb.find_file or "<C-f>"
+                local raw_quit = kb.quit or "<C-q>"
+                local raw_recent = "<C-r>"
+                local raw_explorer = "<C-e>"
+                local raw_help = "<C-v>"
+
+                local new_file_key = format_key(raw_new)
+                local find_file_key = format_key(raw_find)
+                local quit_key = format_key(raw_quit)
+                local recent_key = format_key(raw_recent)
+                local explorer_key = format_key(raw_explorer)
+                local help_key = format_key(raw_help)
                 
                 local term = os.getenv("TERM") or ""
                 local nerd_fonts = true
@@ -100,31 +162,42 @@ require("lazy").setup({
                 local find_file_icon = nerd_fonts and " " or "/ "
                 local quit_icon = nerd_fonts and "󰈆 " or "x "
 
-                dashboard.section.buttons.val = {
-                    {
-                        type = "text",
-                        val = new_file_icon .. " New File      " .. new_file_key,
-                        opts = { hl = "Function", position = "center" }
-                    },
-                    {
-                        type = "padding",
-                        val = 1
-                    },
-                    {
-                        type = "text",
-                        val = find_file_icon .. " Find File     " .. find_file_key,
-                        opts = { hl = "Function", position = "center" }
-                    },
-                    {
-                        type = "padding",
-                        val = 1
-                    },
-                    {
-                        type = "text",
-                        val = quit_icon .. " Quit          " .. quit_key,
-                        opts = { hl = "Function", position = "center" }
-                    }
+                local recent_icon = nerd_fonts and "󰄉 " or "r "
+                local explorer_icon = nerd_fonts and "󰙅 " or "e "
+
+                local function custom_button(key, display_text, cmd)
+                    local btn = dashboard.button(key, "", cmd)
+                    btn.val = display_text
+                    btn.opts.position = "center"
+                    btn.opts.hl = "Function"
+                    btn.opts.shortcut = ""
+                    return btn
+                end
+
+                local buttons = {
+                    custom_button(raw_new, string.format("%s New File       %-6s", new_file_icon, new_file_key), "<cmd>enew<cr>"),
+                    { type = "padding", val = 1 },
+                    custom_button(raw_find, string.format("%s Find File      %-6s", find_file_icon, find_file_key), "<cmd>Telescope find_files<cr>"),
+                    { type = "padding", val = 1 },
+                    custom_button(raw_recent, string.format("%s Recent Files   %-6s", recent_icon, recent_key), "<cmd>Telescope oldfiles<cr>"),
+                    { type = "padding", val = 1 },
                 }
+
+                local is_zen_mode = vim.g.vide_zen_mode
+                if is_zen_mode == nil then
+                    is_zen_mode = state.zen
+                end
+
+                if is_zen_mode then
+                    table.insert(buttons, custom_button(raw_explorer, string.format("%s File Explorer  %-6s", explorer_icon, explorer_key), "<cmd>Ex<cr>"))
+                    table.insert(buttons, { type = "padding", val = 1 })
+                end
+
+                table.insert(buttons, custom_button(raw_help, string.format("󰌌  Help Bindings  %-6s", help_key), "<cmd>HelpMenu<cr>"))
+                table.insert(buttons, { type = "padding", val = 1 })
+                table.insert(buttons, custom_button(raw_quit, string.format("%s Quit           %-6s", quit_icon, quit_key), "<cmd>qa<cr>"))
+
+                dashboard.section.buttons.val = buttons
             end
 
             _G.vide_update_dashboard_keys()
@@ -134,11 +207,12 @@ require("lazy").setup({
             }
             require("alpha").setup(dashboard.config)
             local group = vim.api.nvim_create_augroup("VideDashboard", { clear = true })
-            vim.api.nvim_create_autocmd({ "FileType", "BufEnter" }, {
+            vim.api.nvim_create_autocmd({ "FileType" }, {
                 group = group,
                 pattern = "alpha",
                 callback = function()
                     vim.cmd("setlocal nonumber norelativenumber") ;
+                    vim.keymap.set("n", "<LeftRelease>", "<LeftRelease><cmd>lua pcall(function() require('alpha').press() end)<CR>", { buffer = true, silent = true })
                     if _G.vide_update_dashboard_keys then
                         _G.vide_update_dashboard_keys()
                         pcall(function() require("alpha").redraw() end)
@@ -441,6 +515,7 @@ _G.vide_save_settings = function()
     state.autocomplete = vim.g.vide_autocomplete_enabled ~= false
     state.autoindent = vim.o.autoindent
     state.nerd_fonts = vim.g.vide_nerd_fonts ~= false
+    state.zen_handoff = vim.g.vide_zen_handoff == true
     local f_w = io.open(path, "w")
     if f_w then f_w:write(vim.fn.json_encode(state)); f_w:close() end
 end
@@ -497,6 +572,11 @@ _G.vide_load_settings = function()
             else
                 vim.o.autoindent = true
             end
+            if state.zen_handoff ~= nil then
+                vim.g.vide_zen_handoff = state.zen_handoff
+            else
+                vim.g.vide_zen_handoff = false
+            end
             if state.theme then
                 vim.schedule(function() vim.cmd("colorscheme " .. state.theme) end)
             end
@@ -510,6 +590,7 @@ function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
     if vim.g.vide_autocomplete_enabled == nil then vim.g.vide_autocomplete_enabled = true end
+    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = false end
     local nerd_fonts = vim.g.vide_nerd_fonts ~= false
     local function get_toggle(is_on)
         if nerd_fonts then
@@ -531,6 +612,7 @@ function M.open()
         "  " .. get_toggle(is_zen) .. " Zen Mode                      [z]", 
         "  " .. get_toggle(is_ide) .. " IDE Mode                      [i]", 
         "  " .. get_toggle(is_normal) .. " Normal Mode                   [o]",
+        "  " .. get_toggle(vim.g.vide_zen_handoff) .. " Zen Handoff (Native Nvim)     [h]",
         "  " .. get_toggle(vim.o.clipboard:match("unnamedplus")) .. " System Clipboard              [c]",
         "  " .. get_toggle(vim.g.vide_autocomplete_enabled) .. " Autocomplete                 [a]",
         "  " .. get_toggle(vim.o.autoindent) .. " Autoindent                   [n]",
@@ -606,6 +688,14 @@ function M.open()
         require('vide_settings').open()
     end
     
+    local function toggle_zen_handoff()
+        vim.g.vide_zen_handoff = not vim.g.vide_zen_handoff
+        if _G.vide_save_settings then _G.vide_save_settings() end
+        vim.rpcnotify(1, "vide_settings_changed")
+        pcall(vim.api.nvim_win_close, win, true)
+        require('vide_settings').open()
+    end
+    
     local function set_theme()
         local theme = vim.api.nvim_get_current_line():match("([%w%-]+)%s+%[t%]")
         if theme then 
@@ -622,6 +712,7 @@ function M.open()
         elseif line:match("Zen Mode") then select_mode("zen")
         elseif line:match("IDE Mode") then select_mode("ide")
         elseif line:match("Normal Mode") then select_mode("normal")
+        elseif line:match("Zen Handoff") then toggle_zen_handoff()
         elseif line:match("System Clipboard") then toggle_clipboard()
         elseif line:match("Autocomplete") then toggle_autocomplete()
         elseif line:match("Autoindent") then toggle_autoindent()
@@ -636,6 +727,7 @@ function M.open()
     vim.keymap.set({'n', 'v', 'i'}, 'z', function() select_mode("zen") end, { buffer = buf, silent = true })
     vim.keymap.set({'n', 'v', 'i'}, 'i', function() select_mode("ide") end, { buffer = buf, silent = true })
     vim.keymap.set({'n', 'v', 'i'}, 'o', function() select_mode("normal") end, { buffer = buf, silent = true })
+    vim.keymap.set({'n', 'v', 'i'}, 'h', toggle_zen_handoff, { buffer = buf, silent = true })
     vim.keymap.set({'n', 'v', 'i'}, 'c', toggle_clipboard, { buffer = buf, silent = true })
     vim.keymap.set({'n', 'v', 'i'}, 'a', toggle_autocomplete, { buffer = buf, silent = true })
     vim.keymap.set({'n', 'v', 'i'}, 'n', toggle_autoindent, { buffer = buf, silent = true })
@@ -777,7 +869,7 @@ if vim.fn.argc() == 0 and not vim.g.vide_is_terminal then
 end
 
 -- Nmux42 Bindings
-vim.keymap.set("n", "<leader>e", "<cmd>Neotree toggle<cr>")
+vim.keymap.set("n", "<leader>e", "<cmd>Neotree toggle<cr>", { desc = "Toggle Neo-tree" })
 vim.keymap.set("v", "J", ":m '>+1<CR>gv=gv")
 vim.keymap.set("v", "K", ":m '<-2<CR>gv=gv")
 vim.keymap.set("n", "J", "mzJ`z")
@@ -787,7 +879,71 @@ vim.keymap.set("n", "n", "nzzzv")
 vim.keymap.set("n", "N", "Nzzzv")
 vim.keymap.set("x", "<leader>p", [["_dP]])
 vim.keymap.set({ "n", "v" }, "<leader>d", [["_d]])
+vim.keymap.set("i", "<C-c>", "<Esc>")
+vim.keymap.set("n", "<C-j>", "<cmd>cnext<CR>zz")
+vim.keymap.set("n", "<C-k>", "<cmd>cprev<CR>zz")
+vim.keymap.set("n", "Q", "<nop>")
+vim.keymap.set("n", "<leader>k", "<cmd>lnext<CR>zz")
+vim.keymap.set("n", "<leader>j", "<cmd>lprev<CR>zz")
+vim.keymap.set("n", "<leader>cc", "<cmd>!php-cs-fixer fix % --using-cache=no<cr>")
+vim.keymap.set("n", "<leader>s", [[:s/\<<C-r><C-w>\>//gI<Left><Left><Left>]])
+vim.keymap.set("n", "<leader>x", "<cmd>!chmod +x %<CR>", { silent = true })
+vim.keymap.set('n', '<leader>y', '<Plug>OSCYankOperator')
+vim.keymap.set('v', '<leader>y', '<Plug>OSCYankVisual')
+vim.keymap.set("n", "<leader>u", vim.cmd.UndotreeToggle)
+vim.keymap.set("n", "<leader>cl", ":cclose<CR>", { silent = true })
+vim.keymap.set("n", "<leader>co", ":copen<CR>", { silent = true })
+vim.keymap.set("n", "<leader>cn", ":cnext<CR>zz")
+vim.keymap.set("n", "<leader>cp", ":cprev<CR>zz")
+vim.keymap.set("n", "<leader>mm", "<cmd>make<CR>")
+vim.keymap.set("n", "<leader><leader>", function() vim.cmd("so") end)
+
+local function toggle_terminal(direction)
+    local term_win = nil
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.bo[buf].buftype == "terminal" then
+            term_win = win
+            break
+        end
+    end
+    if term_win then
+        pcall(vim.api.nvim_win_close, term_win, true)
+    else
+        local term_buf = nil
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.bo[buf].buftype == "terminal" then
+                local job_id = vim.b[buf].terminal_job_id
+                if job_id and vim.fn.jobwait({job_id}, 0)[1] == -2 then
+                    local visible = false
+                    for _, win in ipairs(vim.api.nvim_list_wins()) do
+                        if vim.api.nvim_win_get_buf(win) == buf then
+                            visible = true
+                            break
+                        end
+                    end
+                    if not visible then
+                        term_buf = buf
+                        break
+                    end
+                end
+            end
+        end
+        if term_buf and vim.api.nvim_buf_is_valid(term_buf) then
+            if direction == "bo" then vim.cmd("botright sbuf " .. term_buf) else vim.cmd("vert sbuf " .. term_buf) end
+        else
+            if direction == "bo" then vim.cmd("bo term") else vim.cmd("vert term") end
+        end
+        vim.cmd("startinsert")
+    end
+end
+vim.keymap.set("n", "<leader>ot", function() toggle_terminal("bo") end, { desc = "Toggle bottom terminal" })
+vim.keymap.set("n", "<leader>oT", function() toggle_terminal("vert") end, { desc = "Toggle vertical terminal" })
+vim.keymap.set("n", "<leader>db", "<cmd>Alpha<CR>", { desc = "Go back to dashboard menu" })
+
 vim.keymap.set("n", "<leader>th", "<cmd>lua require('vide_settings').open()<cr>")
+
+pcall(dofile, vim.fn.expand("~/.config/nmux42/plugin/vim_bindings.lua"))
 
 local telescope_timer = nil
 local prev_mt_rect = vim.NIL
@@ -1168,6 +1324,11 @@ local VIDE_KEYS = {
     "  <Space> j              Toggle Bottom Terminal Split",
     "  <Space> ?              Show Vide Quickstart Guide",
     "  <Space> ,              Open Settings",
+    "",
+    "  ── TTY & KEYBOARD NAVIGATION ───────────────────────────────────",
+    "  Ctrl+E                 Toggle and focus File Tree",
+    "  Ctrl+T                 Toggle and focus Terminal panel",
+    "  <Esc>                  Return focus to Editor from panels",
     "  <Alt> h/j/k/l          Navigate splits & WezTerm panes seamlessly",
     "",
     "  ── TELESCOPE & SEARCH ──────────────────────────────────────────",
@@ -1310,3 +1471,13 @@ end
         vim.api.nvim_create_user_command("HelpMenu", _G.open_help_menu, {})
         vim.keymap.set({ "n", "i", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
     
+function _G.OpenAITerminal(cmd)
+    vim.cmd("botright vsplit")
+    vim.cmd("wincmd L")
+    vim.cmd("enew")
+    local shell = vim.env.SHELL or "bash"
+    vim.fn.termopen(shell)
+    -- Send the command and enter
+    vim.fn.chansend(vim.b.terminal_job_id, cmd .. "\n")
+    vim.cmd("startinsert")
+end

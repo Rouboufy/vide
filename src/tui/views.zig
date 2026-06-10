@@ -19,6 +19,9 @@ fn drawText(ren: *Renderer, x: u16, y: u16, text: []const u8, fg: Color, bg: Col
 
 fn getHorizontalSeparator(vert: []const u8) []const u8 {
     if (std.mem.eql(u8, vert, "│")) return "─";
+    if (std.mem.eql(u8, vert, "▏")) return "▔";
+    if (std.mem.eql(u8, vert, "▍")) return "▀";
+    if (std.mem.eql(u8, vert, "")) return "━";
     if (std.mem.eql(u8, vert, "┃")) return "━";
     if (std.mem.eql(u8, vert, "║")) return "═";
     if (std.mem.eql(u8, vert, "┊")) return "┄";
@@ -103,7 +106,10 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
 
         // After rendering regular windows (pass 0), draw split separators in between them
         if (pass == 0 and a.editor_wins.items.len > 1) {
-            const sep_char = a.settings_widget.config.split_separator;
+            var sep_char = a.settings_widget.config.split_separator;
+            if (std.mem.eql(u8, sep_char, "│") and a.settings_widget.config.nerd_fonts) {
+                sep_char = "";
+            }
             const horiz_sep_char = getHorizontalSeparator(sep_char);
             
             for (a.editor_wins.items) |win| {
@@ -183,6 +189,12 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 a.git_panel.draw(a.ren, layout.file_tree, .{
                     .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
                     .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                });
+            } else if (a.activity_bar.active_idx == 3) {
+                a.ai_panel.draw(a.ren, layout.file_tree, .{
+                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .nerd_fonts = a.settings_widget.config.nerd_fonts,
                 });
             } else {
                 drawRect(a.ren, layout.file_tree, " ", t.fg_primary, t.bg_sidebar);

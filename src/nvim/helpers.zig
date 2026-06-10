@@ -173,6 +173,11 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
                     app.terminal_focus = true;
                     app.needs_resize = true;
                 }
+            } else if (std.mem.eql(u8, dir, "h")) {
+                if (app.show_file_tree) {
+                    app.sidebar_focus = true;
+                    app.needs_resize = true;
+                }
             }
         }
     } else if (std.mem.eql(u8, method, "vide_theme_changed") and params == .array and params.array.len > 0) {

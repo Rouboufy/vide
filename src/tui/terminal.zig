@@ -31,7 +31,7 @@ pub const TerminalWriter = struct {
                 const rc = posix.system.write(self.tty_fd, sub.ptr, sub.len);
                 const err = posix.errno(rc);
                 switch (err) {
-                    .SUCCESS => written += rc,
+                    .SUCCESS => written += @as(usize, @intCast(rc)),
                     .INTR => continue,
                     else => return error.WriteFailed,
                 }
@@ -49,8 +49,8 @@ pub const TerminalWriter = struct {
                     const err = posix.errno(rc);
                     switch (err) {
                         .SUCCESS => {
-                            slice_written += rc;
-                            total_written += rc;
+                            slice_written += @as(usize, @intCast(rc));
+                            total_written += @as(usize, @intCast(rc));
                         },
                         .INTR => continue,
                         else => return error.WriteFailed,
@@ -71,8 +71,8 @@ pub const TerminalWriter = struct {
                     const err = posix.errno(rc);
                     switch (err) {
                         .SUCCESS => {
-                            slice_written += rc;
-                            total_written += rc;
+                            slice_written += @as(usize, @intCast(rc));
+                            total_written += @as(usize, @intCast(rc));
                         },
                         .INTR => continue,
                         else => return error.WriteFailed,

@@ -39,6 +39,7 @@ pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
 pub const SettingsConfig = struct {
     clip: bool = true,
     zen: bool = false,
+    zen_handoff: bool = false,
     ide: bool = true,
     autocomplete: bool = true,
     autoindent: bool = true,
@@ -150,6 +151,12 @@ pub const SettingsWidget = struct {
     open_mason: bool = false,
     open_lazy: bool = false,
 
+    keyboard_focus: FocusMode = .tabs,
+    hover_row: usize = 0,
+    hover_dropdown_idx: usize = 0,
+
+    pub const FocusMode = enum { tabs, content, dropdown };
+
     pub const DropdownType = enum { none, theme, indent_size, indent_type, line_numbers, split_separator, mode };
 
     pub const supported_modes = [_][]const u8{ "normal", "ide" };
@@ -163,7 +170,7 @@ pub const SettingsWidget = struct {
     pub const supported_indents = [_]u8{ 2, 4, 8 };
     pub const supported_indent_types = [_][]const u8{ "spaces", "tabs" };
     pub const supported_line_nums = [_][]const u8{ "relative", "normal", "off" };
-    pub const supported_split_seps = [_][]const u8{ "│", "┃", "║", "┊", " " };
+    pub const supported_split_seps = [_][]const u8{ "│", "▏", "▍", "", "┃", "║", "┊", " " };
 
     pub const tabs = [_][]const u8{
         "General",
@@ -264,6 +271,9 @@ pub const SettingsWidget = struct {
             const fg = if (is_active) theme.fg_primary else theme.fg_secondary;
             if (is_active) {
                 ren.drawText(x + 1, tab_y, " ┃ ", theme.fg_accent, theme.bg_sidebar, true, false);
+                if (self.keyboard_focus == .tabs) {
+                    ren.drawText(x + 1, tab_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                }
             }
             ren.drawText(x + 4, tab_y, tab, fg, theme.bg_sidebar, is_active, false);
             tab_y += 2;
@@ -400,6 +410,12 @@ pub const SettingsWidget = struct {
             else => {},
         }
 
+        if (self.keyboard_focus == .content) {
+            const step = if (self.active_tab == 4) @as(u16, 1) else @as(u16, 2);
+            const row_y = content_y + 2 + @as(u16, @intCast(self.hover_row)) * step;
+            ren.drawText(content_x - 2, row_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+        }
+
         // Draw active dropdown if any
         if (self.active_dropdown != .none) {
             const drop_x = content_x + 10;
@@ -461,57 +477,63 @@ pub const SettingsWidget = struct {
             // Items
             var item_y = drop_y + 1;
             if (self.active_dropdown == .theme) {
-                for (supported_themes) |t| {
+                for (supported_themes, 0..) |t, idx| {
                     if (item_y >= screen_h) break;
                     const is_sel = std.mem.eql(u8, self.config.theme, t);
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, t}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .split_separator) {
-                for (supported_split_seps) |s| {
+                for (supported_split_seps, 0..) |s, idx| {
                     if (item_y >= screen_h) break;
                     const is_sel = std.mem.eql(u8, self.config.split_separator, s);
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, s}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .indent_size) {
-                for (supported_indents) |i| {
+                for (supported_indents, 0..) |i, idx| {
                     if (item_y >= screen_h) break;
                     const is_sel = (self.config.indent_size == i);
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{d}", .{prefix, i}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .indent_type) {
-                for (supported_indent_types) |t| {
+                for (supported_indent_types, 0..) |t, idx| {
                     if (item_y >= screen_h) break;
                     const is_sel = if (std.mem.eql(u8, t, "tabs")) self.config.use_tabs else !self.config.use_tabs;
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, t}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .line_numbers) {
-                for (supported_line_nums) |ln| {
+                for (supported_line_nums, 0..) |ln, idx| {
                     if (item_y >= screen_h) break;
                     const is_sel = std.mem.eql(u8, self.config.line_numbers, ln);
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, ln}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .mode) {
-                for (supported_modes) |m| {
+                for (supported_modes, 0..) |m, idx| {
                     if (item_y >= screen_h) break;
                     const is_sel = std.mem.eql(u8, self.config.mode, m);
                     const prefix = if (is_sel) " * " else "   ";
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, m}) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     item_y += 1;
                 }
             }
@@ -603,8 +625,47 @@ pub const SettingsWidget = struct {
                 self.active_dropdown = .none;
                 return true;
             }
+            const items_len = switch (self.active_dropdown) {
+                .theme => supported_themes.len,
+                .indent_size => supported_indents.len,
+                .indent_type => supported_indent_types.len,
+                .line_numbers => supported_line_nums.len,
+                .split_separator => supported_split_seps.len,
+                .mode => supported_modes.len,
+                .none => 0,
+            };
+            if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
+                if (self.hover_dropdown_idx < items_len - 1) self.hover_dropdown_idx += 1;
+                return true;
+            } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
+                if (self.hover_dropdown_idx > 0) self.hover_dropdown_idx -= 1;
+                return true;
+            } else if (std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
+                const idx = self.hover_dropdown_idx;
+                if (self.active_dropdown == .theme) {
+                    self.allocator.free(self.config.theme);
+                    self.config.theme = self.allocator.dupe(u8, supported_themes[idx]) catch self.config.theme;
+                } else if (self.active_dropdown == .split_separator) {
+                    self.allocator.free(self.config.split_separator);
+                    self.config.split_separator = self.allocator.dupe(u8, supported_split_seps[idx]) catch self.config.split_separator;
+                } else if (self.active_dropdown == .indent_size) {
+                    self.config.indent_size = supported_indents[idx];
+                } else if (self.active_dropdown == .indent_type) {
+                    self.config.use_tabs = std.mem.eql(u8, supported_indent_types[idx], "tabs");
+                } else if (self.active_dropdown == .line_numbers) {
+                    self.allocator.free(self.config.line_numbers);
+                    self.config.line_numbers = self.allocator.dupe(u8, supported_line_nums[idx]) catch self.config.line_numbers;
+                } else if (self.active_dropdown == .mode) {
+                    self.allocator.free(self.config.mode);
+                    self.config.mode = self.allocator.dupe(u8, supported_modes[idx]) catch self.config.mode;
+                }
+                self.has_unsaved_changes = true;
+                self.active_dropdown = .none;
+                return true;
+            }
             return false;
         }
+
         if (self.duplicate_warning) {
             if (std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "<Esc>")) {
                 self.duplicate_warning = false;
@@ -635,7 +696,6 @@ pub const SettingsWidget = struct {
 
             const duped = self.allocator.dupe(u8, key) catch key;
             if (idx == 0) {
-                // Not freeing strings to keep it simple unless we know they are dynamically allocated, but in this setup they are.
                 self.allocator.free(self.config.keybindings.toggle_terminal);
                 self.config.keybindings.toggle_terminal = duped;
             } else if (idx == 1) {
@@ -658,6 +718,71 @@ pub const SettingsWidget = struct {
             self.active_binding = null;
             self.has_unsaved_changes = true;
             return true;
+        }
+
+        if (self.keyboard_focus == .tabs) {
+            if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
+                if (self.active_tab < 4) {
+                    self.active_tab += 1;
+                    self.hover_row = 0;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
+                if (self.active_tab > 0) {
+                    self.active_tab -= 1;
+                    self.hover_row = 0;
+                }
+                return true;
+            } else if (std.mem.eql(u8, key, "l") or std.mem.eql(u8, key, "<Right>") or std.mem.eql(u8, key, "<CR>")) {
+                self.keyboard_focus = .content;
+                self.hover_row = 0;
+                return true;
+            }
+        } else if (self.keyboard_focus == .content) {
+            if (std.mem.eql(u8, key, "h") or std.mem.eql(u8, key, "<Left>") or std.mem.eql(u8, key, "<Esc>")) {
+                self.keyboard_focus = .tabs;
+                return true;
+            }
+            
+            const max_items: usize = switch (self.active_tab) {
+                0 => 4,
+                1 => 3,
+                2 => 4,
+                3 => 2,
+                4 => 6,
+                else => 0,
+            };
+
+            if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
+                if (self.hover_row < max_items - 1) self.hover_row += 1;
+                return true;
+            } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
+                if (self.hover_row > 0) self.hover_row -= 1;
+                return true;
+            } else if (std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
+                if (self.active_tab == 0) {
+                    if (self.hover_row == 0) self.config.clip = !self.config.clip;
+                    if (self.hover_row == 1) { self.active_dropdown = .mode; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 2) self.config.autocomplete = !self.config.autocomplete;
+                    if (self.hover_row == 3) self.config.autoindent = !self.config.autoindent;
+                } else if (self.active_tab == 1) {
+                    if (self.hover_row == 0) { self.active_dropdown = .theme; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 1) { self.active_dropdown = .split_separator; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 2) self.config.nerd_fonts = !self.config.nerd_fonts;
+                } else if (self.active_tab == 2) {
+                    if (self.hover_row == 0) { self.active_dropdown = .indent_type; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 1) { self.active_dropdown = .indent_size; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 2) self.config.wrap = !self.config.wrap;
+                    if (self.hover_row == 3) { self.active_dropdown = .line_numbers; self.hover_dropdown_idx = 0; }
+                } else if (self.active_tab == 3) {
+                    if (self.hover_row == 0) self.open_mason = true;
+                    if (self.hover_row == 1) self.open_lazy = true;
+                } else if (self.active_tab == 4) {
+                    self.active_binding = self.hover_row;
+                }
+                self.has_unsaved_changes = true;
+                return true;
+            }
         }
         
         if (std.mem.eql(u8, key, "<Esc>")) {

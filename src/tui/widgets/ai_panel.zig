@@ -3,7 +3,7 @@ const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const Rect = @import("../layout.zig").Rect;
 
-pub const SearchPanel = struct {
+pub const AiPanel = struct {
     allocator: std.mem.Allocator,
     hover_idx: ?usize = null,
     
@@ -14,30 +14,29 @@ pub const SearchPanel = struct {
     };
     
     pub const items = [_]Item{
-        .{ .label = "Find Files", .icon = " ", .cmd = "__CMD__:Telescope find_files" },
-        .{ .label = "Live Grep", .icon = "󰱽 ", .cmd = "__CMD__:Telescope live_grep" },
-        .{ .label = "Buffers", .icon = "󰈔 ", .cmd = "__CMD__:Telescope buffers" },
-        .{ .label = "Help Tags", .icon = "󰋖 ", .cmd = "__CMD__:Telescope help_tags" },
-        .{ .label = "Git Commits", .icon = "󰜘 ", .cmd = "__CMD__:Telescope git_commits" },
-        .{ .label = "Git Status", .icon = "󰊢 ", .cmd = "__CMD__:Telescope git_status" },
+        .{ .label = "Claude Code", .icon = "󰚩 ", .cmd = "__CMD__:lua OpenAITerminal('claude')" },
+        .{ .label = "Codex", .icon = "󰧑 ", .cmd = "__CMD__:lua OpenAITerminal('codex')" },
+        .{ .label = "Gemini", .icon = "󰢚 ", .cmd = "__CMD__:lua OpenAITerminal('gemini')" },
+        .{ .label = "OpenCode", .icon = "󰊤 ", .cmd = "__CMD__:lua OpenAITerminal('opencode')" },
+        .{ .label = "Copilot", .icon = " ", .cmd = "__CMD__:lua OpenAITerminal('copilot')" },
     };
 
-    pub fn init(allocator: std.mem.Allocator) SearchPanel {
-        return SearchPanel{
+    pub fn init(allocator: std.mem.Allocator) AiPanel {
+        return AiPanel{
             .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *SearchPanel) void {
+    pub fn deinit(self: *AiPanel) void {
         _ = self;
     }
 
-    pub fn draw(self: *SearchPanel, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
+    pub fn draw(self: *AiPanel, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
         // Draw background
         rend.drawRect(rect, " ", colors.fg_secondary, colors.bg_sidebar);
 
         // Header
-        const header_text = " SEARCH (TELESCOPE)";
+        const header_text = " AI ASSISTANTS";
         rend.drawText(rect.x, rect.y, header_text, colors.fg_primary, colors.bg_sidebar, true, false);
 
         var y: u16 = 2;
@@ -58,12 +57,11 @@ pub const SearchPanel = struct {
             }
 
             const icon_str = if (colors.nerd_fonts) item.icon else switch (idx) {
-                0 => "f ",
-                1 => "g ",
-                2 => "b ",
-                3 => "h ",
-                4 => "c ",
-                5 => "s ",
+                0 => "C ",
+                1 => "x ",
+                2 => "G ",
+                3 => "O ",
+                4 => "P ",
                 else => "  ",
             };
             rend.drawText(rect.x + 2, rect.y + y, icon_str, fg, bg, false, false);
@@ -84,7 +82,7 @@ pub const SearchPanel = struct {
         }
     }
 
-    pub fn handleMouse(self: *SearchPanel, mx: u16, my: u16, rect: Rect) ?[]const u8 {
+    pub fn handleMouse(self: *AiPanel, mx: u16, my: u16, rect: Rect) ?[]const u8 {
         if (mx < rect.x or mx >= rect.x + rect.w) {
             self.hover_idx = null;
             return null;
@@ -104,7 +102,7 @@ pub const SearchPanel = struct {
         return null;
     }
 
-    pub fn handleKey(self: *SearchPanel, key: []const u8) ?[]const u8 {
+    pub fn handleKey(self: *AiPanel, key: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
             if (self.hover_idx == null) {
                 self.hover_idx = 0;
@@ -112,14 +110,12 @@ pub const SearchPanel = struct {
                 self.hover_idx = self.hover_idx.? + 1;
             }
         } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
-            if (self.hover_idx == null) {
-                self.hover_idx = 0;
-            } else if (self.hover_idx.? > 0) {
+            if (self.hover_idx != null and self.hover_idx.? > 0) {
                 self.hover_idx = self.hover_idx.? - 1;
             }
-        } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "o")) {
-            if (self.hover_idx) |idx| {
-                return items[idx].cmd;
+        } else if (std.mem.eql(u8, key, "<Enter>")) {
+            if (self.hover_idx != null and self.hover_idx.? < items.len) {
+                return items[self.hover_idx.?].cmd;
             }
         }
         return null;
