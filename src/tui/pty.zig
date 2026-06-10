@@ -6,17 +6,14 @@ pub const Pty = struct {
     pid: usize,
 
     pub fn spawn(alloc: std.mem.Allocator, parent_envp: [:null]const ?[*:0]const u8) !Pty {
-        const master_fd = try posix.openat(posix.AT.FDCWD, "/dev/ptmx", .{ .ACCMODE = .RDWR, .NOCTTY = true }, 0);
+        const master_fd = try posix.posix_openpt(posix.O.RDWR | posix.O.NOCTTY);
         errdefer _ = posix.system.close(master_fd);
 
-        // Unlock the slave PTY - must pass a pointer to int(0), not a null pointer
-        var unlock: i32 = 0;
-        _ = posix.system.ioctl(master_fd, 0x40045431, @intFromPtr(&unlock));
-        var pty_num: u32 = 0;
-        _ = posix.system.ioctl(master_fd, 0x80045430, @intFromPtr(&pty_num));
+        try posix.grantpt(master_fd);
+        try posix.unlockpt(master_fd);
 
         var pts_name_buf: [64]u8 = undefined;
-        const pts_name = try std.fmt.bufPrintZ(&pts_name_buf, "/dev/pts/{d}", .{pty_num});
+        const pts_name = try posix.ptsname_r(master_fd, &pts_name_buf);
 
         // Build envp: inherit parent environment, but filter out terminal-specific vars
         // and override TERM
@@ -63,41 +60,43 @@ pub const Pty = struct {
         envp[idx] = "TERM=xterm-256color";
         idx += 1;
 
-        const pid = std.os.linux.fork();
+        const pid = posix.fork() catch {
+            _ = posix.system.close(master_fd);
+            return error.ForkFailed;
+        };
         if (pid == 0) {
             // --- Child process: only use raw syscalls, never 'try' ---
             _ = posix.system.close(master_fd);
 
             // Create a new session BEFORE opening the slave (so it becomes the controlling terminal)
-            _ = std.os.linux.setsid();
+            _ = posix.system.setsid();
 
             // Open slave PTY using raw syscall (no 'try' after fork)
-            const slave_rc = posix.system.openat(posix.AT.FDCWD, pts_name, .{ .ACCMODE = .RDWR }, 0);
+            const slave_rc = posix.system.openat(posix.AT.FDCWD, pts_name.ptr, .{ .ACCMODE = .RDWR }, 0);
             const slave_fd: i32 = @intCast(@as(isize, @bitCast(slave_rc)));
             if (slave_fd < 0) std.process.exit(1);
 
             // Set controlling terminal
-            _ = posix.system.ioctl(0, 0x540E, @as(usize, 0));
+            _ = posix.system.ioctl(slave_fd, posix.T.SCTTY, @as(usize, 0));
 
-            _ = std.os.linux.dup2(slave_fd, 0);
-            _ = std.os.linux.dup2(slave_fd, 1);
-            _ = std.os.linux.dup2(slave_fd, 2);
+            _ = posix.system.dup2(slave_fd, 0);
+            _ = posix.system.dup2(slave_fd, 1);
+            _ = posix.system.dup2(slave_fd, 2);
             if (slave_fd > 2) _ = posix.system.close(slave_fd);
 
             const argv = [_:null]?[*:0]const u8{ "/bin/bash", "--login", null };
-            _ = std.os.linux.execve(argv[0].?, &argv, envp.ptr);
+            _ = posix.system.execve(argv[0].?, &argv, envp.ptr);
             std.process.exit(1);
         }
 
         return Pty{
             .master_fd = master_fd,
-            .pid = pid,
+            .pid = @as(usize, @intCast(pid)),
         };
     }
 
     pub fn deinit(self: *Pty) void {
         _ = posix.system.close(self.master_fd);
-        var status: u32 = 0;
-        _ = std.os.linux.waitpid(@as(i32, @intCast(self.pid)), &status, 0);
+        _ = posix.waitpid(@as(posix.pid_t, @intCast(self.pid)), 0);
     }
 };
