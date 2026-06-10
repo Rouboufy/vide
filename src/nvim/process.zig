@@ -24,10 +24,12 @@ pub const NvimProcess = struct {
         const stdout = child.stdout orelse return error.StdoutPipeFailed;
 
 
-        const flags_in = std.posix.system.fcntl(stdin.handle, std.posix.F.GETFL, @as(usize, 0));
+        const flags_in_val = std.posix.system.fcntl(stdin.handle, std.posix.F.GETFL, @as(usize, 0));
+        const flags_in = @as(usize, @intCast(flags_in_val));
         _ = std.posix.system.fcntl(stdin.handle, std.posix.F.SETFL, flags_in | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))));
 
-        const flags_out = std.posix.system.fcntl(stdout.handle, std.posix.F.GETFL, @as(usize, 0));
+        const flags_out_val = std.posix.system.fcntl(stdout.handle, std.posix.F.GETFL, @as(usize, 0));
+        const flags_out = @as(usize, @intCast(flags_out_val));
         _ = std.posix.system.fcntl(stdout.handle, std.posix.F.SETFL, flags_out | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))));
 
         return NvimProcess{
