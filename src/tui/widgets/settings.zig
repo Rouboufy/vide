@@ -51,7 +51,7 @@ pub const SettingsConfig = struct {
     split_separator: []const u8 = "│",
     keybindings: Keybindings = .{},
     nerd_fonts: bool = true,
-    mode: []const u8 = "normal",
+    mode: []const u8 = "ide",
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !SettingsConfig {
         const path_z = try allocator.dupeZ(u8, path);
