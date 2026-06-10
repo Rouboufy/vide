@@ -81,6 +81,11 @@ Vide leverages the full capability of Neovim. Language Server Protocol (LSP), Tr
 
 **Linux:**
 ```bash
+curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash
+```
+
+**Linux (Latest Dev):**
+```bash
 curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/dev/setup.sh | bash
 ```
 
