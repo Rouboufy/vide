@@ -85,11 +85,21 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
 
         if [[ " ${MISSING_DEPS[*]} " =~ " zig " ]]; then
             echo -e "${BLUE}Installing Zig (master branch) manually...${NC}"
+            ARCH_NAME="$(uname -m)"
             if [ "$OS_NAME" = "Darwin" ]; then
-                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["aarch64-macos"]["tarball"])')
+                if [ "$ARCH_NAME" = "arm64" ]; then
+                    ZIG_ARCH="aarch64-macos"
+                else
+                    ZIG_ARCH="x86_64-macos"
+                fi
             else
-                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["x86_64-linux"]["tarball"])')
+                if [ "$ARCH_NAME" = "aarch64" ] || [ "$ARCH_NAME" = "arm64" ]; then
+                    ZIG_ARCH="aarch64-linux"
+                else
+                    ZIG_ARCH="x86_64-linux"
+                fi
             fi
+            ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c "import sys, json; print(json.load(sys.stdin)['master']['$ZIG_ARCH']['tarball'])")
             curl -fLo "/tmp/zig.tar.xz" "$ZIG_URL"
             sudo rm -rf /usr/local/zig
             sudo mkdir -p /usr/local/zig
