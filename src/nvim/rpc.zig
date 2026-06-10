@@ -228,7 +228,7 @@ pub const FdReader = struct {
             switch (err) {
                 .SUCCESS => {
                     if (rc == 0) return error.EndOfStream;
-                    self.tail = rc;
+                    self.tail = @as(usize, @intCast(rc));
                     return;
                 },
                 .INTR => continue,
