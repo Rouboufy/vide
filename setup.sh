@@ -129,10 +129,11 @@ if [ -d "$SCRIPT_DIR/config" ]; then
 else
     echo -e "${GREEN}Downloading Vide from GitHub...${NC}"
     REPO_DIR="$XDG_DATA_HOME/repo"
+    BRANCH="dev"
     if [ -d "$REPO_DIR" ]; then
-        cd "$REPO_DIR" && git pull --quiet
+        cd "$REPO_DIR" && git fetch origin && git checkout $BRANCH --quiet && git pull origin $BRANCH --quiet
     else
-        git clone --quiet https://github.com/Rouboufy/vide.git "$REPO_DIR"
+        git clone -b $BRANCH --quiet https://github.com/Rouboufy/vide.git "$REPO_DIR"
     fi
     SOURCE_DIR="$REPO_DIR"
 fi
