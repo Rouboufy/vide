@@ -54,7 +54,7 @@ pub const MasonWidget = struct {
     selected_tab: MasonTab = .lsp,
 
     // Search functionality
-    search_query: [64]u8 = [_]u8{0} ** 64,
+    search_query: [64]u8 = @splat(0),
     search_len: usize = 0,
     is_searching: bool = false,
 
@@ -101,7 +101,7 @@ pub const MasonWidget = struct {
                     if (item == .map) {
                         var pkg: MasonPackage = .{
                             .name = "",
-                            .tabs = std.EnumSet(MasonTab).initEmpty(),
+                            .tabs = std.EnumSet(MasonTab).empty,
                         };
                         for (item.map) |kv| {
                             if (kv.key == .string) {
@@ -142,7 +142,7 @@ pub const MasonWidget = struct {
     fn matchesSearch(self: *const MasonWidget, pkg: MasonPackage) bool {
         if (self.search_len == 0) return true;
         const query = self.search_query[0..self.search_len];
-        return std.ascii.indexOfIgnoreCase(pkg.name, query) != null;
+        return std.ascii.findIgnoreCase(pkg.name, query) != null;
     }
 
     fn ensureSelectionValid(self: *MasonWidget) void {
@@ -224,8 +224,8 @@ pub const MasonWidget = struct {
         // Tabs
         const tab_y = y + 2;
         var tx: u16 = x + 2;
-        inline for (std.meta.fields(MasonTab)) |f| {
-            const tab_enum = @as(MasonTab, @enumFromInt(f.value));
+        inline for (@typeInfo(MasonTab).@"enum".field_values) |val| {
+            const tab_enum = @as(MasonTab, @enumFromInt(val));
             const label = tab_enum.label();
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
@@ -342,8 +342,8 @@ pub const MasonWidget = struct {
                 const tab_y = y + 2;
                 if (m.row == tab_y) {
                     var tx: u16 = x + 2;
-                    inline for (std.meta.fields(MasonTab)) |f| {
-                        const tab_enum = @as(MasonTab, @enumFromInt(f.value));
+                    inline for (@typeInfo(MasonTab).@"enum".field_values) |val| {
+                        const tab_enum = @as(MasonTab, @enumFromInt(val));
                         const label_len = tab_enum.label().len;
                         if (m.col >= tx and m.col < tx + label_len) {
                             self.selected_tab = tab_enum;
