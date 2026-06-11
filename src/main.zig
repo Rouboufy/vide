@@ -226,11 +226,17 @@ fn runNvimSession(
     const attach_result = try rpc.call("nvim_ui_attach", attach_params);
     msgpack.freeValue(attach_result, alloc);
 
+    var term_opt_kvs = try alloc.alloc(Value.KV, 3);
+    defer alloc.free(term_opt_kvs);
+    term_opt_kvs[0] = .{ .key = .{ .string = "rgb" }, .value = .{ .bool = true } };
+    term_opt_kvs[1] = .{ .key = .{ .string = "ext_linegrid" }, .value = .{ .bool = true } };
+    term_opt_kvs[2] = .{ .key = .{ .string = "ext_multigrid" }, .value = .{ .bool = false } };
+
     var term_attach_params = try alloc.alloc(Value, 3);
     defer alloc.free(term_attach_params);
     term_attach_params[0] = .{ .integer = if (initial_layout.panel) |p| p.w else 80 };
     term_attach_params[1] = .{ .integer = if (initial_layout.panel) |p| (if (p.h > 0) @max(1, p.h - 1) else 1) else 7 };
-    term_attach_params[2] = .{ .map = opt_kvs };
+    term_attach_params[2] = .{ .map = term_opt_kvs };
     const term_attach_result = try rpc_term.call("nvim_ui_attach", term_attach_params);
     msgpack.freeValue(term_attach_result, alloc);
 

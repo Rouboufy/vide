@@ -22,13 +22,13 @@ pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseE
         .none => "none",
     };
     if (std.mem.eql(u8, button_str, "none")) return;
-    
+
     const action_str: []const u8 = switch (m.action) {
         .press => if (m.button == .wheel_up) "up" else if (m.button == .wheel_down) "down" else "press",
         .release => "release",
         .move => "drag",
     };
-    
+
     var p = alloc.alloc(Value, 6) catch return;
     p[0] = .{ .string = button_str };
     p[1] = .{ .string = action_str };
@@ -36,13 +36,13 @@ pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseE
     p[3] = .{ .integer = 0 }; // grid
     p[4] = .{ .integer = rel_row }; // row
     p[5] = .{ .integer = rel_col }; // col
-    
+
     rpc.notify("nvim_input_mouse", p) catch {};
     alloc.free(p);
 }
 
 pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) anyerror!void {
-    const rpc_ctx: *RpcContext = @alignCast(@ptrCast(ctx orelse return));
+    const rpc_ctx: *RpcContext = @ptrCast(@alignCast(ctx orelse return));
     const ui_state = rpc_ctx.ui_state;
     const app = rpc_ctx.app;
 
@@ -100,7 +100,7 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             app.settings_widget.allocator.free(old_cfg.keybindings.new_file);
             app.settings_widget.allocator.free(old_cfg.keybindings.find_file);
             app.settings_widget.allocator.free(old_cfg.keybindings.quit);
-            
+
             if (std.mem.eql(u8, app.settings_widget.config.mode, "zen")) {
                 app.mode = .zen;
             } else if (std.mem.eql(u8, app.settings_widget.config.mode, "ide")) {
@@ -216,12 +216,12 @@ pub fn openFile(rpc: *RpcClient, allocator: std.mem.Allocator, path: []const u8)
     var params = try allocator.alloc(Value, 2);
     defer allocator.free(params);
     params[0] = .{ .string = "local path = select(1, ...); while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('edit ' .. vim.fn.fnameescape(path))" };
-    
+
     var lua_args = try allocator.alloc(Value, 1);
     defer allocator.free(lua_args);
     lua_args[0] = .{ .string = path };
-    
+
     params[1] = .{ .array = lua_args };
-    
+
     try rpc.notify("nvim_exec_lua", params);
 }
