@@ -258,14 +258,6 @@ fn runNvimSession(
         cp[0] = .{ .string = "set shortmess+=I" };
         const r_sm = try rpc.call("nvim_command", cp);
         msgpack.freeValue(r_sm, alloc);
-
-        cp[0] = .{ .string = "terminal" };
-        const r2 = try rpc_term.call("nvim_command", cp);
-        msgpack.freeValue(r2, alloc);
-
-        cp[0] = .{ .string = "startinsert" };
-        const r3 = try rpc_term.call("nvim_command", cp);
-        msgpack.freeValue(r3, alloc);
     }
 
     var seq_buf: [4096]u8 = undefined;
@@ -297,6 +289,18 @@ fn runNvimSession(
             msgpack.freeValue(res, alloc);
         } else |_| {}
         alloc.free(params);
+    }
+
+    {
+        var cp = try alloc.alloc(Value, 1);
+        defer alloc.free(cp);
+        cp[0] = .{ .string = "terminal" };
+        const r2 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r2, alloc);
+
+        cp[0] = .{ .string = "startinsert" };
+        const r3 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r3, alloc);
     }
 
     if (initial_file) |f| {
