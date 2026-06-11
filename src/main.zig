@@ -353,7 +353,7 @@ fn runNvimSession(
         views.drawWorkspace(&app, layout);
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
-            if (alloc.dupeZ(u8, preview_path)) |p| {
+            if (alloc.dupeSentinel(u8, preview_path, 0)) |p| {
                 _ = std.os.linux.unlinkat(std.posix.AT.FDCWD, p, 0);
                 alloc.free(p);
             } else |_| {}

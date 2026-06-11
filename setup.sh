@@ -33,10 +33,11 @@ done
 if ! command -v zig &>/dev/null; then
     MISSING_DEPS+=("zig")
 else
-    ZIG_VER=$(zig version | cut -d. -f1,2)
-    if [[ "$ZIG_VER" == "0.14" || "$ZIG_VER" == "0.13" || "$ZIG_VER" == "0.12" || "$ZIG_VER" == "0.11" || "$ZIG_VER" == "0.10" || "$ZIG_VER" == "0.9" ]]; then
+    ZIG_VER=$(zig version | cut -d- -f1)
+    IFS='.' read -r major minor patch <<< "$ZIG_VER"
+    if [ "$major" -eq 0 ] && [ "$minor" -lt 15 ]; then
         MISSING_DEPS+=("zig")
-        echo -e "${YELLOW}Zig $ZIG_VER is too old (requires 0.15+). Will be upgraded.${NC}"
+        echo -e "${YELLOW}Zig $major.$minor is too old (requires 0.15+). Will be upgraded.${NC}"
         if command -v snap &>/dev/null; then sudo snap remove zig &>/dev/null || true; fi
     fi
 fi
@@ -149,6 +150,14 @@ ln -sfn "$SOURCE_DIR/config/vide-nvim" "$XDG_CONFIG_HOME/vide-nvim"
 
 ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$HOME/.local/bin/vide"
 chmod +x "$SOURCE_DIR/zig-out/bin/vide"
+
+# Link and set executable permissions for helper scripts
+for helper in vide-open vide-sidebar vide-activity-bar vide-search-fzf; do
+    if [ -f "$SOURCE_DIR/bin/$helper" ]; then
+        ln -sfn "$SOURCE_DIR/bin/$helper" "$HOME/.local/bin/$helper"
+        chmod +x "$SOURCE_DIR/bin/$helper"
+    fi
+done
 
 #  Check and install JetBrainsMono Nerd Font
 OS_NAME="$(uname -s)"

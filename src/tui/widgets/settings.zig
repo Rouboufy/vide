@@ -54,7 +54,7 @@ pub const SettingsConfig = struct {
     mode: []const u8 = "normal",
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !SettingsConfig {
-        const path_z = try allocator.dupeZ(u8, path);
+        const path_z = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(path_z);
         
         const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
@@ -117,7 +117,7 @@ pub const SettingsConfig = struct {
         defer arena.deinit();
         const alloc = arena.allocator();
         
-        const path_z = try alloc.dupeZ(u8, path);
+        const path_z = try alloc.dupeSentinel(u8, path, 0);
         const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
         defer _ = std.os.linux.close(fd);
 
