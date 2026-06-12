@@ -54,7 +54,7 @@ pub const SettingsConfig = struct {
     mode: []const u8 = "normal",
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !SettingsConfig {
-        const path_z = try allocator.dupeZ(u8, path);
+        const path_z = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(path_z);
         
         const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
@@ -117,7 +117,7 @@ pub const SettingsConfig = struct {
         defer arena.deinit();
         const alloc = arena.allocator();
         
-        const path_z = try alloc.dupeZ(u8, path);
+        const path_z = try alloc.dupeSentinel(u8, path, 0);
         const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
         defer _ = std.os.linux.close(fd);
 
@@ -162,7 +162,7 @@ pub const SettingsWidget = struct {
     pub const supported_modes = [_][]const u8{ "normal", "ide" };
 
     pub const supported_themes = [_][]const u8{
-        "vscode", "kanagawa", "tokyonight-night", "tokyonight-storm", "tokyonight-day", 
+        "vscode", "matteblack", "kanagawa", "tokyonight-night", "tokyonight-storm", "tokyonight-day", 
         "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato", "catppuccin-mocha",
         "gruvbox", "rose-pine", "rose-pine-moon", "rose-pine-dawn", "nord", "cyberdream"
     };
@@ -192,6 +192,7 @@ pub const SettingsWidget = struct {
             cfg.keybindings.new_file = allocator.dupe(u8, cfg.keybindings.new_file) catch cfg.keybindings.new_file;
             cfg.keybindings.find_file = allocator.dupe(u8, cfg.keybindings.find_file) catch cfg.keybindings.find_file;
             cfg.keybindings.quit = allocator.dupe(u8, cfg.keybindings.quit) catch cfg.keybindings.quit;
+            cfg.mode = allocator.dupe(u8, cfg.mode) catch cfg.mode;
             break :blk cfg;
         };
         return .{
@@ -824,6 +825,7 @@ pub const SettingsWidget = struct {
                             self.allocator.free(old_cfg.theme);
                             self.allocator.free(old_cfg.line_numbers);
                             self.allocator.free(old_cfg.split_separator);
+                            self.allocator.free(old_cfg.mode);
                             self.allocator.free(old_cfg.keybindings.toggle_terminal);
                             self.allocator.free(old_cfg.keybindings.toggle_explorer);
                             self.allocator.free(old_cfg.keybindings.toggle_zen);

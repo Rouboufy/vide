@@ -118,7 +118,7 @@ local VIDE_KEYS = {
     "  Leader key = <Space>",
     "",
     "  ── VIDE & WORKSPACE ────────────────────────────────────────────",
-    "  <Space> e              Toggle Left File Tree (Yazi/Neo-tree)",
+    "  <Space> e              Toggle File Explorer",
     "  <Space> m t            Toggle IDE / Zen Mode",
     "  <Space> j              Toggle Bottom Terminal Split",
     "  <Space> ?              Show Vide Quickstart Guide",
@@ -128,7 +128,7 @@ local VIDE_KEYS = {
     "  Ctrl+E                 Toggle and focus File Tree",
     "  Ctrl+T                 Toggle and focus Terminal panel",
     "  <Esc>                  Return focus to Editor from panels",
-    "  <Alt> h/j/k/l          Navigate splits & WezTerm panes seamlessly",
+    "  Alt + Arrow Keys       Resize panels",
     "",
     "  ── TELESCOPE & SEARCH ──────────────────────────────────────────",
     "  <Space> <Space>        Telescope: Show All Commands",
@@ -265,7 +265,7 @@ return {
         -- We bind to normal and visual mode as well. But wait, since vide forces insert mode,
         -- if the user hits <space> in insert mode it types a space. So we should create a user command.
         vim.api.nvim_create_user_command("HelpMenu", _G.open_help_menu, {})
-        vim.keymap.set({ "n", "i", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
+        vim.keymap.set({ "n", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
 
         -- Setup a persistent floating widget instead of statusline
         -- because vide's Zig core explicitly hides the statusline in IDE mode.

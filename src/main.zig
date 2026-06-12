@@ -211,11 +211,12 @@ fn runNvimSession(
 
     const initial_layout = Layout.compute(ren.width, ren.height, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
 
-    var opt_kvs = try alloc.alloc(Value.KV, 3);
+    var opt_kvs = try alloc.alloc(Value.KV, 4);
     defer alloc.free(opt_kvs);
     opt_kvs[0] = .{ .key = .{ .string = "rgb" }, .value = .{ .bool = true } };
     opt_kvs[1] = .{ .key = .{ .string = "ext_linegrid" }, .value = .{ .bool = true } };
     opt_kvs[2] = .{ .key = .{ .string = "ext_multigrid" }, .value = .{ .bool = true } };
+    opt_kvs[3] = .{ .key = .{ .string = "ext_hlstate" }, .value = .{ .bool = true } };
 
     var attach_params = try alloc.alloc(Value, 3);
     defer alloc.free(attach_params);
@@ -226,11 +227,17 @@ fn runNvimSession(
     const attach_result = try rpc.call("nvim_ui_attach", attach_params);
     msgpack.freeValue(attach_result, alloc);
 
+    var term_opt_kvs = try alloc.alloc(Value.KV, 3);
+    defer alloc.free(term_opt_kvs);
+    term_opt_kvs[0] = .{ .key = .{ .string = "rgb" }, .value = .{ .bool = true } };
+    term_opt_kvs[1] = .{ .key = .{ .string = "ext_linegrid" }, .value = .{ .bool = true } };
+    term_opt_kvs[2] = .{ .key = .{ .string = "ext_multigrid" }, .value = .{ .bool = false } };
+
     var term_attach_params = try alloc.alloc(Value, 3);
     defer alloc.free(term_attach_params);
     term_attach_params[0] = .{ .integer = if (initial_layout.panel) |p| p.w else 80 };
     term_attach_params[1] = .{ .integer = if (initial_layout.panel) |p| (if (p.h > 0) @max(1, p.h - 1) else 1) else 7 };
-    term_attach_params[2] = .{ .map = opt_kvs };
+    term_attach_params[2] = .{ .map = term_opt_kvs };
     const term_attach_result = try rpc_term.call("nvim_ui_attach", term_attach_params);
     msgpack.freeValue(term_attach_result, alloc);
 
@@ -258,14 +265,6 @@ fn runNvimSession(
         cp[0] = .{ .string = "set shortmess+=I" };
         const r_sm = try rpc.call("nvim_command", cp);
         msgpack.freeValue(r_sm, alloc);
-
-        cp[0] = .{ .string = "terminal" };
-        const r2 = try rpc_term.call("nvim_command", cp);
-        msgpack.freeValue(r2, alloc);
-
-        cp[0] = .{ .string = "startinsert" };
-        const r3 = try rpc_term.call("nvim_command", cp);
-        msgpack.freeValue(r3, alloc);
     }
 
     var seq_buf: [4096]u8 = undefined;
@@ -297,6 +296,18 @@ fn runNvimSession(
             msgpack.freeValue(res, alloc);
         } else |_| {}
         alloc.free(params);
+    }
+
+    {
+        var cp = try alloc.alloc(Value, 1);
+        defer alloc.free(cp);
+        cp[0] = .{ .string = "terminal" };
+        const r2 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r2, alloc);
+
+        cp[0] = .{ .string = "startinsert" };
+        const r3 = try rpc_term.call("nvim_command", cp);
+        msgpack.freeValue(r3, alloc);
     }
 
     if (initial_file) |f| {
@@ -345,15 +356,14 @@ fn runNvimSession(
 
         const nvim_alive = try nvim_helpers.processNvimEvents(rpc);
         if (!nvim_alive) {
-            if (app.quit_requested) return error.QuitApplication;
-            return;
+            return error.QuitApplication;
         }
         _ = try nvim_helpers.processNvimEvents(rpc_term);
 
         views.drawWorkspace(&app, layout);
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
-            if (alloc.dupeZ(u8, preview_path)) |p| {
+            if (alloc.dupeSentinel(u8, preview_path, 0)) |p| {
                 _ = std.os.linux.unlinkat(std.posix.AT.FDCWD, p, 0);
                 alloc.free(p);
             } else |_| {}
@@ -431,8 +441,7 @@ fn runNvimSession(
             if ((fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                 const alive = try nvim_helpers.processNvimEvents(rpc);
                 if (!alive) {
-                    if (app.quit_requested) return error.QuitApplication;
-                    return;
+                    return error.QuitApplication;
                 }
             }
             if ((fds[2].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
@@ -578,7 +587,6 @@ fn runNvimSession(
                 const event = try input.readEvent(term.tty_fd, &seq_buf, alloc);
                 switch (event) {
                     .key => |k| {
-                        if (k.raw.len == 1 and k.raw[0] == 0x03) return error.QuitApplication;
                         _ = try events.handleKey(&app, k, layout);
                     },
                     .paste => |p| {

@@ -82,13 +82,14 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 const sy_i = @as(i32, @intCast(layout.editor.y)) + fg.row + @as(i32, @intCast(gy));
                 if (sy_i < 0 or sy_i >= @as(i32, @intCast(layout.editor.y + layout.editor.h))) continue;
                 const sy = @as(u16, @intCast(sy_i));
+
                 var gx: u16 = 0;
                 while (gx < fg.width) : (gx += 1) {
                     const sx_i = @as(i32, @intCast(layout.editor.x)) + fg.col + @as(i32, @intCast(gx));
                     if (sx_i < 0 or sx_i >= @as(i32, @intCast(layout.editor.x + layout.editor.w))) continue;
                     const sx = @as(u16, @intCast(sx_i));
                     var cell = fg.cells[@as(usize, gy) * @as(usize, fg.width) + gx];
-                    if (std.meta.eql(cell.bg, a.ui_state.default_bg) or std.meta.activeTag(cell.bg) == .none) {
+                    if (std.meta.eql(cell.bg, a.ui_state.default_bg) or std.meta.eql(cell.bg, a.ui_state.normal_bg) or std.meta.eql(cell.bg, a.ui_state.cursorline_bg) or std.meta.eql(cell.bg, t.bg_editor) or std.meta.activeTag(cell.bg) == .none) {
                         cell.bg = t.bg_editor;
                     }
                     if (std.meta.eql(cell.fg, a.ui_state.default_fg) or std.meta.activeTag(cell.fg) == .none) {
