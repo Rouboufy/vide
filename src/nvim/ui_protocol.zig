@@ -81,6 +81,8 @@ pub const UiState = struct {
     toggle_zen_requested: bool = false,
     toggle_ide_requested: bool = false,
     theme_changed: bool = false,
+    cursorline_bg: Color = .none,
+    normal_bg: Color = .none,
 
     pub fn init(allocator: std.mem.Allocator) UiState {
         return .{
@@ -198,6 +200,33 @@ pub const UiState = struct {
                         }
                     }
                     try self.highlights.put(id, hl);
+                    if (arg.array.len >= 4) {
+                        const info = arg.array[3];
+                        if (info == .array) {
+                            for (info.array) |inf| {
+                                if (inf == .map) {
+                                    var is_cursorline = false;
+                                    var is_normal = false;
+                                    for (inf.map) |kv| {
+                                        if (kv.key == .string and (std.mem.eql(u8, kv.key.string, "ui_name") or std.mem.eql(u8, kv.key.string, "hi_name"))) {
+                                            if (kv.value == .string and std.mem.eql(u8, kv.value.string, "CursorLine")) {
+                                                is_cursorline = true;
+                                            }
+                                            if (kv.value == .string and std.mem.eql(u8, kv.value.string, "Normal")) {
+                                                is_normal = true;
+                                            }
+                                        }
+                                    }
+                                    if (is_cursorline) {
+                                        self.cursorline_bg = hl.bg;
+                                    }
+                                    if (is_normal) {
+                                        self.normal_bg = hl.bg;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } else if (std.mem.eql(u8, name, "grid_resize")) {
                 for (args) |arg| {

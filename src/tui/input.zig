@@ -162,10 +162,6 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
     }
     seq_buf[0] = first_byte;
 
-    if (first_byte == 0x03) { // Ctrl-C
-        return Event.quit;
-    }
-
     if (first_byte == 0x1b) { // Escape sequence indicator
         // Read remaining bytes
         seq_buf[0] = 0x1b;

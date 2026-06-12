@@ -162,7 +162,7 @@ pub const SettingsWidget = struct {
     pub const supported_modes = [_][]const u8{ "normal", "ide" };
 
     pub const supported_themes = [_][]const u8{
-        "vscode", "kanagawa", "tokyonight-night", "tokyonight-storm", "tokyonight-day", 
+        "vscode", "matteblack", "kanagawa", "tokyonight-night", "tokyonight-storm", "tokyonight-day", 
         "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato", "catppuccin-mocha",
         "gruvbox", "rose-pine", "rose-pine-moon", "rose-pine-dawn", "nord", "cyberdream"
     };
@@ -192,6 +192,7 @@ pub const SettingsWidget = struct {
             cfg.keybindings.new_file = allocator.dupe(u8, cfg.keybindings.new_file) catch cfg.keybindings.new_file;
             cfg.keybindings.find_file = allocator.dupe(u8, cfg.keybindings.find_file) catch cfg.keybindings.find_file;
             cfg.keybindings.quit = allocator.dupe(u8, cfg.keybindings.quit) catch cfg.keybindings.quit;
+            cfg.mode = allocator.dupe(u8, cfg.mode) catch cfg.mode;
             break :blk cfg;
         };
         return .{
@@ -824,6 +825,7 @@ pub const SettingsWidget = struct {
                             self.allocator.free(old_cfg.theme);
                             self.allocator.free(old_cfg.line_numbers);
                             self.allocator.free(old_cfg.split_separator);
+                            self.allocator.free(old_cfg.mode);
                             self.allocator.free(old_cfg.keybindings.toggle_terminal);
                             self.allocator.free(old_cfg.keybindings.toggle_explorer);
                             self.allocator.free(old_cfg.keybindings.toggle_zen);

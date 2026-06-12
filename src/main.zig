@@ -211,11 +211,12 @@ fn runNvimSession(
 
     const initial_layout = Layout.compute(ren.width, ren.height, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
 
-    var opt_kvs = try alloc.alloc(Value.KV, 3);
+    var opt_kvs = try alloc.alloc(Value.KV, 4);
     defer alloc.free(opt_kvs);
     opt_kvs[0] = .{ .key = .{ .string = "rgb" }, .value = .{ .bool = true } };
     opt_kvs[1] = .{ .key = .{ .string = "ext_linegrid" }, .value = .{ .bool = true } };
     opt_kvs[2] = .{ .key = .{ .string = "ext_multigrid" }, .value = .{ .bool = true } };
+    opt_kvs[3] = .{ .key = .{ .string = "ext_hlstate" }, .value = .{ .bool = true } };
 
     var attach_params = try alloc.alloc(Value, 3);
     defer alloc.free(attach_params);
@@ -355,8 +356,7 @@ fn runNvimSession(
 
         const nvim_alive = try nvim_helpers.processNvimEvents(rpc);
         if (!nvim_alive) {
-            if (app.quit_requested) return error.QuitApplication;
-            return;
+            return error.QuitApplication;
         }
         _ = try nvim_helpers.processNvimEvents(rpc_term);
 
@@ -441,8 +441,7 @@ fn runNvimSession(
             if ((fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                 const alive = try nvim_helpers.processNvimEvents(rpc);
                 if (!alive) {
-                    if (app.quit_requested) return error.QuitApplication;
-                    return;
+                    return error.QuitApplication;
                 }
             }
             if ((fds[2].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
@@ -588,7 +587,6 @@ fn runNvimSession(
                 const event = try input.readEvent(term.tty_fd, &seq_buf, alloc);
                 switch (event) {
                     .key => |k| {
-                        if (k.raw.len == 1 and k.raw[0] == 0x03) return error.QuitApplication;
                         _ = try events.handleKey(&app, k, layout);
                     },
                     .paste => |p| {

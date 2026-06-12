@@ -136,6 +136,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 const is_editing_keys = a.settings_widget.is_open and a.settings_widget.active_binding != null;
                 const kb = &a.settings_widget.config.keybindings;
                 if (is_editing_keys or
+                    std.mem.eql(u8, ctrl_name, "<C-c>") or
                     std.mem.eql(u8, ctrl_name, kb.toggle_terminal) or
                     std.mem.eql(u8, ctrl_name, kb.toggle_explorer) or
                     std.mem.eql(u8, ctrl_name, kb.toggle_zen) or
@@ -365,41 +366,29 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         a.active_tab = if (a.tabs.items.len > 0) a.tabs.items.len - 1 else 0;
         a.needs_resize = true;
 
-        var cmd_p = try a.allocator.alloc(Value, 1);
-        cmd_p[0] = .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('enew')" };
-        var params = try a.allocator.alloc(Value, 2);
-        defer a.allocator.free(params);
-        params[0] = cmd_p[0];
-        params[1] = .{ .array = &[_]Value{} };
-        if (a.rpc.call("nvim_exec_lua", params) catch null) |res| {
+        const cmd_p = [1]Value{ .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('enew')" } };
+        const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
+        if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
         }
-        a.allocator.free(cmd_p);
         return true;
     } else if (find_file) {
-        var cmd_p = try a.allocator.alloc(Value, 1);
-        cmd_p[0] = .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('Telescope find_files')" };
-        var params = try a.allocator.alloc(Value, 2);
-        defer a.allocator.free(params);
-        params[0] = cmd_p[0];
-        params[1] = .{ .array = &[_]Value{} };
-        if (a.rpc.call("nvim_exec_lua", params) catch null) |res| {
+        const cmd_p = [1]Value{ .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('Telescope find_files')" } };
+        const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
+        if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
         }
-        a.allocator.free(cmd_p);
         return true;
     } else if (quit) {
         a.quit_requested = true;
-        var cmd_p = try a.allocator.alloc(Value, 1);
-        cmd_p[0] = .{ .string = "vim.cmd('qa')" };
-        var params = try a.allocator.alloc(Value, 2);
-        defer a.allocator.free(params);
-        params[0] = cmd_p[0];
-        params[1] = .{ .array = &[_]Value{} };
-        if (a.rpc.call("nvim_exec_lua", params) catch null) |res| {
+        const cmd_p = [1]Value{ .{ .string = "vim.cmd('qa!')" } };
+        const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
+        if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
         }
-        a.allocator.free(cmd_p);
+        if (a.rpc_term.call("nvim_exec_lua", &params) catch null) |res| {
+            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+        }
         return true;
     }
 
@@ -422,6 +411,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     a.settings_widget.allocator.free(old_cfg.theme);
                     a.settings_widget.allocator.free(old_cfg.line_numbers);
                     a.settings_widget.allocator.free(old_cfg.split_separator);
+                    a.settings_widget.allocator.free(old_cfg.mode);
                     a.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
                     a.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
                     a.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
@@ -439,7 +429,11 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 return true;
             }
             if (a.show_file_tree and a.activity_bar.active_idx == 0) {
+                const was_dir = if (a.explorer.selected_idx) |idx| (idx < a.explorer.items.items.len and a.explorer.items.items[idx].is_dir) else false;
                 if (a.explorer.handleKey(nk, a.rpc) catch false) {
+                    if ((std.mem.eql(u8, nk, "<Enter>") or std.mem.eql(u8, nk, "o")) and !was_dir) {
+                        a.sidebar_focus = false;
+                    }
                     a.needs_resize = true;
                     return true;
                 }
@@ -778,6 +772,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     } else if (m.button == .left) {
                         if (a.explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
                             nvim_helpers.openFile(a.rpc, a.allocator, path) catch {};
+                            a.sidebar_focus = false;
                             if (a.tabs.items.len == 0) {
                                 const basename = std.fs.path.basename(path);
                                 a.tabs.append(.{
@@ -807,6 +802,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             defer a.allocator.free(cmd_p);
                             cmd_p[0] = .{ .string = actual_cmd };
                             a.rpc.notify("nvim_command", cmd_p) catch {};
+                            a.sidebar_focus = false;
                         }
                     }
                     a.needs_resize = true;
@@ -818,6 +814,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             a.needs_resize = true;
                         } else {
                             nvim_helpers.openFile(a.rpc, a.allocator, path) catch {};
+                            a.sidebar_focus = false;
                             if (a.tabs.items.len == 0) {
                                 const basename = std.fs.path.basename(path);
                                 a.tabs.append(.{
@@ -847,6 +844,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             defer a.allocator.free(cmd_p);
                             cmd_p[0] = .{ .string = actual_cmd };
                             a.rpc.notify("nvim_command", cmd_p) catch {};
+                            a.sidebar_focus = false;
                         }
                     }
                     a.needs_resize = true;
@@ -886,6 +884,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             a.settings_widget.allocator.free(old_cfg.theme);
                             a.settings_widget.allocator.free(old_cfg.line_numbers);
                             a.settings_widget.allocator.free(old_cfg.split_separator);
+                            a.settings_widget.allocator.free(old_cfg.mode);
                             a.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
                             a.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
                             a.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
