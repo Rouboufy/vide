@@ -1,3 +1,6 @@
+local site = vim.fn.stdpath("data") .. "/vide/site"
+vim.opt.rtp:prepend(site)
+
 local lazypath = vim.fn.stdpath("data") .. "/vide/lazy/lazy.nvim"
 if not vim.uv.fs_stat(lazypath) then
   vim.fn.system({
@@ -28,7 +31,12 @@ set.smartcase = true
 set.termguicolors = true
 set.background = "dark"
 set.signcolumn = "yes"
-set.cursorline = true
+set.cursorline = false
+vim.api.nvim_create_autocmd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
+  callback = function()
+    vim.wo.cursorline = false
+  end,
+})
 set.colorcolumn = "80"
 set.clipboard:append("unnamedplus")
 set.backspace = "indent,eol,start"
@@ -257,70 +265,33 @@ require("lazy").setup({
         config = true,
     },
     {
-        "hrsh7th/nvim-cmp",
+        "saghen/blink.cmp",
         lazy = false,
         cond = not vim.g.vide_is_terminal,
-        dependencies = {
-            "hrsh7th/cmp-nvim-lsp",
-            "hrsh7th/cmp-buffer",
-            "hrsh7th/cmp-path",
-            "L3MON4D3/LuaSnip",
-            "saadparwaiz1/cmp_luasnip",
-        },
+        dependencies = "rafamadriz/friendly-snippets",
+        version = "*",
         config = function()
-            local cmp = require("cmp")
-            local luasnip = require("luasnip")
-
-            cmp.setup({
+            require("blink.cmp").setup({
+                keymap = {
+                    preset = "none",
+                    ["<C-space>"] = { "show", "show_documentation", "hide_documentation" },
+                    ["<C-e>"] = { "hide" },
+                    ["<CR>"] = { "accept", "fallback" },
+                    ["<Tab>"] = { "select_next", "snippet_forward", "fallback" },
+                    ["<S-Tab>"] = { "select_prev", "snippet_backward", "fallback" },
+                    ["<C-b>"] = { "scroll_documentation_up", "fallback" },
+                    ["<C-f>"] = { "scroll_documentation_down", "fallback" },
+                },
+                appearance = {
+                    use_nvim_cmp_as_default = true,
+                    nerd_font_variant = "mono",
+                },
+                sources = {
+                    default = { "lsp", "path", "snippets", "buffer" },
+                },
                 enabled = function()
                     return vim.g.vide_autocomplete_enabled ~= false
                 end,
-                window = {
-                    completion = cmp.config.window.bordered(),
-                    documentation = false,
-                },
-
-                performance = {
-                    max_view_entries = 12,
-                },
-
-                snippet = {
-                    expand = function(args)
-                        luasnip.lsp_expand(args.body)
-                    end,
-                },
-                mapping = cmp.mapping.preset.insert({
-                    ["<C-b>"] = cmp.mapping.scroll_docs(-4),
-                    ["<C-f>"] = cmp.mapping.scroll_docs(4),
-                    ["<C-Space>"] = cmp.mapping.complete(),
-                    ["<C-e>"] = cmp.mapping.abort(),
-                    ["<CR>"] = cmp.mapping.confirm({ select = true }),
-                    ["<Tab>"] = cmp.mapping(function(fallback)
-                        if cmp.visible() then
-                            cmp.select_next_item()
-                        elseif luasnip.expand_or_locally_jumpable() then
-                            luasnip.expand_or_jump()
-                        else
-                            fallback()
-                        end
-                    end, { "i", "s" }),
-                    ["<S-Tab>"] = cmp.mapping(function(fallback)
-                        if cmp.visible() then
-                            cmp.select_prev_item()
-                        elseif luasnip.locally_jumpable(-1) then
-                            luasnip.jump(-1)
-                        else
-                            fallback()
-                        end
-                    end, { "i", "s" }),
-                }),
-                sources = cmp.config.sources({
-                    { name = "nvim_lsp", max_item_count = 15 },
-                    { name = "luasnip", max_item_count = 5 },
-                    { name = "path", max_item_count = 5 },
-                }, {
-                    { name = "buffer", max_item_count = 5 },
-                }),
             })
         end,
     },
@@ -331,11 +302,10 @@ require("lazy").setup({
         dependencies = {
             "williamboman/mason.nvim",
             "williamboman/mason-lspconfig.nvim",
-            "hrsh7th/cmp-nvim-lsp",
+            "saghen/blink.cmp",
         },
         config = function()
             local mason_lspconfig = require("mason-lspconfig")
-            local cmp_nvim_lsp = require("cmp_nvim_lsp")
 
             local mason_bin = vim.fn.expand("~/.local/share/nvim/mason/bin")
             if vim.fn.isdirectory(mason_bin) == 1 then
@@ -348,7 +318,7 @@ require("lazy").setup({
                 })
             end)
 
-            local capabilities = cmp_nvim_lsp.default_capabilities()
+            local capabilities = require("blink.cmp").get_lsp_capabilities()
 
             -- Apply completion capabilities + broad root_markers to all servers.
             -- root_markers is how Neovim 0.12 native LSP determines the project root.
@@ -410,17 +380,6 @@ require("lazy").setup({
                 once = false,
                 callback = enable_all,
             })
-
-            -- Trigger cmp-nvim-lsp registration on LspAttach, since Vide stays in insert mode
-            vim.api.nvim_create_autocmd("LspAttach", {
-                group = vim.api.nvim_create_augroup("VideCmpLspAttach", { clear = true }),
-                callback = function()
-                    local ok, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
-                    if ok and cmp_nvim_lsp._on_insert_enter then
-                        cmp_nvim_lsp._on_insert_enter()
-                    end
-                end,
-            })
         end,
 
     },
@@ -444,6 +403,7 @@ require("lazy").setup({
     { "rose-pine/neovim", name = "rose-pine", lazy = true },
     { "rebelot/kanagawa.nvim", lazy = true },
     { "EdenEast/nightfox.nvim", lazy = true },
+    { "tahayvr/matteblack.nvim", lazy = true },
 }, {
     root = vim.fn.stdpath("data") .. "/vide/lazy",
     lockfile = vim.fn.stdpath("data") .. "/vide/lazy-lock.json",
@@ -585,7 +545,7 @@ _G.vide_load_settings = function()
 end
 
 local M = {}
-local themes = { "vscode", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
+local themes = { "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
 function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
@@ -788,7 +748,7 @@ function M.sync_theme()
         bg_tab_inactive = get_contrast(bg_editor, 15)
     end
     
-    local bg_accent = get_color("Function", "fg") or get_color("Statement", "fg") or "#007acc"
+    local bg_accent = get_color("VideAccent", "fg") or get_color("Function", "fg") or get_color("Statement", "fg") or "#007acc"
     
     local fg_statusbar = "#ffffff"
     do
@@ -850,7 +810,81 @@ end
 package.loaded["vide_settings"] = M
 
 vim.api.nvim_create_autocmd("ColorScheme", {
-    callback = function() require("vide_settings").sync_theme() end,
+    callback = function()
+        if vim.g.colors_name == "matteblack" then
+            local highlights = {
+                Normal = { fg = "#dcdcdc", bg = "#080808" },
+                NormalNC = { fg = "#777777", bg = "#080808" },
+                Comment = { fg = "#4a4a4a", italic = true },
+                Constant = { fg = "#ffaa66" },
+                String = { fg = "#b8b8b8" },
+                Character = { fg = "#b8b8b8" },
+                Number = { fg = "#ffb86c" },
+                Boolean = { fg = "#ffb86c" },
+                Float = { fg = "#ffb86c" },
+                Identifier = { fg = "#dcdcdc" },
+                Function = { fg = "#eeeeee" },
+                Statement = { fg = "#ff7300", bold = true },
+                Conditional = { fg = "#ff7300", bold = true },
+                Repeat = { fg = "#ff7300", bold = true },
+                Label = { fg = "#ff7300", bold = true },
+                Operator = { fg = "#a0a0a0" },
+                Keyword = { fg = "#ff7300", bold = true },
+                Exception = { fg = "#ff3333", bold = true },
+                PreProc = { fg = "#888888" },
+                Type = { fg = "#ffffff", bold = true },
+                StorageClass = { fg = "#ffffff", bold = true },
+                Structure = { fg = "#ffffff", bold = true },
+                Typedef = { fg = "#ffffff", bold = true },
+                Special = { fg = "#ffaa66" },
+                Underlined = { underline = true },
+                Error = { fg = "#ff3333", bg = "NONE", bold = true },
+                Todo = { fg = "#080808", bg = "#ff7300", bold = true },
+                
+                CursorLine = { bg = "#141414" },
+                CursorColumn = { bg = "#141414" },
+                LineNr = { fg = "#3a3a3a", bg = "#080808" },
+                CursorLineNr = { fg = "#ff7300", bg = "#141414", bold = true },
+                SignColumn = { bg = "#080808" },
+                FoldColumn = { bg = "#080808" },
+                Folded = { fg = "#666666", bg = "#141414" },
+                WinSeparator = { fg = "#1a1a1a", bg = "#080808" },
+                VertSplit = { fg = "#1a1a1a", bg = "#080808" },
+                
+                Visual = { bg = "#2d1b0d" },
+                Search = { fg = "#080808", bg = "#ff7300" },
+                IncSearch = { fg = "#080808", bg = "#ffaa66" },
+                
+                Pmenu = { fg = "#dcdcdc", bg = "#141414" },
+                PmenuSel = { fg = "#080808", bg = "#ff7300" },
+                PmenuSbar = { bg = "#1a1a1a" },
+                PmenuThumb = { bg = "#333333" },
+                
+                StatusLine = { fg = "#080808", bg = "#ff7300" },
+                StatusLineNC = { fg = "#777777", bg = "#141414" },
+                TabLine = { fg = "#777777", bg = "#141414" },
+                TabLineSel = { fg = "#ff7300", bg = "#080808", bold = true },
+                TabLineFill = { bg = "#141414" },
+                
+                ["@comment"] = { fg = "#4a4a4a", italic = true },
+                ["@function"] = { fg = "#eeeeee" },
+                ["@keyword"] = { fg = "#ff7300", bold = true },
+                ["@string"] = { fg = "#b8b8b8" },
+                ["@type"] = { fg = "#ffffff", bold = true },
+                ["@variable"] = { fg = "#dcdcdc" },
+
+                NeoTreeNormal = { fg = "#777777", bg = "#0c0c0c" },
+                NeoTreeNormalNC = { fg = "#777777", bg = "#0c0c0c" },
+                NeoTreeWinSeparator = { fg = "#1a1a1a", bg = "#0c0c0c" },
+
+                VideAccent = { fg = "#ff7300" },
+            }
+            for group, opts in pairs(highlights) do
+                vim.api.nvim_set_hl(0, group, opts)
+            end
+        end
+        require("vide_settings").sync_theme()
+    end,
 })
 vim.schedule(function() pcall(function() require("vide_settings").sync_theme() end) end)
 
@@ -1319,7 +1353,7 @@ local VIDE_KEYS = {
     "  Leader key = <Space>",
     "",
     "  ── VIDE & WORKSPACE ────────────────────────────────────────────",
-    "  <Space> e              Toggle Left File Tree (Yazi/Neo-tree)",
+    "  <Space> e              Toggle File Explorer",
     "  <Space> m t            Toggle IDE / Zen Mode",
     "  <Space> j              Toggle Bottom Terminal Split",
     "  <Space> ?              Show Vide Quickstart Guide",
@@ -1329,7 +1363,7 @@ local VIDE_KEYS = {
     "  Ctrl+E                 Toggle and focus File Tree",
     "  Ctrl+T                 Toggle and focus Terminal panel",
     "  <Esc>                  Return focus to Editor from panels",
-    "  <Alt> h/j/k/l          Navigate splits & WezTerm panes seamlessly",
+    "  Alt + Arrow Keys       Resize panels",
     "",
     "  ── TELESCOPE & SEARCH ──────────────────────────────────────────",
     "  <Space> <Space>        Telescope: Show All Commands",
@@ -1469,7 +1503,7 @@ end
         -- We bind to normal and visual mode as well. But wait, since vide forces insert mode,
         -- if the user hits <space> in insert mode it types a space. So we should create a user command.
         vim.api.nvim_create_user_command("HelpMenu", _G.open_help_menu, {})
-        vim.keymap.set({ "n", "i", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
+        vim.keymap.set({ "n", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
     
 function _G.OpenAITerminal(cmd)
     vim.cmd("botright vsplit")
