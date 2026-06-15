@@ -187,6 +187,7 @@ pub const MasonWidget = struct {
 
     pub fn draw(self: *const MasonWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
         if (!self.is_open) return;
+        if (screen_w < 40 or screen_h < 15) return;
 
         const w: u16 = @min(84, screen_w -| 4);
         const h: u16 = @min(30, screen_h -| 4);
