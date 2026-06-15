@@ -30,6 +30,7 @@ pub const WinInfo = struct {
     width: u16,
     height: u16,
     active: bool = false,
+    name: []const u8 = "",
 };
 
 pub const TabInfo = struct {
