@@ -496,23 +496,37 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         }
     }
 
-    // Draw close buttons on each active split window if there are multiple splits
+    // Draw filename title bars and close buttons on each split window if there are multiple splits
     if (a.editor_wins.items.len > 1) {
         for (a.editor_wins.items) |win| {
             if (win.width > 4 and win.height > 1) {
-                const w_gx = win.col + win.width - 2;
-                const w_gy = win.row;
-                var cell = Cell{
-                    .char = [_]u8{ 226, 156, 150, 0 }, .len = 3, // '✖' is \u{2716} which is 3-bytes: [226, 156, 150]
-                    .fg = if (win.active) Color{ .rgb = .{ .r = 255, .g = 80, .b = 80 } } else t.fg_secondary,
-                    .bg = t.bg_editor,
-                };
-                if (w_gy < a.ui_state.grid.height and w_gx < a.ui_state.grid.width) {
-                    const orig = a.ui_state.grid.cells[@as(usize, w_gy) * @as(usize, a.ui_state.grid.width) + w_gx];
-                    if (std.meta.activeTag(orig.bg) != .none) {
-                        cell.bg = orig.bg;
+                const win_sx = layout.editor.x + win.col;
+                const win_sy = layout.editor.y + win.row;
+
+                // Draw filename title bar across the top of this pane
+                if (win_sy < a.ren.height) {
+                    const title_bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive;
+                    const title_fg = if (win.active) t.fg_primary else t.fg_secondary;
+                    // Fill the title row background
+                    drawRect(a.ren, Rect{ .x = win_sx, .y = win_sy, .w = win.width, .h = 1 }, " ", title_fg, title_bg);
+                    // Draw the filename centered in the title bar
+                    const name = if (win.name.len > 0) win.name else "[No Name]";
+                    const name_len = @as(u16, @intCast(@min(name.len, win.width -| 4)));
+                    const padding = (win.width -| name_len) / 2;
+                    const title_x = win_sx + padding;
+                    if (title_x < win_sx + win.width) {
+                        drawText(a.ren, title_x, win_sy, name[0..name_len], title_fg, title_bg, win.active, false);
                     }
                 }
+
+                // Draw close button (top-right corner of pane, over the title bar)
+                const w_gx = win.col + win.width - 2;
+                const w_gy = win.row;
+                const cell = Cell{
+                    .char = [_]u8{ 226, 156, 150, 0 }, .len = 3, // '✖'
+                    .fg = if (win.active) Color{ .rgb = .{ .r = 255, .g = 80, .b = 80 } } else t.fg_secondary,
+                    .bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive,
+                };
                 if (layout.editor.x + w_gx < a.ren.width and layout.editor.y + w_gy < a.ren.height) {
                     a.ren.setCell(layout.editor.x + w_gx, layout.editor.y + w_gy, cell);
                 }

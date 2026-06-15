@@ -125,12 +125,16 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
         }
     } else if (std.mem.eql(u8, method, "vide_win_positions") and params == .array and params.array.len > 0) {
         const wins = if (ui_state == app.ui_state) &app.editor_wins else &app.terminal_wins;
+        // Free old name strings before clearing
+        for (wins.items) |old_win| {
+            if (old_win.name.len > 0) app.allocator.free(old_win.name);
+        }
         wins.clearRetainingCapacity();
         const list_val = params.array[0];
         if (list_val == .array) {
             for (list_val.array) |w_val| {
                 if (w_val == .map) {
-                    var info = WinInfo{ .id = 0, .row = 0, .col = 0, .width = 0, .height = 0, .active = false };
+                    var info = WinInfo{ .id = 0, .row = 0, .col = 0, .width = 0, .height = 0, .active = false, .name = "" };
                     for (w_val.map) |kv| {
                         if (kv.key == .string) {
                             const key = kv.key.string;
@@ -146,6 +150,8 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
                                 info.height = @as(u16, @intCast(kv.value.integer));
                             } else if (std.mem.eql(u8, key, "active") and kv.value == .bool) {
                                 info.active = kv.value.bool;
+                            } else if (std.mem.eql(u8, key, "name") and kv.value == .string) {
+                                info.name = app.allocator.dupe(u8, kv.value.string) catch "";
                             }
                         }
                     }
