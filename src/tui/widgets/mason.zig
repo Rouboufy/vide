@@ -1,7 +1,6 @@
 const std = @import("std");
 const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
-const Cell = renderer.Cell;
 const msgpack = @import("../../nvim/msgpack.zig");
 const Value = msgpack.Value;
 const rpc_mod = @import("../../nvim/rpc.zig");
