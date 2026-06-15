@@ -9,9 +9,19 @@ const settings = @import("widgets/settings.zig");
 
 fn writeHandoffInit(content: []const u8) void {
     const path = "/tmp/vide_handoff_init.lua";
-    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644) catch return;
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600) catch return;
     defer _ = std.posix.system.close(fd);
-    _ = std.posix.system.write(fd, content.ptr, content.len);
+
+    var written: usize = 0;
+    while (written < content.len) {
+        const sub = content[written..];
+        const rc = std.posix.system.write(fd, sub.ptr, sub.len);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => written += @as(usize, @intCast(rc)),
+            .INTR => continue,
+            else => return,
+        }
+    }
 }
 
 pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
