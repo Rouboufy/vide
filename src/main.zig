@@ -97,7 +97,14 @@ fn innerMain(init: std.process.Init) !void {
             if (err == error.QuitApplication) break :app_loop;
             if (err == error.ZenModeHandoff) {
                 term.deinit();
-                const argv = [_][]const u8{ "nvim", "-S", "/tmp/vide_session.vim", "-c", "nnoremap <silent> <leader><C-a> :wa<CR>:mksession! /tmp/vide_session.vim<CR>:qa<CR>" };
+                // Launch nvim with --clean + our handoff init (same plugins as vide)
+                // and restore the saved session
+                const argv = [_][]const u8{
+                    "nvim",
+                    "--clean",
+                    "--cmd", "luafile /tmp/vide_handoff_init.lua",
+                    "-S", "/tmp/vide_session.vim",
+                };
                 if (std.process.spawn(init.io, .{ .argv = &argv, .stdin = .inherit, .stdout = .inherit, .stderr = .inherit })) |c| {
                     var child = c;
                     _ = child.wait(init.io) catch {};
@@ -455,12 +462,28 @@ fn runNvimSession(
             if (ui_state.toggle_zen_requested) {
                 ui_state.toggle_zen_requested = false;
                 if (app.settings_widget.config.zen_handoff) {
-                    var wa_cmd = [_]Value{.{ .string = "wa" }};
+                    var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
                     _ = rpc.call("nvim_command", &wa_cmd) catch {};
-                    
+
                     var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
                     _ = rpc.call("nvim_command", &mks_cmd) catch {};
-                    
+
+                    // Write handoff init with same plugins + retoggle keybind
+                    const zen_key = app.settings_widget.config.keybindings.toggle_zen;
+                    const vide_init_lua = @embedFile("nvim/vide_init.lua");
+                    const handoff_buf = try alloc.alloc(u8, vide_init_lua.len + 512);
+                    defer alloc.free(handoff_buf);
+                    const handoff_script = std.fmt.bufPrint(handoff_buf,
+                        "-- vide handoff\n{s}\nvim.schedule(function()\n" ++
+                        "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! /tmp/vide_session.vim') vim.cmd('qa') end\n" ++
+                        "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true}})\nend)\n",
+                        .{ vide_init_lua, zen_key }) catch vide_init_lua;
+                    const path = "/tmp/vide_handoff_init.lua";
+                    if (std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644)) |fd| {
+                        defer _ = std.posix.system.close(fd);
+                        _ = std.posix.system.write(fd, handoff_script.ptr, handoff_script.len);
+                    } else |_| {}
+
                     return error.ZenModeHandoff;
                 } else {
                     app.mode = .zen;
