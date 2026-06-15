@@ -479,9 +479,19 @@ fn runNvimSession(
                         "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true}})\nend)\n",
                         .{ vide_init_lua, zen_key }) catch vide_init_lua;
                     const path = "/tmp/vide_handoff_init.lua";
-                    if (std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644)) |fd| {
+                    if (std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600)) |fd| {
                         defer _ = std.posix.system.close(fd);
-                        _ = std.posix.system.write(fd, handoff_script.ptr, handoff_script.len);
+
+                        var written: usize = 0;
+                        while (written < handoff_script.len) {
+                            const sub = handoff_script[written..];
+                            const rc = std.posix.system.write(fd, sub.ptr, sub.len);
+                            switch (std.posix.errno(rc)) {
+                                .SUCCESS => written += @as(usize, @intCast(rc)),
+                                .INTR => continue,
+                                else => break,
+                            }
+                        }
                     } else |_| {}
 
                     return error.ZenModeHandoff;
