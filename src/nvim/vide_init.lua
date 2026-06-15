@@ -535,7 +535,7 @@ _G.vide_load_settings = function()
             if state.zen_handoff ~= nil then
                 vim.g.vide_zen_handoff = state.zen_handoff
             else
-                vim.g.vide_zen_handoff = false
+                vim.g.vide_zen_handoff = true
             end
             if state.theme then
                 vim.schedule(function() vim.cmd("colorscheme " .. state.theme) end)
@@ -550,7 +550,7 @@ function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
     if vim.g.vide_autocomplete_enabled == nil then vim.g.vide_autocomplete_enabled = true end
-    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = false end
+    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = true end
     local nerd_fonts = vim.g.vide_nerd_fonts ~= false
     local function get_toggle(is_on)
         if nerd_fonts then
@@ -1132,13 +1132,18 @@ local function notify_win_positions()
                 local pos = vim.api.nvim_win_get_position(w) -- [row, col]
                 local width = vim.api.nvim_win_get_width(w)
                 local height = vim.api.nvim_win_get_height(w)
+                local buf = vim.api.nvim_win_get_buf(w)
+                local buf_name = vim.api.nvim_buf_get_name(buf)
+                local short_name = vim.fn.fnamemodify(buf_name, ":t")
+                if short_name == "" then short_name = "[No Name]" end
                 table.insert(win_list, {
                     id = w,
                     row = pos[1],
                     col = pos[2],
                     width = width,
                     height = height,
-                    active = (w == cur_win)
+                    active = (w == cur_win),
+                    name = short_name
                 })
             end
         end

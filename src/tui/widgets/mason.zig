@@ -37,10 +37,17 @@ pub const MasonTab = enum {
     }
 };
 
+pub const InstallStatus = enum {
+    idle,
+    installing,
+    success,
+    err,
+};
+
 pub const MasonPackage = struct {
     name: []const u8,
     is_installed: bool = false,
-    target_is_installed: bool = false,
+    selected: bool = false, // user's desired state
     tabs: std.EnumSet(MasonTab),
 };
 
@@ -50,13 +57,18 @@ pub const MasonWidget = struct {
     arena: std.heap.ArenaAllocator,
     packages: std.array_list.Managed(MasonPackage),
     scroll_offset: usize = 0,
-    selected_idx: usize = 0, // index in the FULL packages list
+    selected_idx: usize = 0,
     selected_tab: MasonTab = .lsp,
 
-    // Search functionality
+    // Search
     search_query: [64]u8 = @splat(0),
     search_len: usize = 0,
     is_searching: bool = false,
+
+    // Install status overlay
+    install_status: InstallStatus = .idle,
+    status_message: [128]u8 = @splat(0),
+    status_len: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) MasonWidget {
         return .{
@@ -72,7 +84,7 @@ pub const MasonWidget = struct {
     }
 
     pub fn refresh(self: *MasonWidget, rpc: *RpcClient) void {
-        const script = 
+        const script =
             \\local has_mason, registry = pcall(require, 'mason-registry')
             \\if not has_mason then return {} end
             \\local res = {}
@@ -96,7 +108,7 @@ pub const MasonWidget = struct {
             if (res == .array) {
                 _ = self.arena.reset(.retain_capacity);
                 self.packages.clearRetainingCapacity();
-                
+
                 for (res.array) |item| {
                     if (item == .map) {
                         var pkg: MasonPackage = .{
@@ -109,7 +121,7 @@ pub const MasonWidget = struct {
                                     pkg.name = self.arena.allocator().dupe(u8, kv.value.string) catch "";
                                 } else if (std.mem.eql(u8, kv.key.string, "installed") and kv.value == .bool) {
                                     pkg.is_installed = kv.value.bool;
-                                    pkg.target_is_installed = pkg.is_installed;
+                                    pkg.selected = pkg.is_installed;
                                 } else if (std.mem.eql(u8, kv.key.string, "categories") and kv.value == .array) {
                                     for (kv.value.array) |cat_val| {
                                         if (cat_val == .string) {
@@ -126,14 +138,13 @@ pub const MasonWidget = struct {
                         }
                     }
                 }
-                
-                // Sort alphabetically
+
                 std.sort.block(MasonPackage, self.packages.items, {}, struct {
                     fn lessThan(_: void, a: MasonPackage, b: MasonPackage) bool {
                         return std.mem.lessThan(u8, a.name, b.name);
                     }
                 }.lessThan);
-                
+
                 self.ensureSelectionValid();
             }
         }
@@ -147,14 +158,10 @@ pub const MasonWidget = struct {
 
     fn ensureSelectionValid(self: *MasonWidget) void {
         if (self.packages.items.len == 0) return;
-        
-        // Check if current selected_idx is still valid for current tab AND search
         if (self.selected_idx < self.packages.items.len) {
             const pkg = self.packages.items[self.selected_idx];
             if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) return;
         }
-
-        // Find first valid package
         for (self.packages.items, 0..) |pkg, i| {
             if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) {
                 self.selected_idx = i;
@@ -163,11 +170,27 @@ pub const MasonWidget = struct {
         }
     }
 
+    fn pendingCount(self: *const MasonWidget) usize {
+        var count: usize = 0;
+        for (self.packages.items) |pkg| {
+            if (pkg.selected != pkg.is_installed) count += 1;
+        }
+        return count;
+    }
+
+    fn setStatus(self: *MasonWidget, status: InstallStatus, msg: []const u8) void {
+        self.install_status = status;
+        const copy_len = @min(msg.len, self.status_message.len);
+        @memcpy(self.status_message[0..copy_len], msg[0..copy_len]);
+        self.status_len = copy_len;
+    }
+
     pub fn draw(self: *const MasonWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
         if (!self.is_open) return;
+        if (screen_w < 40 or screen_h < 15) return;
 
         const w: u16 = @min(84, screen_w -| 4);
-        const h: u16 = @min(28, screen_h -| 4);
+        const h: u16 = @min(30, screen_h -| 4);
         const x: u16 = (screen_w -| w) / 2;
         const y: u16 = (screen_h -| h) / 2;
 
@@ -176,7 +199,7 @@ pub const MasonWidget = struct {
         // Background
         ren.drawRect(.{ .x = x, .y = y, .w = w, .h = h }, " ", theme.fg_primary, theme.bg_sidebar);
 
-        // Border
+        // Border — rounded corners like settings
         for (x..x + w) |bx| {
             ren.drawText(@intCast(bx), y, "─", theme.border_color, theme.bg_sidebar, false, false);
             ren.drawText(@intCast(bx), y + h - 1, "─", theme.border_color, theme.bg_sidebar, false, false);
@@ -185,43 +208,46 @@ pub const MasonWidget = struct {
             ren.drawText(x, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
             ren.drawText(x + w - 1, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
         }
-        ren.drawText(x, y, "┌", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y, "┐", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x, y + h - 1, "└", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y + h - 1, "┘", theme.border_color, theme.bg_sidebar, false, false);
+        ren.drawText(x, y, "╭", theme.border_color, theme.bg_sidebar, false, false);
+        ren.drawText(x + w - 1, y, "╮", theme.border_color, theme.bg_sidebar, false, false);
+        ren.drawText(x, y + h - 1, "╰", theme.border_color, theme.bg_sidebar, false, false);
+        ren.drawText(x + w - 1, y + h - 1, "╯", theme.border_color, theme.bg_sidebar, false, false);
 
-        // Red Close Button Top Right
-        ren.drawText(x + w - 2, y, "X", .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }, theme.bg_sidebar, true, false);
+        // Close button
+        ren.drawText(x + w - 3, y, " × ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, true, false);
 
         // Header
-        const header_text = " MASON ";
-        ren.drawText(x + 2, y, header_text, theme.bg_sidebar, theme.fg_accent, true, false);
-        
-        // Search Bar (Right of Header)
-        const search_x = x + 12;
+        ren.drawText(x + 2, y, "  Mason Package Manager ", theme.fg_accent, theme.bg_sidebar, true, false);
+
+        // Search bar
+        const search_x = x + 28;
         if (self.is_searching or self.search_len > 0) {
             var search_buf: [80]u8 = undefined;
             const display_query = if (self.search_len > 0) self.search_query[0..self.search_len] else "";
-            const search_line = std.fmt.bufPrint(&search_buf, " Search: {s}{s} ", .{display_query, if (self.is_searching) "_" else ""}) catch "";
-            ren.drawText(search_x, y, search_line, theme.bg_sidebar, theme.fg_primary, false, false);
+            const search_line = std.fmt.bufPrint(&search_buf, " 🔍 {s}{s} ", .{ display_query, if (self.is_searching) "▌" else "" }) catch "";
+            ren.drawText(search_x, y, search_line, theme.fg_primary, theme.bg_sidebar, false, false);
         } else {
-            ren.drawText(search_x, y, " [/] Search ", theme.fg_comment, theme.bg_sidebar, false, false);
+            ren.drawText(search_x, y, " [/] search ", theme.fg_secondary, theme.bg_sidebar, false, false);
         }
 
-        // Stats
+        // Stats (installed/total for current tab+search)
         var tab_total: usize = 0;
         var tab_installed: usize = 0;
+        var tab_selected: usize = 0;
         for (self.packages.items) |pkg| {
             if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) {
                 tab_total += 1;
                 if (pkg.is_installed) tab_installed += 1;
+                if (pkg.selected) tab_selected += 1;
             }
         }
-        var buf: [128]u8 = undefined;
-        const stats = std.fmt.bufPrint(&buf, " {d}/{d} matches ", .{tab_installed, tab_total}) catch "";
-        ren.drawText(x + w - 14 - @as(u16, @intCast(stats.len)), y, stats, theme.bg_sidebar, theme.fg_comment, false, false);
+        var stats_buf: [64]u8 = undefined;
+        const stats = std.fmt.bufPrint(&stats_buf, " {d} installed · {d} selected ", .{ tab_installed, tab_selected }) catch "";
+        if (stats.len + 2 < w) {
+            ren.drawText(x + w - 2 - @as(u16, @intCast(stats.len)), y + 2, stats, theme.fg_secondary, theme.bg_sidebar, false, false);
+        }
 
-        // Tabs
+        // Tab bar
         const tab_y = y + 2;
         var tx: u16 = x + 2;
         inline for (@typeInfo(MasonTab).@"enum".field_values) |val| {
@@ -233,105 +259,207 @@ pub const MasonWidget = struct {
             ren.drawText(tx, tab_y, label, fg, bg, is_selected, false);
             tx += @as(u16, @intCast(label.len)) + 1;
         }
-        
+
+        // Separator under tabs
         for (x + 1..x + w - 1) |bx| {
             ren.drawText(@intCast(bx), tab_y + 1, "─", theme.border_color, theme.bg_sidebar, false, false);
         }
 
+        // Column header
+        const header_y = tab_y + 2;
+        ren.drawText(x + 2, header_y, "  ", theme.fg_secondary, theme.bg_sidebar, false, false);
+        ren.drawText(x + 6, header_y, "Package Name", theme.fg_secondary, theme.bg_sidebar, false, false);
+        ren.drawText(x + w - 14, header_y, "Status", theme.fg_secondary, theme.bg_sidebar, false, false);
+
         // List
-        const list_y = tab_y + 4;
-        const visible_items = h - 8;
-        
+        const list_y = header_y + 1;
+        const visible_items = h -| 10;
+
         var rendered_count: usize = 0;
         var skipped_count: usize = 0;
-        
         for (self.packages.items, 0..) |pkg, i| {
             if (!pkg.tabs.contains(self.selected_tab) or !self.matchesSearch(pkg)) continue;
-            
+
             if (skipped_count < self.scroll_offset) {
                 skipped_count += 1;
                 continue;
             }
-            
+
             if (rendered_count >= visible_items) break;
-            
+
             const py = list_y + @as(u16, @intCast(rendered_count));
-            const is_selected = (i == self.selected_idx);
-            const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
-            const fg = if (is_selected) theme.fg_accent else theme.fg_primary;
-            
-            if (is_selected) {
-                for (x + 1..x + w - 1) |bx| {
-                    ren.drawText(@intCast(bx), py, " ", fg, bg, false, false);
-                }
+            const is_cursor = (i == self.selected_idx);
+
+            // Row background
+            const row_bg = if (is_cursor) theme.bg_editor else theme.bg_sidebar;
+            const row_fg = if (is_cursor) theme.fg_accent else theme.fg_primary;
+            for (x + 1..x + w - 1) |bx| {
+                ren.drawText(@intCast(bx), py, " ", row_fg, row_bg, false, false);
             }
-            
-            const icon = if (pkg.target_is_installed) "◍" else "○";
-            const changed = if (pkg.is_installed != pkg.target_is_installed) "*" else " ";
-            
-            const max_name_len = w - 10;
-            const display_name = if (pkg.name.len > max_name_len) 
-                pkg.name[0 .. max_name_len - 3] 
-            else 
-                pkg.name;
-            const dots = if (pkg.name.len > max_name_len) "..." else "";
-            
-            const line = std.fmt.bufPrint(&buf, "{s} {s}{s} {s}{s}", .{
-                if (is_selected) "»" else " ",
-                icon,
-                changed,
-                display_name,
-                dots
-            }) catch continue;
-            
-            ren.drawText(x + 2, py, line, fg, bg, is_selected, false);
-            
+
+            // Cursor indicator
+            if (is_cursor) {
+                ren.drawText(x + 2, py, "▶", theme.fg_accent, row_bg, true, false);
+            }
+
+            // Checkbox: [x] if selected, [ ] if not
+            const checkbox = if (pkg.selected) "[✓]" else "[ ]";
+            const check_fg: Color = if (pkg.selected) theme.fg_accent else theme.fg_secondary;
+            ren.drawText(x + 4, py, checkbox, check_fg, row_bg, pkg.selected, false);
+
+            // Package name (truncated)
+            const max_name = w -| 22;
+            const display_name = if (pkg.name.len > max_name) pkg.name[0..max_name] else pkg.name;
+            ren.drawText(x + 9, py, display_name, row_fg, row_bg, false, false);
+
+            // Status badge on the right
+            const status_str = if (pkg.is_installed and pkg.selected)
+                " installed "
+            else if (pkg.is_installed and !pkg.selected)
+                " removing  "
+            else if (!pkg.is_installed and pkg.selected)
+                " pending   "
+            else
+                "           ";
+
+            const status_color: Color = if (pkg.is_installed and pkg.selected)
+                .{ .rgb = .{ .r = 80, .g = 200, .b = 120 } }
+            else if (pkg.is_installed and !pkg.selected)
+                .{ .rgb = .{ .r = 255, .g = 140, .b = 60 } }
+            else if (!pkg.is_installed and pkg.selected)
+                .{ .rgb = .{ .r = 100, .g = 160, .b = 255 } }
+            else
+                theme.fg_secondary;
+
+            ren.drawText(x + w - 13, py, status_str, status_color, row_bg, false, false);
+
             rendered_count += 1;
         }
-        
+
         // Scrollbar
         if (tab_total > visible_items) {
-            const scroll_h = visible_items - 2;
+            const scroll_h = visible_items -| 2;
             const scroll_y = list_y + 1;
             const max_scroll = tab_total - visible_items;
             const pos = @as(u16, @intCast((self.scroll_offset * scroll_h) / (max_scroll + 1)));
             for (0..scroll_h) |si| {
-                const char = if (si == pos) "█" else "│";
-                ren.drawText(x + w - 2, scroll_y + @as(u16, @intCast(si)), char, theme.fg_comment, theme.bg_sidebar, false, false);
+                const char = if (si == pos) "█" else "░";
+                ren.drawText(x + w - 2, scroll_y + @as(u16, @intCast(si)), char, theme.fg_accent, theme.bg_sidebar, false, false);
             }
         }
 
-        // Footer
+        // Bottom separator
+        const footer_sep_y = y + h - 3;
+        for (x + 1..x + w - 1) |bx| {
+            ren.drawText(@intCast(bx), footer_sep_y, "─", theme.border_color, theme.bg_sidebar, false, false);
+        }
+
+        // Footer hints (left side)
         const footer_y = y + h - 2;
-        const footer_text = " <Space> toggle | [/] search | i: install | u: uninstall | <Enter> apply | <Esc> close ";
-        const display_footer = if (footer_text.len > w - 4) footer_text[0 .. w - 7] else footer_text;
-        const footer_dots = if (footer_text.len > w - 4) "..." else "";
-        const final_footer = std.fmt.bufPrint(&buf, "{s}{s}", .{display_footer, footer_dots}) catch footer_text;
-        ren.drawText(x + 2, footer_y, final_footer, theme.fg_comment, theme.bg_sidebar, false, false);
+        ren.drawText(x + 2, footer_y, " Space/click: toggle  ↑↓: navigate  /: search ", theme.fg_secondary, theme.bg_sidebar, false, false);
+
+        // "[ Install & Close ]" button — bottom right like settings
+        const pending = self.pendingCount();
+        var btn_buf: [32]u8 = undefined;
+        const btn_label = if (pending > 0)
+            std.fmt.bufPrint(&btn_buf, "[ Install ({d}) ]", .{pending}) catch "[ Install ]"
+        else
+            "[ Install & Close ]";
+        const btn_x = x + w - 2 - @as(u16, @intCast(btn_label.len));
+        const btn_color: Color = if (pending > 0)
+            theme.fg_accent
+        else
+            theme.fg_secondary;
+        ren.drawText(btn_x, footer_y, btn_label, btn_color, theme.bg_sidebar, pending > 0, false);
+
+        // Status overlay (shown during/after install)
+        if (self.install_status != .idle) {
+            const ow: u16 = @min(50, w -| 4);
+            const oh: u16 = 7;
+            const ox: u16 = x + (w -| ow) / 2;
+            const oy: u16 = y + (h -| oh) / 2;
+
+            // Shadow
+            ren.drawRect(.{ .x = ox + 1, .y = oy + 1, .w = ow, .h = oh }, " ", theme.bg_editor, theme.bg_editor);
+            // Background
+            ren.drawRect(.{ .x = ox, .y = oy, .w = ow, .h = oh }, " ", theme.fg_primary, theme.bg_editor);
+
+            // Border
+            for (@as(usize, ox)..ox + ow) |bx| {
+                ren.drawText(@intCast(bx), oy, "─", theme.border_color, theme.bg_editor, false, false);
+                ren.drawText(@intCast(bx), oy + oh - 1, "─", theme.border_color, theme.bg_editor, false, false);
+            }
+            for (@as(usize, oy)..oy + oh) |by| {
+                ren.drawText(ox, @intCast(by), "│", theme.border_color, theme.bg_editor, false, false);
+                ren.drawText(ox + ow - 1, @intCast(by), "│", theme.border_color, theme.bg_editor, false, false);
+            }
+            ren.drawText(ox, oy, "╭", theme.border_color, theme.bg_editor, false, false);
+            ren.drawText(ox + ow - 1, oy, "╮", theme.border_color, theme.bg_editor, false, false);
+            ren.drawText(ox, oy + oh - 1, "╰", theme.border_color, theme.bg_editor, false, false);
+            ren.drawText(ox + ow - 1, oy + oh - 1, "╯", theme.border_color, theme.bg_editor, false, false);
+
+            switch (self.install_status) {
+                .installing => {
+                    ren.drawText(ox + 2, oy, " Installing... ", theme.fg_accent, theme.bg_editor, true, false);
+                    ren.drawText(ox + 2, oy + 2, "Mason is installing your packages.", theme.fg_primary, theme.bg_editor, false, false);
+                    ren.drawText(ox + 2, oy + 3, "This may take a moment...", theme.fg_secondary, theme.bg_editor, false, false);
+                    ren.drawText(ox + 2, oy + 5, "[ Please wait ]", theme.fg_secondary, theme.bg_editor, false, false);
+                },
+                .success => {
+                    ren.drawText(ox + 2, oy, " ✓ Done ", .{ .rgb = .{ .r = 80, .g = 200, .b = 120 } }, theme.bg_editor, true, false);
+                    ren.drawText(ox + 2, oy + 2, "Packages installed successfully!", .{ .rgb = .{ .r = 80, .g = 200, .b = 120 } }, theme.bg_editor, true, false);
+                    const msg = self.status_message[0..self.status_len];
+                    if (msg.len > 0) {
+                        ren.drawText(ox + 2, oy + 3, msg, theme.fg_secondary, theme.bg_editor, false, false);
+                    }
+                    ren.drawText(ox + 2, oy + 5, "[ Press any key or click to close ]", theme.fg_secondary, theme.bg_editor, false, false);
+                },
+                .err => {
+                    ren.drawText(ox + 2, oy, " ✗ Error ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_editor, true, false);
+                    ren.drawText(ox + 2, oy + 2, "Some packages may have failed.", .{ .rgb = .{ .r = 255, .g = 140, .b = 60 } }, theme.bg_editor, false, false);
+                    const msg = self.status_message[0..self.status_len];
+                    if (msg.len > 0) {
+                        ren.drawText(ox + 2, oy + 3, msg, theme.fg_secondary, theme.bg_editor, false, false);
+                    }
+                    ren.drawText(ox + 2, oy + 5, "[ Press any key or click to close ]", theme.fg_secondary, theme.bg_editor, false, false);
+                },
+                .idle => {},
+            }
+        }
     }
 
     pub fn handleMouse(self: *MasonWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16, rpc: *RpcClient) bool {
         if (!self.is_open) return false;
 
         const w: u16 = @min(84, screen_w -| 4);
-        const h: u16 = @min(28, screen_h -| 4);
+        const h: u16 = @min(30, screen_h -| 4);
         const x: u16 = (screen_w -| w) / 2;
         const y: u16 = (screen_h -| h) / 2;
 
+        // If status overlay is showing, any click dismisses it
+        if (self.install_status == .success or self.install_status == .err) {
+            if (m.action == .press) {
+                self.install_status = .idle;
+                self.is_open = false;
+            }
+            return true;
+        }
+
         if (m.col >= x and m.col < x + w and m.row >= y and m.row < y + h) {
-            // Close Button Top Right
-            if (m.action == .press and m.row == y and m.col == x + w - 2) {
+            // Close button
+            if (m.action == .press and m.row == y and m.col >= x + w - 3 and m.col < x + w - 1) {
                 self.is_open = false;
                 return true;
             }
 
+            // Scroll wheel
             if (m.button == .wheel_up) {
                 if (self.scroll_offset > 0) self.scroll_offset -= 1;
                 return true;
             } else if (m.button == .wheel_down) {
                 var tab_total: usize = 0;
                 for (self.packages.items) |pkg| if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) { tab_total += 1; };
-                const visible_items = h - 8;
+                const visible_items = h -| 10;
                 if (tab_total > visible_items and self.scroll_offset < tab_total - visible_items) {
                     self.scroll_offset += 1;
                 }
@@ -339,24 +467,26 @@ pub const MasonWidget = struct {
             }
 
             if (m.action == .press) {
+                // Tab bar click
                 const tab_y = y + 2;
                 if (m.row == tab_y) {
-                    var tx: u16 = x + 2;
+                    var ttx: u16 = x + 2;
                     inline for (@typeInfo(MasonTab).@"enum".field_values) |val| {
                         const tab_enum = @as(MasonTab, @enumFromInt(val));
                         const label_len = tab_enum.label().len;
-                        if (m.col >= tx and m.col < tx + label_len) {
+                        if (m.col >= ttx and m.col < ttx + label_len) {
                             self.selected_tab = tab_enum;
                             self.scroll_offset = 0;
                             self.ensureSelectionValid();
                             return true;
                         }
-                        tx += @as(u16, @intCast(label_len)) + 1;
+                        ttx += @as(u16, @intCast(label_len)) + 1;
                     }
                 }
 
-                const list_y = tab_y + 4;
-                const visible_items = h - 8;
+                // List item click — toggle selection
+                const list_y = tab_y + 3;
+                const visible_items = h -| 10;
                 if (m.row >= list_y and m.row < list_y + visible_items) {
                     const click_row = m.row - list_y;
                     var current_row: u16 = 0;
@@ -369,18 +499,28 @@ pub const MasonWidget = struct {
                         }
                         if (current_row == click_row) {
                             self.selected_idx = i;
-                            pkg.target_is_installed = !pkg.target_is_installed;
+                            pkg.selected = !pkg.selected;
                             return true;
                         }
                         current_row += 1;
                         if (current_row >= visible_items) break;
                     }
                 }
-                
-                if (m.row == y + h - 2) {
-                    self.save(rpc);
-                    self.is_open = false;
-                    return true;
+
+                // "Install & Close" button click
+                const footer_y = y + h - 2;
+                if (m.row == footer_y) {
+                    var btn_buf: [32]u8 = undefined;
+                    const pending = self.pendingCount();
+                    const btn_label = if (pending > 0)
+                        std.fmt.bufPrint(&btn_buf, "[ Install ({d}) ]", .{pending}) catch "[ Install ]"
+                    else
+                        "[ Install & Close ]";
+                    const btn_x = x + w - 2 - @as(u16, @intCast(btn_label.len));
+                    if (m.col >= btn_x and m.col < x + w - 2) {
+                        self.installAndClose(rpc);
+                        return true;
+                    }
                 }
             }
             return true;
@@ -390,6 +530,13 @@ pub const MasonWidget = struct {
 
     pub fn handleKey(self: *MasonWidget, key: []const u8, rpc: *RpcClient) bool {
         if (!self.is_open) return false;
+
+        // If status overlay showing, any key dismisses it
+        if (self.install_status == .success or self.install_status == .err) {
+            self.install_status = .idle;
+            self.is_open = false;
+            return true;
+        }
 
         if (self.is_searching) {
             if (std.mem.eql(u8, key, "<Esc>") or std.mem.eql(u8, key, "<Enter>")) {
@@ -419,7 +566,7 @@ pub const MasonWidget = struct {
         } else if (std.mem.eql(u8, key, "/")) {
             self.is_searching = true;
             return true;
-        } else if (std.mem.eql(u8, key, "<Down>")) {
+        } else if (std.mem.eql(u8, key, "<Down>") or std.mem.eql(u8, key, "j")) {
             var next_idx = self.selected_idx + 1;
             while (next_idx < self.packages.items.len) : (next_idx += 1) {
                 if (self.packages.items[next_idx].tabs.contains(self.selected_tab) and self.matchesSearch(self.packages.items[next_idx])) {
@@ -429,7 +576,7 @@ pub const MasonWidget = struct {
                 }
             }
             return true;
-        } else if (std.mem.eql(u8, key, "<Up>")) {
+        } else if (std.mem.eql(u8, key, "<Up>") or std.mem.eql(u8, key, "k")) {
             if (self.selected_idx > 0) {
                 var prev_idx = self.selected_idx - 1;
                 while (true) : (prev_idx -= 1) {
@@ -442,20 +589,15 @@ pub const MasonWidget = struct {
                 }
             }
             return true;
-        } else if (std.mem.eql(u8, key, " ") or std.mem.eql(u8, key, "i") or std.mem.eql(u8, key, "u")) {
-            if (self.packages.items.len > 0) {
-                if (std.mem.eql(u8, key, "i")) {
-                    self.packages.items[self.selected_idx].target_is_installed = true;
-                } else if (std.mem.eql(u8, key, "u")) {
-                    self.packages.items[self.selected_idx].target_is_installed = false;
-                } else {
-                    self.packages.items[self.selected_idx].target_is_installed = !self.packages.items[self.selected_idx].target_is_installed;
-                }
+        } else if (std.mem.eql(u8, key, " ")) {
+            // Toggle selection
+            if (self.packages.items.len > 0 and self.selected_idx < self.packages.items.len) {
+                self.packages.items[self.selected_idx].selected = !self.packages.items[self.selected_idx].selected;
             }
             return true;
         } else if (std.mem.eql(u8, key, "<Enter>")) {
-            self.save(rpc);
-            self.is_open = false;
+            // Enter = install & close
+            self.installAndClose(rpc);
             return true;
         } else if (key.len == 1 and key[0] >= '1' and key[0] <= '6') {
             const tab_idx = key[0] - '1';
@@ -464,21 +606,18 @@ pub const MasonWidget = struct {
             self.ensureSelectionValid();
             return true;
         }
-        return true; 
+        return true;
     }
 
     fn ensureVisible(self: *MasonWidget) void {
-        const visible_items = 20;
+        const visible_items = 18;
         var count_in_tab: usize = 0;
         var idx_in_tab: ?usize = null;
         for (self.packages.items, 0..) |pkg, i| {
             if (!pkg.tabs.contains(self.selected_tab) or !self.matchesSearch(pkg)) continue;
-            if (i == self.selected_idx) {
-                idx_in_tab = count_in_tab;
-            }
+            if (i == self.selected_idx) idx_in_tab = count_in_tab;
             count_in_tab += 1;
         }
-
         if (idx_in_tab) |it| {
             if (it < self.scroll_offset) {
                 self.scroll_offset = it;
@@ -488,46 +627,94 @@ pub const MasonWidget = struct {
         }
     }
 
-    fn save(self: *MasonWidget, rpc: *RpcClient) void {
-        var buf: [8192]u8 = undefined;
+    fn installAndClose(self: *MasonWidget, rpc: *RpcClient) void {
+        var buf: [16384]u8 = undefined;
         var offset: usize = 0;
 
-        const header = 
-            \\local has_mason, registry = pcall(require, 'mason-registry')
-            \\if not has_mason then return end
-            \\
+        const header =
+            \\local ok, registry = pcall(require, 'mason-registry')
+            \\if not ok then return "error: mason not available" end
+            \\local to_install = {}
+            \\local to_uninstall = {}
         ;
-        
         std.mem.copyForwards(u8, buf[offset..], header);
         offset += header.len;
 
         var count: usize = 0;
         for (self.packages.items) |pkg| {
-            if (pkg.is_installed != pkg.target_is_installed) {
+            if (pkg.selected != pkg.is_installed) {
                 count += 1;
-                const method = if (pkg.target_is_installed) "install" else "uninstall";
-                const line = std.fmt.bufPrint(buf[offset..], 
-                    \\local p = registry.get_package('{s}')
-                    \\if p then p:{s}() end
-                    \\
-                , .{pkg.name, method}) catch continue;
-                offset += line.len;
+                if (pkg.selected) {
+                    const line = std.fmt.bufPrint(buf[offset..],
+                        "\ntable.insert(to_install, '{s}')", .{pkg.name}) catch continue;
+                    offset += line.len;
+                } else {
+                    const line = std.fmt.bufPrint(buf[offset..],
+                        "\ntable.insert(to_uninstall, '{s}')", .{pkg.name}) catch continue;
+                    offset += line.len;
+                }
             }
         }
-        
-        if (count == 0) return;
 
-        var cmd_p = self.allocator.alloc(Value, 2) catch return;
+        if (count == 0) {
+            self.is_open = false;
+            return;
+        }
+
+        const footer =
+            \\
+            \\if #to_install > 0 then
+            \\    vim.schedule(function()
+            \\        vim.cmd('MasonInstall ' .. table.concat(to_install, ' '))
+            \\    end)
+            \\end
+            \\if #to_uninstall > 0 then
+            \\    vim.schedule(function()
+            \\        vim.cmd('MasonUninstall ' .. table.concat(to_uninstall, ' '))
+            \\    end)
+            \\end
+            \\return 'ok'
+        ;
+        const footer_written = std.fmt.bufPrint(buf[offset..], "{s}", .{footer}) catch "";
+        offset += footer_written.len;
+
+        self.setStatus(.installing, "");
+
+        var cmd_p = self.allocator.alloc(Value, 2) catch {
+            self.setStatus(.err, "Out of memory");
+            return;
+        };
         defer self.allocator.free(cmd_p);
         cmd_p[0] = .{ .string = buf[0..offset] };
         cmd_p[1] = .{ .array = &[_]Value{} };
 
         if (rpc.call("nvim_exec_lua", cmd_p) catch null) |res| {
-            msgpack.freeValue(res, self.allocator);
-        }
-        
-        for (self.packages.items) |*pkg| {
-            pkg.is_installed = pkg.target_is_installed;
+            defer msgpack.freeValue(res, self.allocator);
+            if (res == .string) {
+                if (std.mem.startsWith(u8, res.string, "error:")) {
+                    const msg = if (res.string.len > 6) res.string[6..] else "unknown error";
+                    const copy_len = @min(msg.len, 80);
+                    self.setStatus(.err, msg[0..copy_len]);
+                } else {
+                    // Success — update installed states
+                    for (self.packages.items) |*pkg| {
+                        pkg.is_installed = pkg.selected;
+                    }
+                    var msg_buf: [64]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&msg_buf, "{d} package(s) processed.", .{count}) catch "";
+                    self.setStatus(.success, msg);
+                }
+            } else {
+                // No string return — assume success (Mason ops are async)
+                for (self.packages.items) |*pkg| {
+                    pkg.is_installed = pkg.selected;
+                }
+                var msg_buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "{d} package(s) queued for install.", .{count}) catch "";
+                self.setStatus(.success, msg);
+            }
+        } else {
+            self.setStatus(.err, "RPC call failed");
         }
     }
 };

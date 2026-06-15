@@ -7,6 +7,23 @@ const Value = @import("../nvim/msgpack.zig").Value;
 const Layout = @import("layout.zig").Layout;
 const settings = @import("widgets/settings.zig");
 
+fn writeHandoffInit(content: []const u8) void {
+    const path = "/tmp/vide_handoff_init.lua";
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600) catch return;
+    defer _ = std.posix.system.close(fd);
+
+    var written: usize = 0;
+    while (written < content.len) {
+        const sub = content[written..];
+        const rc = std.posix.system.write(fd, sub.ptr, sub.len);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => written += @as(usize, @intCast(rc)),
+            .INTR => continue,
+            else => return,
+        }
+    }
+}
+
 pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     if (a.terminal_focus) {
         if (std.mem.eql(u8, k.raw, "\x1bv") or std.mem.eql(u8, k.raw, "\x1c")) { // Alt+v or Ctrl+\ -> Vertical Split
@@ -298,12 +315,24 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
 
     if (toggle_zen) {
         if (a.settings_widget.config.zen_handoff) {
-            // Handoff to native nvim: save session
-            var wa_cmd = [_]Value{.{ .string = "wa" }};
+            // Handoff to native nvim: save session first
+            var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
             _ = a.rpc.call("nvim_command", &wa_cmd) catch {};
 
             var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
             _ = a.rpc.call("nvim_command", &mks_cmd) catch {};
+
+            // Write handoff init: same plugins + retoggle keybind
+            const zen_key = a.settings_widget.config.keybindings.toggle_zen;
+            const vide_init_lua = @embedFile("../nvim/vide_init.lua");
+            var handoff_buf: [131072]u8 = undefined;
+            const handoff_script = std.fmt.bufPrint(&handoff_buf,
+                "-- vide handoff\n{s}\nvim.schedule(function()\n" ++
+                "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! /tmp/vide_session.vim') vim.cmd('qa') end\n" ++
+                "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true, desc='Return to vide'}})\nend)\n",
+                .{ vide_init_lua, zen_key }) catch vide_init_lua;
+
+            writeHandoffInit(handoff_script);
 
             return error.ZenModeHandoff;
         } else {

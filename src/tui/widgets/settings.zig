@@ -39,7 +39,7 @@ pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
 pub const SettingsConfig = struct {
     clip: bool = true,
     zen: bool = false,
-    zen_handoff: bool = false,
+    zen_handoff: bool = true,
     ide: bool = true,
     autocomplete: bool = true,
     autoindent: bool = true,

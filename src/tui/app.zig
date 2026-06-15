@@ -30,6 +30,7 @@ pub const WinInfo = struct {
     width: u16,
     height: u16,
     active: bool = false,
+    name: []const u8 = "",
 };
 
 pub const TabInfo = struct {
@@ -157,6 +158,12 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        for (self.editor_wins.items) |win| {
+            if (win.name.len > 0) self.allocator.free(win.name);
+        }
+        for (self.terminal_wins.items) |win| {
+            if (win.name.len > 0) self.allocator.free(win.name);
+        }
         self.editor_wins.deinit();
         self.terminal_wins.deinit();
         self.layout_arena.deinit();
