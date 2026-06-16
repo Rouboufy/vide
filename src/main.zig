@@ -14,6 +14,7 @@ const GitDetailedWidget = @import("tui/widgets/git_detailed.zig").GitDetailedWid
 const SearchPanel = @import("tui/widgets/search_panel.zig").SearchPanel;
 const OutputPanel = @import("tui/widgets/output_panel.zig").OutputPanel;
 const DebugConsole = @import("tui/widgets/debug_console.zig").DebugConsole;
+const ExtensionShop = @import("tui/widgets/extension_shop.zig").ExtensionShop;
 
 const NvimProcess = @import("nvim/process.zig").NvimProcess;
 const RpcClient = @import("nvim/rpc.zig").RpcClient;
@@ -28,6 +29,54 @@ const views = @import("tui/views.zig");
 const events = @import("tui/events.zig");
 
 var global_term: ?*Terminal = null;
+var log_path: ?[]const u8 = null;
+
+pub fn log(
+    comptime message_level: std.log.Level,
+    comptime scope: @TypeOf(.default),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const path = log_path orelse return;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    
+    const path_z = alloc.dupeSentinel(u8, path, 0) catch return;
+    const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, 0o644) catch return;
+    defer _ = std.os.linux.close(fd);
+
+    var buf = std.ArrayList(u8).init(alloc);
+    defer buf.deinit();
+    var writer = buf.writer();
+
+    const level_str = switch (message_level) {
+        .err => "ERROR",
+        .warn => "WARN",
+        .info => "INFO",
+        .debug => "DEBUG",
+    };
+    
+    if (scope == .default) {
+        writer.print("[{s}] ", .{level_str}) catch return;
+    } else {
+        writer.print("[{s}] ({s}) ", .{level_str, @tagName(scope)}) catch return;
+    }
+    writer.print(format, args) catch return;
+    writer.print("\n", .{}) catch return;
+
+    const items = buf.items;
+    var written: usize = 0;
+    while (written < items.len) {
+        const sub = items[written..];
+        const rc = std.posix.system.write(fd, sub.ptr, sub.len);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => written += @as(usize, @intCast(rc)),
+            .INTR => continue,
+            else => return,
+        }
+    }
+}
 
 pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     _ = error_return_trace;
@@ -49,6 +98,45 @@ pub fn main(init: std.process.Init) !void {
 
 fn innerMain(init: std.process.Init) !void {
     const alloc = init.gpa;
+    const home = init.environ_map.get("HOME") orelse "";
+    
+    // Set up logging
+    const log_dir = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide" });
+    defer alloc.free(log_dir);
+    std.Io.Dir.cwd().createDir(init.io, log_dir, .default_dir) catch {};
+    log_path = try std.fs.path.join(alloc, &[_][]const u8{ log_dir, "vide.log" });
+    defer {
+        if (log_path) |p| {
+            alloc.free(p);
+            log_path = null;
+        }
+    }
+
+    // Write store search helper script
+    {
+        const script_path = try std.fs.path.join(alloc, &[_][]const u8{ log_dir, "store_search.py" });
+        defer alloc.free(script_path);
+        const script_content = @embedFile("nvim/store_search.py");
+        if (std.posix.openat(std.posix.AT.FDCWD, script_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o755)) |fd| {
+            defer _ = std.posix.system.close(fd);
+            var written: usize = 0;
+            while (written < script_content.len) {
+                const sub = script_content[written..];
+                const rc = std.posix.system.write(fd, sub.ptr, sub.len);
+                switch (std.posix.errno(rc)) {
+                    .SUCCESS => written += @as(usize, @intCast(rc)),
+                    .INTR => continue,
+                    else => break,
+                }
+            }
+        } else |_| {}
+    }
+
+    const session_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "vide_session.vim" });
+    defer alloc.free(session_path);
+    const handoff_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "vide_handoff_init.lua" });
+    defer alloc.free(handoff_path);
+
     var term = try Terminal.init();
     defer term.deinit();
     global_term = &term;
@@ -87,28 +175,56 @@ fn innerMain(init: std.process.Init) !void {
         const initial_file: ?[]const u8 = args.next();
 
         if (is_resuming) {
-            var src_cmd = [_]Value{.{ .string = "source /tmp/vide_session.vim" }};
-            rpc.notify("nvim_command", &src_cmd) catch {};
+            const src_cmd_str = try std.fmt.allocPrint(alloc, "silent! source {s}", .{session_path});
+            defer alloc.free(src_cmd_str);
+            var src_cmd = [_]Value{.{ .string = src_cmd_str }};
+            rpc.notify("nvim_command", &src_cmd) catch |err| {
+                std.log.err("Failed to restore session: {}", .{err});
+            };
             // Optional: wait a moment for the session to load
         }
 
-        runNvimSession(if (is_resuming) null else initial_file, init, alloc, &term, &renderer, &rpc, &ui_state, &rpc_term, &ui_term, sigwinch_pipe[0]) catch |err| {
+        runNvimSession(if (is_resuming) null else initial_file, init, alloc, &term, &renderer, &rpc, &ui_state, &rpc_term, &ui_term, sigwinch_pipe[0], session_path, handoff_path) catch |err| {
             if (err == error.EndOfStream) continue :app_loop;
             if (err == error.QuitApplication) break :app_loop;
+            if (err == error.ReloadApplication) {
+                var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
+                _ = rpc.call("nvim_command", &wa_cmd) catch {};
+                
+                const mks_cmd_str = std.fmt.allocPrint(alloc, "mksession! {s}", .{session_path}) catch "/tmp/vide_session.vim";
+                defer if (!std.mem.eql(u8, mks_cmd_str, "/tmp/vide_session.vim")) alloc.free(mks_cmd_str);
+                var mks_cmd = [_]Value{.{ .string = mks_cmd_str }};
+                _ = rpc.call("nvim_command", &mks_cmd) catch {};
+
+                for (renderer.prev) |*cell| {
+                    cell.char[0] = ' ';
+                    cell.len = 1;
+                    cell.fg = .none;
+                    cell.bg = .none;
+                }
+                is_resuming = true;
+                continue :app_loop;
+            }
             if (err == error.ZenModeHandoff) {
                 term.deinit();
                 // Launch nvim with --clean + our handoff init (same plugins as vide)
                 // and restore the saved session
+                const cmd_arg = try std.fmt.allocPrint(alloc, "luafile {s}", .{handoff_path});
+                defer alloc.free(cmd_arg);
                 const argv = [_][]const u8{
                     "nvim",
                     "--clean",
-                    "--cmd", "luafile /tmp/vide_handoff_init.lua",
-                    "-S", "/tmp/vide_session.vim",
+                    "--cmd", cmd_arg,
+                    "-S", session_path,
                 };
                 if (std.process.spawn(init.io, .{ .argv = &argv, .stdin = .inherit, .stdout = .inherit, .stderr = .inherit })) |c| {
                     var child = c;
-                    _ = child.wait(init.io) catch {};
-                } else |_| {}
+                    _ = child.wait(init.io) catch |wait_err| {
+                        std.log.err("Failed to wait for zen mode nvim process: {}", .{wait_err});
+                    };
+                } else |spawn_err| {
+                    std.log.err("Failed to spawn zen mode nvim: {}", .{spawn_err});
+                }
                 
                 term = try Terminal.init();
                 renderer.writer = term.writer();
@@ -137,6 +253,8 @@ fn runNvimSession(
     rpc_term: *RpcClient,
     ui_term: *UiState,
     sigwinch_read_fd: std.posix.fd_t,
+    session_path: []const u8,
+    handoff_path: []const u8,
 ) !void {
     var app = App.init(alloc, term, ren, rpc, rpc_term, ui_state, ui_term);
     defer {
@@ -159,17 +277,26 @@ fn runNvimSession(
 
     var explorer = Explorer.init(alloc, init.io);
     defer explorer.deinit();
-    explorer.refresh() catch {};
+    explorer.refresh() catch |err| {
+        std.log.err("Explorer initial refresh failed: {}", .{err});
+    };
     app.explorer = &explorer;
 
     var git_panel = GitPanel.init(alloc, init.io);
     defer git_panel.deinit();
-    git_panel.refresh() catch {};
+    git_panel.refresh() catch |err| {
+        std.log.err("Git panel initial refresh failed: {}", .{err});
+    };
     app.git_panel = &git_panel;
 
     var search_panel = SearchPanel.init(alloc);
     defer search_panel.deinit();
     app.search_panel = &search_panel;
+
+    const home = init.environ_map.get("HOME") orelse "";
+    var extension_shop = ExtensionShop.init(alloc, init.io, home);
+    defer extension_shop.deinit();
+    app.extension_shop = &extension_shop;
 
     var ai_panel = @import("tui/widgets/ai_panel.zig").AiPanel.init(alloc);
     defer ai_panel.deinit();
@@ -183,17 +310,17 @@ fn runNvimSession(
     defer debug_console.deinit();
     app.debug_console = &debug_console;
 
-    const home = init.environ_map.get("HOME") orelse "";
     const settings_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "settings.json" });
     const preview_path = try std.fs.path.join(alloc, &[_][]const u8{ home, ".local", "share", "vide", "preview.json" });
     defer alloc.free(settings_path);
     defer alloc.free(preview_path);
-    var settings_widget = SettingsWidget.init(alloc, settings_path);
+    var settings_widget = SettingsWidget.init(alloc, settings_path, init.io, home);
     const term_env = init.environ_map.get("TERM") orelse "";
     const is_linux_console = std.mem.eql(u8, term_env, "linux");
     if (is_linux_console) {
         settings_widget.config.nerd_fonts = false;
     }
+    settings_widget.refreshThemes(rpc);
     defer settings_widget.deinit();
     app.settings_widget = &settings_widget;
     
@@ -309,12 +436,10 @@ fn runNvimSession(
         var cp = try alloc.alloc(Value, 1);
         defer alloc.free(cp);
         cp[0] = .{ .string = "terminal" };
-        const r2 = try rpc_term.call("nvim_command", cp);
-        msgpack.freeValue(r2, alloc);
+        try rpc_term.notify("nvim_command", cp);
 
         cp[0] = .{ .string = "startinsert" };
-        const r3 = try rpc_term.call("nvim_command", cp);
-        msgpack.freeValue(r3, alloc);
+        try rpc_term.notify("nvim_command", cp);
     }
 
     if (initial_file) |f| {
@@ -465,20 +590,22 @@ fn runNvimSession(
                     var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
                     _ = rpc.call("nvim_command", &wa_cmd) catch {};
 
-                    var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
+                    const mks_cmd_str = try std.fmt.allocPrint(alloc, "mksession! {s}", .{session_path});
+                    defer alloc.free(mks_cmd_str);
+                    var mks_cmd = [_]Value{.{ .string = mks_cmd_str }};
                     _ = rpc.call("nvim_command", &mks_cmd) catch {};
 
                     // Write handoff init with same plugins + retoggle keybind
                     const zen_key = app.settings_widget.config.keybindings.toggle_zen;
                     const vide_init_lua = @embedFile("nvim/vide_init.lua");
-                    const handoff_buf = try alloc.alloc(u8, vide_init_lua.len + 512);
+                    const handoff_buf = try alloc.alloc(u8, vide_init_lua.len + session_path.len + 512);
                     defer alloc.free(handoff_buf);
                     const handoff_script = std.fmt.bufPrint(handoff_buf,
                         "-- vide handoff\n{s}\nvim.schedule(function()\n" ++
-                        "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! /tmp/vide_session.vim') vim.cmd('qa') end\n" ++
+                        "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! {s}') vim.cmd('qa') end\n" ++
                         "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true}})\nend)\n",
-                        .{ vide_init_lua, zen_key }) catch vide_init_lua;
-                    const path = "/tmp/vide_handoff_init.lua";
+                        .{ vide_init_lua, session_path, zen_key }) catch vide_init_lua;
+                    const path = handoff_path;
                     if (std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600)) |fd| {
                         defer _ = std.posix.system.close(fd);
 

@@ -139,6 +139,8 @@ pub const SettingsWidget = struct {
     config: SettingsConfig,
     needs_apply: bool = false,
     settings_path: []const u8,
+    themes: std.array_list.Managed([]const u8),
+    dropdown_scroll_offset: usize = 0,
 
     active_dropdown: DropdownType = .none,
 
@@ -154,6 +156,21 @@ pub const SettingsWidget = struct {
     keyboard_focus: FocusMode = .tabs,
     hover_row: usize = 0,
     hover_dropdown_idx: usize = 0,
+
+    io: std.Io,
+    home: []const u8,
+    installed_plugins: std.array_list.Managed(InstalledPlugin),
+    selected_plugin: ?InstalledPlugin = null,
+    edit_config_path: ?[]const u8 = null,
+    plugin_scroll_offset: usize = 0,
+    popup_btn_idx: usize = 0,
+
+    pub const InstalledPlugin = struct {
+        full_name: []const u8,
+        name: []const u8,
+        stars: usize = 0,
+        description: []const u8 = "",
+    };
 
     pub const FocusMode = enum { tabs, content, dropdown };
 
@@ -180,7 +197,7 @@ pub const SettingsWidget = struct {
         "Keybindings",
     };
 
-    pub fn init(allocator: std.mem.Allocator, settings_path: []const u8) SettingsWidget {
+    pub fn init(allocator: std.mem.Allocator, settings_path: []const u8, io: std.Io, home: []const u8) SettingsWidget {
         const config = SettingsConfig.load(allocator, settings_path) catch blk: {
             var cfg = SettingsConfig{};
             cfg.theme = allocator.dupe(u8, cfg.theme) catch cfg.theme;
@@ -195,14 +212,25 @@ pub const SettingsWidget = struct {
             cfg.mode = allocator.dupe(u8, cfg.mode) catch cfg.mode;
             break :blk cfg;
         };
-        return .{
+        var widget = SettingsWidget{
             .is_open = false,
             .active_tab = 0,
             .allocator = allocator,
             .config = config,
             .needs_apply = true,
             .settings_path = settings_path,
+            .themes = std.array_list.Managed([]const u8).init(allocator),
+            .dropdown_scroll_offset = 0,
+            .io = io,
+            .home = home,
+            .installed_plugins = std.array_list.Managed(InstalledPlugin).init(allocator),
+            .selected_plugin = null,
+            .edit_config_path = null,
+            .plugin_scroll_offset = 0,
+            .popup_btn_idx = 0,
         };
+        widget.setThemesAndGroup(&supported_themes) catch {};
+        return widget;
     }
 
     pub fn deinit(self: *SettingsWidget) void {
@@ -216,6 +244,290 @@ pub const SettingsWidget = struct {
         self.allocator.free(self.config.keybindings.new_file);
         self.allocator.free(self.config.keybindings.find_file);
         self.allocator.free(self.config.keybindings.quit);
+        for (self.themes.items) |t| {
+            self.allocator.free(t);
+        }
+        self.themes.deinit();
+
+        for (self.installed_plugins.items) |p| {
+            self.allocator.free(p.full_name);
+            self.allocator.free(p.name);
+            self.allocator.free(p.description);
+        }
+        self.installed_plugins.deinit();
+        if (self.edit_config_path) |path| {
+            self.allocator.free(path);
+        }
+    }
+
+    fn setThemesAndGroup(self: *SettingsWidget, raw_list: []const []const u8) !void {
+        // Clear old themes
+        for (self.themes.items) |t| {
+            self.allocator.free(t);
+        }
+        self.themes.clearRetainingCapacity();
+
+        var vide_list = std.array_list.Managed([]const u8).init(self.allocator);
+        defer vide_list.deinit();
+        var vim_list = std.array_list.Managed([]const u8).init(self.allocator);
+        defer vim_list.deinit();
+        var user_list = std.array_list.Managed([]const u8).init(self.allocator);
+        defer user_list.deinit();
+
+        const vim_defaults = [_][]const u8{
+            "default", "blue", "darkblue", "desert", "elflord", "habamax", "industry", 
+            "koehler", "lunaperche", "minischeme", "morning", "murphy", "peachpuff", 
+            "quiet", "randomhue", "retrobox", "ron", "shine", "slate", "sorbet", 
+            "torte", "wildcharm", "zaibatsu"
+        };
+
+        for (raw_list) |t| {
+            var is_vide = false;
+            for (supported_themes) |st| {
+                if (std.mem.eql(u8, t, st)) {
+                    is_vide = true;
+                    break;
+                }
+            }
+            if (is_vide) {
+                try vide_list.append(t);
+                continue;
+            }
+
+            var is_vim = false;
+            for (vim_defaults) |vd| {
+                if (std.mem.eql(u8, t, vd)) {
+                    is_vim = true;
+                    break;
+                }
+            }
+            if (is_vim) {
+                try vim_list.append(t);
+                continue;
+            }
+
+            try user_list.append(t);
+        }
+
+        if (vide_list.items.len > 0) {
+            try self.themes.append(try self.allocator.dupe(u8, "--- Vide Themes ---"));
+            for (vide_list.items) |t| {
+                try self.themes.append(try self.allocator.dupe(u8, t));
+            }
+        }
+        if (vim_list.items.len > 0) {
+            try self.themes.append(try self.allocator.dupe(u8, "--- Vim Defaults ---"));
+            for (vim_list.items) |t| {
+                try self.themes.append(try self.allocator.dupe(u8, t));
+            }
+        }
+        if (user_list.items.len > 0) {
+            try self.themes.append(try self.allocator.dupe(u8, "--- Installed ---"));
+            for (user_list.items) |t| {
+                try self.themes.append(try self.allocator.dupe(u8, t));
+            }
+        }
+    }
+
+    fn openThemeDropdown(self: *SettingsWidget) void {
+        self.active_dropdown = .theme;
+        self.hover_dropdown_idx = 1;
+        self.dropdown_scroll_offset = 0;
+        for (self.themes.items, 0..) |t, idx| {
+            if (std.mem.eql(u8, t, self.config.theme)) {
+                self.hover_dropdown_idx = idx;
+                const max_visible_themes = 8;
+                if (idx >= max_visible_themes) {
+                    self.dropdown_scroll_offset = idx - (max_visible_themes / 2);
+                    if (self.dropdown_scroll_offset + max_visible_themes > self.themes.items.len) {
+                        self.dropdown_scroll_offset = self.themes.items.len - max_visible_themes;
+                    }
+                } else {
+                    self.dropdown_scroll_offset = 0;
+                }
+                break;
+            }
+        }
+    }
+
+    pub fn refreshThemes(self: *SettingsWidget, rpc: *@import("../../nvim/rpc.zig").RpcClient) void {
+        const Value = @import("../../nvim/msgpack.zig").Value;
+        const msgpack = @import("../../nvim/msgpack.zig");
+        
+        var params = self.allocator.alloc(Value, 2) catch return;
+        defer self.allocator.free(params);
+        params[0] = .{ .string = "return vim.fn.getcompletion('', 'color')" };
+        params[1] = .{ .array = &[_]Value{} };
+
+        if (rpc.call("nvim_exec_lua", params) catch null) |res| {
+            defer msgpack.freeValue(res, self.allocator);
+            if (res == .array and res.array.len > 0) {
+                var raw_list = std.array_list.Managed([]const u8).init(self.allocator);
+                defer raw_list.deinit();
+                for (res.array) |item| {
+                    if (item == .string) {
+                        raw_list.append(item.string) catch {};
+                    }
+                }
+                self.setThemesAndGroup(raw_list.items) catch {};
+            }
+        }
+    }
+
+    fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+        const path_z = try allocator.dupeSentinel(u8, path, 0);
+        defer allocator.free(path_z);
+        
+        const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0);
+        defer _ = std.os.linux.close(fd);
+        
+        var list: std.ArrayList(u8) = .empty;
+        errdefer list.deinit(allocator);
+        
+        var chunk: [4096]u8 = undefined;
+        while (true) {
+            const read_len = std.os.linux.read(fd, &chunk, chunk.len);
+            if (read_len == 0) break;
+            if (read_len < 0) return error.InputOutput;
+            try list.appendSlice(allocator, chunk[0..@intCast(read_len)]);
+        }
+        return try list.toOwnedSlice(allocator);
+    }
+
+    pub fn refreshPlugins(self: *SettingsWidget) void {
+        for (self.installed_plugins.items) |p| {
+            self.allocator.free(p.full_name);
+            self.allocator.free(p.name);
+            self.allocator.free(p.description);
+        }
+        self.installed_plugins.clearRetainingCapacity();
+
+        const user_plugins_path = std.fs.path.join(self.allocator, &[_][]const u8{ self.home, ".local", "share", "vide", "user_plugins.json" }) catch return;
+        defer self.allocator.free(user_plugins_path);
+
+        const user_plugins_data = readFileAlloc(self.allocator, user_plugins_path) catch |err| {
+            std.log.err("Failed to read user_plugins.json: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(user_plugins_data);
+
+        const parsed_plugins = std.json.parseFromSlice([]const []const u8, self.allocator, user_plugins_data, .{ .ignore_unknown_fields = true }) catch |err| {
+            std.log.err("Failed to parse user_plugins.json: {}", .{err});
+            return;
+        };
+        defer parsed_plugins.deinit();
+
+        if (parsed_plugins.value.len == 0) return;
+
+        const store_db_path = std.fs.path.join(self.allocator, &[_][]const u8{ self.home, ".local", "share", "vide", "store_db.json" }) catch return;
+        defer self.allocator.free(store_db_path);
+
+        const DBItem = struct {
+            name: []const u8,
+            full_name: []const u8,
+            stars: struct {
+                curr: usize = 0,
+            } = .{},
+            description: ?[]const u8 = null,
+        };
+        const DB = struct {
+            items: []DBItem,
+        };
+
+        const store_db_data = readFileAlloc(self.allocator, store_db_path) catch null;
+        defer {
+            if (store_db_data) |data| self.allocator.free(data);
+        }
+
+        var db_items: ?std.json.Parsed(DB) = null;
+        if (store_db_data) |data| {
+            db_items = std.json.parseFromSlice(DB, self.allocator, data, .{ .ignore_unknown_fields = true }) catch null;
+        }
+        defer {
+            if (db_items) |db| db.deinit();
+        }
+
+        for (parsed_plugins.value) |repo_name| {
+            var stars: usize = 0;
+            var description: []const u8 = "";
+            var name: []const u8 = "";
+
+            if (std.mem.lastIndexOfScalar(u8, repo_name, '/')) |idx| {
+                name = repo_name[idx + 1..];
+            } else {
+                name = repo_name;
+            }
+
+            if (db_items) |db| {
+                for (db.value.items) |item| {
+                    if (std.mem.eql(u8, item.full_name, repo_name)) {
+                        stars = item.stars.curr;
+                        description = item.description orelse "";
+                        name = item.name;
+                        break;
+                    }
+                }
+            }
+
+            self.installed_plugins.append(.{
+                .full_name = self.allocator.dupe(u8, repo_name) catch continue,
+                .name = self.allocator.dupe(u8, name) catch continue,
+                .stars = stars,
+                .description = self.allocator.dupe(u8, description) catch continue,
+            }) catch {};
+        }
+    }
+
+    fn editConfig(self: *SettingsWidget, p: InstalledPlugin) !void {
+        const configs_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.home, ".local", "share", "vide", "plugin_configs" });
+        defer self.allocator.free(configs_dir);
+
+        const file_name = try self.allocator.dupe(u8, p.full_name);
+        defer self.allocator.free(file_name);
+        for (file_name) |*c| {
+            if (c.* == '/') {
+                c.* = '_';
+            }
+        }
+
+        const suffix = ".lua";
+        const full_file_name = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ file_name, suffix });
+        defer self.allocator.free(full_file_name);
+
+        const config_file_path = try std.fs.path.join(self.allocator, &[_][]const u8{ configs_dir, full_file_name });
+        errdefer self.allocator.free(config_file_path);
+
+        std.Io.Dir.cwd().createDir(self.io, configs_dir, .default_dir) catch {};
+
+        const file_z = try self.allocator.dupeSentinel(u8, config_file_path, 0);
+        defer self.allocator.free(file_z);
+
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| blk: {
+            if (err == error.FileNotFound) {
+                const write_fd = try std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+                defer _ = std.os.linux.close(write_fd);
+
+                var template_buf: [512]u8 = undefined;
+                const template = std.fmt.bufPrint(&template_buf,
+                    "-- Configuration for {s}\n" ++
+                    "-- This file is loaded automatically by lazy.nvim\n\n" ++
+                    "return {{\n" ++
+                    "  -- Add your custom plugin configuration here\n" ++
+                    "}}\n",
+                    .{p.name}
+                ) catch "";
+
+                _ = std.os.linux.write(write_fd, template.ptr, template.len);
+            }
+            break :blk -1;
+        };
+        if (fd >= 0) {
+            _ = std.os.linux.close(fd);
+        }
+
+        self.edit_config_path = config_file_path;
+        self.is_open = false;
+        self.selected_plugin = null;
     }
 
     pub fn draw(self: *const SettingsWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
@@ -256,7 +568,7 @@ pub const SettingsWidget = struct {
         ren.drawText(x + w - 1, y + h - 1, "╯", theme.border_color, theme.bg_sidebar, false, false);
 
         // Title
-        ren.drawText(x + 2, y, " Vide Settings ", theme.fg_accent, theme.bg_sidebar, true, false);
+        ren.drawText(x + 2, y, " Vide Settings v0.1.0 ", theme.fg_accent, theme.bg_sidebar, true, false);
 
         // Close button
         ren.drawText(x + w - 4, y, if (self.config.nerd_fonts) " 󰅖 " else " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
@@ -361,11 +673,44 @@ pub const SettingsWidget = struct {
                 
                 // Mason Button
                 const mason_btn = " [ Mason Settings... ] ";
-                ren.drawText(content_x, content_y + 2, mason_btn, theme.bg_sidebar, theme.fg_accent, true, false);
+                const is_mason_hover = (self.keyboard_focus == .content and self.hover_row == 0);
+                ren.drawText(content_x, content_y + 2, mason_btn, if (is_mason_hover) theme.fg_primary else theme.bg_sidebar, if (is_mason_hover) theme.fg_accent else theme.fg_accent, true, false);
                 
                 // Plugin Manager Button
                 const lazy_btn = " [ Plugin Manager... ] ";
-                ren.drawText(content_x, content_y + 4, lazy_btn, theme.bg_sidebar, theme.fg_accent, true, false);
+                const is_lazy_hover = (self.keyboard_focus == .content and self.hover_row == 1);
+                ren.drawText(content_x, content_y + 4, lazy_btn, if (is_lazy_hover) theme.fg_primary else theme.bg_sidebar, if (is_lazy_hover) theme.fg_accent else theme.fg_accent, true, false);
+
+                // Installed Plugins Title
+                ren.drawText(content_x, content_y + 6, "Installed Plugins:", theme.fg_primary, theme.bg_sidebar, true, false);
+
+                const max_visible_plugins = 6;
+                const start_idx = self.plugin_scroll_offset;
+                const end_idx = @min(self.installed_plugins.items.len, start_idx + max_visible_plugins);
+                
+                var idx = start_idx;
+                var py_offset: u16 = 8;
+                while (idx < end_idx) : (idx += 1) {
+                    const p = self.installed_plugins.items[idx];
+                    const is_hovered = (self.keyboard_focus == .content and self.hover_row == 2 + idx);
+                    
+                    var plugin_line_buf: [128]u8 = undefined;
+                    const plugin_line = std.fmt.bufPrint(&plugin_line_buf, "  • {s}", .{p.full_name}) catch p.full_name;
+                    
+                    ren.drawText(content_x, content_y + py_offset, plugin_line, if (is_hovered) theme.fg_accent else theme.fg_secondary, theme.bg_sidebar, is_hovered, false);
+                    py_offset += 1;
+                }
+                
+                if (self.installed_plugins.items.len == 0) {
+                    ren.drawText(content_x + 2, content_y + 8, "No installed plugins found.", theme.fg_secondary, theme.bg_sidebar, false, false);
+                }
+
+                if (self.plugin_scroll_offset > 0) {
+                    ren.drawText(content_x + 35, content_y + 8, "▲", theme.fg_accent, theme.bg_sidebar, false, false);
+                }
+                if (self.plugin_scroll_offset + max_visible_plugins < self.installed_plugins.items.len) {
+                    ren.drawText(content_x + 35, content_y + 8 + @as(u16, @intCast(max_visible_plugins)) - 1, "▼", theme.fg_accent, theme.bg_sidebar, false, false);
+                }
             },
             4 => {
                 ren.drawText(content_x, content_y, "Keybindings (Click to edit)", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -412,9 +757,25 @@ pub const SettingsWidget = struct {
         }
 
         if (self.keyboard_focus == .content) {
-            const step = if (self.active_tab == 4) @as(u16, 1) else @as(u16, 2);
-            const row_y = content_y + 2 + @as(u16, @intCast(self.hover_row)) * step;
-            ren.drawText(content_x - 2, row_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+            var row_y: ?u16 = null;
+            if (self.active_tab == 3) {
+                if (self.hover_row == 0) {
+                    row_y = content_y + 2;
+                } else if (self.hover_row == 1) {
+                    row_y = content_y + 4;
+                } else {
+                    const plugin_idx = self.hover_row - 2;
+                    if (plugin_idx >= self.plugin_scroll_offset and plugin_idx < self.plugin_scroll_offset + 6) {
+                        row_y = content_y + 8 + @as(u16, @intCast(plugin_idx - self.plugin_scroll_offset));
+                    }
+                }
+            } else {
+                const step = if (self.active_tab == 4) @as(u16, 1) else @as(u16, 2);
+                row_y = content_y + 2 + @as(u16, @intCast(self.hover_row)) * step;
+            }
+            if (row_y) |ry| {
+                ren.drawText(content_x - 2, ry, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+            }
         }
 
         // Draw active dropdown if any
@@ -425,7 +786,7 @@ pub const SettingsWidget = struct {
             var drop_w: u16 = 20;
 
             if (self.active_dropdown == .theme) {
-                items_len = supported_themes.len;
+                items_len = self.themes.items.len;
                 drop_w = 22;
                 drop_y = content_y + 3;
             } else if (self.active_dropdown == .split_separator) {
@@ -447,7 +808,8 @@ pub const SettingsWidget = struct {
             }
 
             // clamp drop height to screen_h if it's too tall, or just draw
-            const drop_h = @as(u16, @intCast(items_len)) + 2;
+            const max_visible = if (self.active_dropdown == .theme) @min(items_len, 8) else items_len;
+            const drop_h = @as(u16, @intCast(max_visible)) + 2;
             
             // Draw drop shadow for dropdown
             for (drop_y + 1..drop_y + drop_h + 1) |by| {
@@ -478,14 +840,30 @@ pub const SettingsWidget = struct {
             // Items
             var item_y = drop_y + 1;
             if (self.active_dropdown == .theme) {
-                for (supported_themes, 0..) |t, idx| {
+                const max_visible_themes = 8;
+                var i: usize = self.dropdown_scroll_offset;
+                const end_idx = @min(self.themes.items.len, self.dropdown_scroll_offset + max_visible_themes);
+                while (i < end_idx) : (i += 1) {
                     if (item_y >= screen_h) break;
-                    const is_sel = std.mem.eql(u8, self.config.theme, t);
-                    const prefix = if (is_sel) " * " else "   ";
-                    const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, t}) catch " error";
-                    ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
-                    if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    const t = self.themes.items[i];
+                    if (std.mem.startsWith(u8, t, "---")) {
+                        ren.drawText(drop_x + 1, item_y, t, theme.fg_secondary, theme.bg_sidebar, false, false);
+                    } else {
+                        const is_sel = std.mem.eql(u8, self.config.theme, t);
+                        const prefix = if (is_sel) " * " else "   ";
+                        const str = std.fmt.bufPrint(&buf, "{s}{s}", .{prefix, t}) catch " error";
+                        ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
+                        if (i == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    }
                     item_y += 1;
+                }
+
+                // Draw indicators for scrollability
+                if (self.dropdown_scroll_offset > 0) {
+                    ren.drawText(drop_x + drop_w - 2, drop_y, "▲", theme.fg_accent, theme.bg_sidebar, false, false);
+                }
+                if (self.dropdown_scroll_offset + max_visible_themes < self.themes.items.len) {
+                    ren.drawText(drop_x + drop_w - 2, drop_y + drop_h - 1, "▼", theme.fg_accent, theme.bg_sidebar, false, false);
                 }
             } else if (self.active_dropdown == .split_separator) {
                 for (supported_split_seps, 0..) |s, idx| {
@@ -610,9 +988,90 @@ pub const SettingsWidget = struct {
             ren.drawText(px + 2, py + 3, "This key is already in use!", theme.fg_primary, theme.bg_sidebar, false, false);
             ren.drawText(px + 14, py + 5, "[ OK ]", theme.fg_accent, theme.bg_sidebar, false, false);
         }
+
+        if (self.selected_plugin) |p| {
+            const pw: u16 = 50;
+            const ph: u16 = 12;
+            const px: u16 = (screen_w -| pw) / 2;
+            const py: u16 = (screen_h -| ph) / 2;
+
+            for (py + 1..py + ph + 1) |by| {
+                for (px + 1..px + pw + 1) |bx| {
+                    if (bx >= screen_w or by >= screen_h) continue;
+                    ren.drawText(@intCast(bx), @intCast(by), " ", theme.bg_editor, theme.bg_editor, false, false);
+                }
+            }
+
+            for (py..py + ph) |by| {
+                for (px..px + pw) |bx| {
+                    if (bx >= screen_w or by >= screen_h) continue;
+                    if (by == py or by == py + ph - 1) {
+                        ren.drawText(@intCast(bx), @intCast(by), "─", theme.border_color, theme.bg_sidebar, false, false);
+                    } else if (bx == px or bx == px + pw - 1) {
+                        ren.drawText(@intCast(bx), @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
+                    } else {
+                        ren.drawText(@intCast(bx), @intCast(by), " ", theme.fg_primary, theme.bg_sidebar, false, false);
+                    }
+                }
+            }
+            ren.drawText(px, py, "╭", theme.border_color, theme.bg_sidebar, false, false);
+            ren.drawText(px + pw - 1, py, "╮", theme.border_color, theme.bg_sidebar, false, false);
+            ren.drawText(px, py + ph - 1, "╰", theme.border_color, theme.bg_sidebar, false, false);
+            ren.drawText(px + pw - 1, py + ph - 1, "╯", theme.border_color, theme.bg_sidebar, false, false);
+
+            var title_buf: [64]u8 = undefined;
+            const title_str = std.fmt.bufPrint(&title_buf, " {s} ", .{p.name}) catch " Plugin Info ";
+            ren.drawText(px + 2, py, title_str, theme.fg_accent, theme.bg_sidebar, true, false);
+
+            ren.drawText(px + 2, py + 2, p.full_name, theme.fg_primary, theme.bg_sidebar, true, false);
+
+            var stars_buf: [32]u8 = undefined;
+            const stars_str = if (self.config.nerd_fonts)
+                std.fmt.bufPrint(&stars_buf, "󰓎 {d} stars", .{p.stars}) catch "Stars"
+            else
+                std.fmt.bufPrint(&stars_buf, "★ {d} stars", .{p.stars}) catch "Stars";
+            ren.drawText(px + 2, py + 3, stars_str, .{ .rgb = .{ .r = 250, .g = 200, .b = 20 } }, theme.bg_sidebar, false, false);
+
+            var desc_y = py + 5;
+            var start_char: usize = 0;
+            while (start_char < p.description.len and desc_y < py + ph - 3) {
+                const end_char = @min(p.description.len, start_char + 44);
+                ren.drawText(px + 2, desc_y, p.description[start_char..end_char], theme.fg_secondary, theme.bg_sidebar, false, false);
+                start_char = end_char;
+                desc_y += 1;
+            }
+
+            const edit_btn_fg = if (self.popup_btn_idx == 0) theme.bg_sidebar else theme.fg_accent;
+            const edit_btn_bg = if (self.popup_btn_idx == 0) theme.fg_accent else theme.bg_sidebar;
+            const close_btn_fg = if (self.popup_btn_idx == 1) theme.bg_sidebar else theme.fg_secondary;
+            const close_btn_bg = if (self.popup_btn_idx == 1) theme.fg_accent else theme.bg_sidebar;
+
+            ren.drawText(px + 4, py + ph - 2, "[ Edit Configuration ]", edit_btn_fg, edit_btn_bg, false, false);
+            ren.drawText(px + pw - 14, py + ph - 2, "[ Close ]", close_btn_fg, close_btn_bg, false, false);
+        }
     }
 
     pub fn handleKey(self: *SettingsWidget, key: []const u8) bool {
+        if (self.selected_plugin) |p| {
+            if (std.mem.eql(u8, key, "<Esc>") or std.mem.eql(u8, key, "q")) {
+                self.selected_plugin = null;
+                return true;
+            }
+            if (std.mem.eql(u8, key, "h") or std.mem.eql(u8, key, "<Left>") or std.mem.eql(u8, key, "l") or std.mem.eql(u8, key, "<Right>") or std.mem.eql(u8, key, "<Tab>")) {
+                self.popup_btn_idx = (self.popup_btn_idx + 1) % 2;
+                return true;
+            }
+            if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "<Space>")) {
+                if (self.popup_btn_idx == 0) {
+                    self.editConfig(p) catch {};
+                } else {
+                    self.selected_plugin = null;
+                }
+                return true;
+            }
+            return true;
+        }
+
         if (self.popup_active) {
             if (std.mem.eql(u8, key, "<Esc>")) {
                 self.popup_active = false;
@@ -627,7 +1086,7 @@ pub const SettingsWidget = struct {
                 return true;
             }
             const items_len = switch (self.active_dropdown) {
-                .theme => supported_themes.len,
+                .theme => self.themes.items.len,
                 .indent_size => supported_indents.len,
                 .indent_type => supported_indent_types.len,
                 .line_numbers => supported_line_nums.len,
@@ -636,16 +1095,50 @@ pub const SettingsWidget = struct {
                 .none => 0,
             };
             if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
-                if (self.hover_dropdown_idx < items_len - 1) self.hover_dropdown_idx += 1;
+                if (self.hover_dropdown_idx < items_len - 1) {
+                    var next_idx = self.hover_dropdown_idx + 1;
+                    if (self.active_dropdown == .theme) {
+                        while (next_idx < items_len and std.mem.startsWith(u8, self.themes.items[next_idx], "---")) : (next_idx += 1) {}
+                    }
+                    if (next_idx < items_len) {
+                        self.hover_dropdown_idx = next_idx;
+                        if (self.active_dropdown == .theme) {
+                            const max_visible_themes = 8;
+                            if (self.hover_dropdown_idx >= self.dropdown_scroll_offset + max_visible_themes) {
+                                self.dropdown_scroll_offset = self.hover_dropdown_idx - (max_visible_themes - 1);
+                            }
+                        }
+                    }
+                }
                 return true;
             } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
-                if (self.hover_dropdown_idx > 0) self.hover_dropdown_idx -= 1;
+                if (self.hover_dropdown_idx > 0) {
+                    var prev_idx = self.hover_dropdown_idx - 1;
+                    if (self.active_dropdown == .theme) {
+                        while (prev_idx > 0 and std.mem.startsWith(u8, self.themes.items[prev_idx], "---")) : (prev_idx -= 1) {}
+                        if (std.mem.startsWith(u8, self.themes.items[prev_idx], "---")) {
+                            return true;
+                        }
+                    }
+                    self.hover_dropdown_idx = prev_idx;
+                    if (self.active_dropdown == .theme) {
+                        if (self.hover_dropdown_idx < self.dropdown_scroll_offset) {
+                            self.dropdown_scroll_offset = self.hover_dropdown_idx;
+                        }
+                    }
+                }
                 return true;
-            } else if (std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
+            } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
                 const idx = self.hover_dropdown_idx;
                 if (self.active_dropdown == .theme) {
-                    self.allocator.free(self.config.theme);
-                    self.config.theme = self.allocator.dupe(u8, supported_themes[idx]) catch self.config.theme;
+                    const t = self.themes.items[idx];
+                    if (!std.mem.startsWith(u8, t, "---")) {
+                        self.allocator.free(self.config.theme);
+                        self.config.theme = self.allocator.dupe(u8, t) catch self.config.theme;
+                        self.has_unsaved_changes = true;
+                        self.active_dropdown = .none;
+                    }
+                    return true;
                 } else if (self.active_dropdown == .split_separator) {
                     self.allocator.free(self.config.split_separator);
                     self.config.split_separator = self.allocator.dupe(u8, supported_split_seps[idx]) catch self.config.split_separator;
@@ -668,7 +1161,7 @@ pub const SettingsWidget = struct {
         }
 
         if (self.duplicate_warning) {
-            if (std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "<Esc>")) {
+            if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "<Esc>")) {
                 self.duplicate_warning = false;
                 return true;
             }
@@ -734,7 +1227,7 @@ pub const SettingsWidget = struct {
                     self.hover_row = 0;
                 }
                 return true;
-            } else if (std.mem.eql(u8, key, "l") or std.mem.eql(u8, key, "<Right>") or std.mem.eql(u8, key, "<CR>")) {
+            } else if (std.mem.eql(u8, key, "l") or std.mem.eql(u8, key, "<Right>") or std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>")) {
                 self.keyboard_focus = .content;
                 self.hover_row = 0;
                 return true;
@@ -749,35 +1242,58 @@ pub const SettingsWidget = struct {
                 0 => 4,
                 1 => 3,
                 2 => 4,
-                3 => 2,
+                3 => 2 + self.installed_plugins.items.len,
                 4 => 6,
                 else => 0,
             };
 
             if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
-                if (self.hover_row < max_items - 1) self.hover_row += 1;
+                if (self.hover_row < max_items - 1) {
+                    self.hover_row += 1;
+                    if (self.active_tab == 3 and self.hover_row >= 2) {
+                        const plugin_idx = self.hover_row - 2;
+                        if (plugin_idx >= self.plugin_scroll_offset + 6) {
+                            self.plugin_scroll_offset = plugin_idx - 5;
+                        }
+                    }
+                }
                 return true;
             } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
-                if (self.hover_row > 0) self.hover_row -= 1;
+                if (self.hover_row > 0) {
+                    self.hover_row -= 1;
+                    if (self.active_tab == 3 and self.hover_row >= 2) {
+                        const plugin_idx = self.hover_row - 2;
+                        if (plugin_idx < self.plugin_scroll_offset) {
+                            self.plugin_scroll_offset = plugin_idx;
+                        }
+                    }
+                }
                 return true;
-            } else if (std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
+            } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
                 if (self.active_tab == 0) {
                     if (self.hover_row == 0) self.config.clip = !self.config.clip;
-                    if (self.hover_row == 1) { self.active_dropdown = .mode; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 1) { self.active_dropdown = .mode; self.hover_dropdown_idx = 0; self.dropdown_scroll_offset = 0; }
                     if (self.hover_row == 2) self.config.autocomplete = !self.config.autocomplete;
                     if (self.hover_row == 3) self.config.autoindent = !self.config.autoindent;
                 } else if (self.active_tab == 1) {
-                    if (self.hover_row == 0) { self.active_dropdown = .theme; self.hover_dropdown_idx = 0; }
-                    if (self.hover_row == 1) { self.active_dropdown = .split_separator; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 0) { self.openThemeDropdown(); }
+                    if (self.hover_row == 1) { self.active_dropdown = .split_separator; self.hover_dropdown_idx = 0; self.dropdown_scroll_offset = 0; }
                     if (self.hover_row == 2) self.config.nerd_fonts = !self.config.nerd_fonts;
                 } else if (self.active_tab == 2) {
-                    if (self.hover_row == 0) { self.active_dropdown = .indent_type; self.hover_dropdown_idx = 0; }
-                    if (self.hover_row == 1) { self.active_dropdown = .indent_size; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 0) { self.active_dropdown = .indent_type; self.hover_dropdown_idx = 0; self.dropdown_scroll_offset = 0; }
+                    if (self.hover_row == 1) { self.active_dropdown = .indent_size; self.hover_dropdown_idx = 0; self.dropdown_scroll_offset = 0; }
                     if (self.hover_row == 2) self.config.wrap = !self.config.wrap;
-                    if (self.hover_row == 3) { self.active_dropdown = .line_numbers; self.hover_dropdown_idx = 0; }
+                    if (self.hover_row == 3) { self.active_dropdown = .line_numbers; self.hover_dropdown_idx = 0; self.dropdown_scroll_offset = 0; }
                 } else if (self.active_tab == 3) {
                     if (self.hover_row == 0) self.open_mason = true;
                     if (self.hover_row == 1) self.open_lazy = true;
+                    if (self.hover_row >= 2) {
+                        const plugin_idx = self.hover_row - 2;
+                        if (plugin_idx < self.installed_plugins.items.len) {
+                            self.selected_plugin = self.installed_plugins.items[plugin_idx];
+                            self.popup_btn_idx = 0;
+                        }
+                    }
                 } else if (self.active_tab == 4) {
                     self.active_binding = self.hover_row;
                 }
@@ -799,6 +1315,26 @@ pub const SettingsWidget = struct {
 
     pub fn handleMouse(self: *SettingsWidget, mx: u16, my: u16, screen_w: u16, screen_h: u16) bool {
         if (!self.is_open) return false;
+
+        if (self.selected_plugin) |p| {
+            const pw: u16 = 50;
+            const ph: u16 = 12;
+            const px: u16 = (screen_w -| pw) / 2;
+            const py: u16 = (screen_h -| ph) / 2;
+
+            if (mx >= px and mx < px + pw and my >= py and my < py + ph) {
+                if (my == py + ph - 2) {
+                    if (mx >= px + 4 and mx < px + 4 + 22) {
+                        self.editConfig(p) catch {};
+                    } else if (mx >= px + 36 and mx < px + 36 + 9) {
+                        self.selected_plugin = null;
+                    }
+                }
+            } else {
+                self.selected_plugin = null;
+            }
+            return true;
+        }
 
         if (self.duplicate_warning) {
             self.duplicate_warning = false;
@@ -856,7 +1392,7 @@ pub const SettingsWidget = struct {
             var drop_w: u16 = 20;
 
             if (self.active_dropdown == .theme) {
-                items_len = supported_themes.len;
+                items_len = self.themes.items.len;
                 drop_w = 22;
                 drop_y = content_y + 3;
             } else if (self.active_dropdown == .split_separator) {
@@ -877,17 +1413,22 @@ pub const SettingsWidget = struct {
                 drop_y = content_y + 5;
             }
 
-            const drop_h = @as(u16, @intCast(items_len)) + 2;
+            const max_visible = if (self.active_dropdown == .theme) @min(items_len, 8) else items_len;
+            const drop_h = @as(u16, @intCast(max_visible)) + 2;
             
             if (mx >= drop_x and mx < drop_x + drop_w and my > drop_y and my < drop_y + drop_h - 1) {
-                const idx = my - drop_y - 1;
+                const click_offset = my - drop_y - 1;
+                const idx = if (self.active_dropdown == .theme) self.dropdown_scroll_offset + click_offset else click_offset;
                 var changed = false;
                 if (self.active_dropdown == .theme) {
-                    if (idx < supported_themes.len) {
-                        const new_theme = self.allocator.dupe(u8, supported_themes[idx]) catch return true;
-                        self.allocator.free(self.config.theme);
-                        self.config.theme = new_theme;
-                        changed = true;
+                    if (idx < self.themes.items.len) {
+                        const t = self.themes.items[idx];
+                        if (!std.mem.startsWith(u8, t, "---")) {
+                            const new_theme = self.allocator.dupe(u8, t) catch return true;
+                            self.allocator.free(self.config.theme);
+                            self.config.theme = new_theme;
+                            changed = true;
+                        }
                     }
                 } else if (self.active_dropdown == .split_separator) {
                     if (idx < supported_split_seps.len) {
@@ -984,6 +1525,8 @@ pub const SettingsWidget = struct {
                             changed = true;
                         } else if (my == content_y + 4) {
                             self.active_dropdown = .mode;
+                            self.hover_dropdown_idx = 0;
+                            self.dropdown_scroll_offset = 0;
                         } else if (my == content_y + 6) {
                             self.config.autocomplete = !self.config.autocomplete;
                             changed = true;
@@ -994,9 +1537,11 @@ pub const SettingsWidget = struct {
                     },
                     1 => {
                         if (my == content_y + 2) {
-                            self.active_dropdown = .theme;
+                            self.openThemeDropdown();
                         } else if (my == content_y + 4) {
                             self.active_dropdown = .split_separator;
+                            self.hover_dropdown_idx = 0;
+                            self.dropdown_scroll_offset = 0;
                         } else if (my == content_y + 6) {
                             self.config.nerd_fonts = !self.config.nerd_fonts;
                             changed = true;
@@ -1005,13 +1550,19 @@ pub const SettingsWidget = struct {
                     2 => {
                         if (my == content_y + 2) {
                             self.active_dropdown = .indent_type;
+                            self.hover_dropdown_idx = 0;
+                            self.dropdown_scroll_offset = 0;
                         } else if (my == content_y + 4) {
                             self.active_dropdown = .indent_size;
+                            self.hover_dropdown_idx = 0;
+                            self.dropdown_scroll_offset = 0;
                         } else if (my == content_y + 6) {
                             self.config.wrap = !self.config.wrap;
                             changed = true;
                         } else if (my == content_y + 8) {
                             self.active_dropdown = .line_numbers;
+                            self.hover_dropdown_idx = 0;
+                            self.dropdown_scroll_offset = 0;
                         }
                     },
                     3 => {
@@ -1019,6 +1570,12 @@ pub const SettingsWidget = struct {
                             self.open_mason = true;
                         } else if (my == content_y + 4) {
                             self.open_lazy = true;
+                        } else if (my >= content_y + 8 and my < content_y + 14) {
+                            const click_idx = self.plugin_scroll_offset + (my - (content_y + 8));
+                            if (click_idx < self.installed_plugins.items.len) {
+                                self.selected_plugin = self.installed_plugins.items[click_idx];
+                                self.popup_btn_idx = 0;
+                            }
                         }
                     },
                     4 => {

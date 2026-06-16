@@ -22,10 +22,11 @@ pub const ActivityBar = struct {
     };
 
     pub const items = [_]Item{
-        .{ .icon = "󰙅 ", .label = "Explorer" },
+        .{ .icon = " ", .label = "Explorer" },
         .{ .icon = " ", .label = "Search" },
-        .{ .icon = " ", .label = "Source Control" },
+        .{ .icon = " ", .label = "Source Control" },
         .{ .icon = "󰚩 ", .label = "AI Assistants" },
+        .{ .icon = " ", .label = "Extensions" },
     };
 
     pub fn draw(self: *const ActivityBar, renderer: *Renderer, rect: Rect, theme: Theme) void {
@@ -52,6 +53,8 @@ pub const ActivityBar = struct {
                 0 => "E ",
                 1 => "S ",
                 2 => "G ",
+                3 => "A ",
+                4 => "X ",
                 else => "  ",
             };
 
