@@ -1634,17 +1634,7 @@ function _G.OpenAITerminal(cmd)
     
     local run_cmd = cmd
     if vim.fn.executable(cmd) == 0 then
-        local installers = {
-            claude = "echo 'Claude Code not found. Installing via curl...'; curl -fsSL https://claude.ai/install.sh | bash; exec $SHELL",
-            gemini = "echo 'Gemini CLI not found. Installing via npm...'; npm install -g @google/gemini-cli; gemini",
-            copilot = "echo 'GitHub Copilot CLI not found. Installing via npm...'; npm install -g @github/copilot-cli; github-copilot-cli",
-            agy = "echo 'Antigravity CLI not found. Installing via curl...'; curl -fsSL https://antigravity.google/cli/install.sh | bash; exec $SHELL",
-        }
-        if installers[cmd] then
-            run_cmd = installers[cmd]
-        else
-            run_cmd = "echo 'Command \"" .. cmd .. "\" is not installed. Please install it first.'"
-        end
+        run_cmd = "echo 'Command \"" .. cmd .. "\" is not installed. Please install it first.'; exec $SHELL"
     end
 
     -- Send the command and enter

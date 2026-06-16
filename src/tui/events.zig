@@ -276,11 +276,9 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.needs_resize = true;
             }
             if (a.settings_widget.edit_config_path) |path| {
-                const duped = a.allocator.dupe(u8, path) catch path;
+                @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
                 a.settings_widget.allocator.free(path);
                 a.settings_widget.edit_config_path = null;
-                @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, duped) catch {};
-                a.allocator.free(duped);
                 a.sidebar_focus = false;
                 a.needs_resize = true;
             }
@@ -761,13 +759,11 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             if (try a.extension_shop.handlePopupMouse(m, a.ren.width, a.ren.height)) {
                 a.needs_resize = true;
                 if (a.extension_shop.edit_config_path) |path| {
-                    const duped = a.allocator.dupe(u8, path) catch path;
+                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
                     a.extension_shop.allocator.free(path);
                     a.extension_shop.edit_config_path = null;
                     a.extension_shop.is_popup_open = false;
                     a.extension_shop.is_detail_open = false;
-                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, duped) catch {};
-                    a.allocator.free(duped);
                     a.sidebar_focus = false;
                 }
             } else if (m.action == .press) {
@@ -794,11 +790,9 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.lazy_widget.refresh(a.rpc);
                 }
                 if (a.settings_widget.edit_config_path) |path| {
-                    const duped = a.allocator.dupe(u8, path) catch path;
+                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
                     a.settings_widget.allocator.free(path);
                     a.settings_widget.edit_config_path = null;
-                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, duped) catch {};
-                    a.allocator.free(duped);
                     a.sidebar_focus = false;
                     a.needs_resize = true;
                 }

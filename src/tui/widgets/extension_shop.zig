@@ -818,7 +818,11 @@ pub const ExtensionShop = struct {
             .stdout = .pipe,
             .stderr = .ignore,
         });
-        _ = try child.wait(self.io);
+        const term = try child.wait(self.io);
+        if (!term.success()) {
+            self.setMessage("Failed to update plugin");
+            return;
+        }
 
         p.installed = !p.installed;
         self.show_reload_confirm = true;

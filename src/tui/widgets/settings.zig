@@ -379,17 +379,16 @@ pub const SettingsWidget = struct {
         defer allocator.free(path_z);
         
         const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0);
-        defer _ = std.os.linux.close(fd);
+        defer _ = std.posix.system.close(fd);
         
         var list: std.ArrayList(u8) = .empty;
         errdefer list.deinit(allocator);
         
         var chunk: [4096]u8 = undefined;
         while (true) {
-            const read_len = std.os.linux.read(fd, &chunk, chunk.len);
+            const read_len = try std.posix.read(fd, &chunk);
             if (read_len == 0) break;
-            if (read_len < 0) return error.InputOutput;
-            try list.appendSlice(allocator, chunk[0..@intCast(read_len)]);
+            try list.appendSlice(allocator, chunk[0..read_len]);
         }
         return try list.toOwnedSlice(allocator);
     }
