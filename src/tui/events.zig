@@ -7,8 +7,7 @@ const Value = @import("../nvim/msgpack.zig").Value;
 const Layout = @import("layout.zig").Layout;
 const settings = @import("widgets/settings.zig");
 
-fn writeHandoffInit(content: []const u8) void {
-    const path = "/tmp/vide_handoff_init.lua";
+fn writeHandoffInit(path: []const u8, content: []const u8) void {
     const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600) catch return;
     defer _ = std.posix.system.close(fd);
 
@@ -276,6 +275,15 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.settings_widget.is_open = false;
                 a.needs_resize = true;
             }
+            if (a.settings_widget.edit_config_path) |path| {
+                const duped = a.allocator.dupe(u8, path) catch path;
+                a.settings_widget.allocator.free(path);
+                a.settings_widget.edit_config_path = null;
+                @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, duped) catch {};
+                a.allocator.free(duped);
+                a.sidebar_focus = false;
+                a.needs_resize = true;
+            }
             return true;
         }
         if (a.mason_widget.is_open) {
@@ -292,6 +300,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         }
         if (a.git_detailed_widget.is_open) {
             if (a.git_detailed_widget.handleKey(nk)) {
+                a.needs_resize = true;
+            }
+            return true;
+        }
+        if (a.extension_shop.is_popup_open) {
+            if (try a.extension_shop.handlePopupKey(nk, a.ren.height)) {
                 a.needs_resize = true;
             }
             return true;
@@ -315,24 +329,33 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
 
     if (toggle_zen) {
         if (a.settings_widget.config.zen_handoff) {
+            const dir_path = std.fs.path.dirname(a.settings_widget.settings_path) orelse ".";
+            const session_path = try std.fs.path.join(a.allocator, &[_][]const u8{ dir_path, "vide_session.vim" });
+            defer a.allocator.free(session_path);
+            const handoff_path = try std.fs.path.join(a.allocator, &[_][]const u8{ dir_path, "vide_handoff_init.lua" });
+            defer a.allocator.free(handoff_path);
+
             // Handoff to native nvim: save session first
             var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
             _ = a.rpc.call("nvim_command", &wa_cmd) catch {};
 
-            var mks_cmd = [_]Value{.{ .string = "mksession! /tmp/vide_session.vim" }};
+            const mks_cmd_str = try std.fmt.allocPrint(a.allocator, "mksession! {s}", .{session_path});
+            defer a.allocator.free(mks_cmd_str);
+            var mks_cmd = [_]Value{.{ .string = mks_cmd_str }};
             _ = a.rpc.call("nvim_command", &mks_cmd) catch {};
 
             // Write handoff init: same plugins + retoggle keybind
             const zen_key = a.settings_widget.config.keybindings.toggle_zen;
             const vide_init_lua = @embedFile("../nvim/vide_init.lua");
-            var handoff_buf: [131072]u8 = undefined;
-            const handoff_script = std.fmt.bufPrint(&handoff_buf,
+            const handoff_buf = try a.allocator.alloc(u8, vide_init_lua.len + session_path.len + 512);
+            defer a.allocator.free(handoff_buf);
+            const handoff_script = std.fmt.bufPrint(handoff_buf,
                 "-- vide handoff\n{s}\nvim.schedule(function()\n" ++
-                "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! /tmp/vide_session.vim') vim.cmd('qa') end\n" ++
+                "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! {s}') vim.cmd('qa') end\n" ++
                 "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true, desc='Return to vide'}})\nend)\n",
-                .{ vide_init_lua, zen_key }) catch vide_init_lua;
+                .{ vide_init_lua, session_path, zen_key }) catch vide_init_lua;
 
-            writeHandoffInit(handoff_script);
+            writeHandoffInit(handoff_path, handoff_script);
 
             return error.ZenModeHandoff;
         } else {
@@ -424,12 +447,18 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     if (nk.len > 0) {
         if (a.sidebar_focus) {
             if (std.mem.eql(u8, nk, "<Tab>")) {
-                a.activity_bar.active_idx = (a.activity_bar.active_idx + 1) % 4;
+                a.activity_bar.active_idx = (a.activity_bar.active_idx + 1) % 5;
+                if (a.activity_bar.active_idx == 4) {
+                    a.extension_shop.triggerSearch() catch {};
+                }
                 a.needs_resize = true;
                 return true;
             }
             if (std.mem.eql(u8, nk, "<S-Tab>")) {
-                a.activity_bar.active_idx = if (a.activity_bar.active_idx == 0) 3 else a.activity_bar.active_idx - 1;
+                a.activity_bar.active_idx = if (a.activity_bar.active_idx == 0) 4 else a.activity_bar.active_idx - 1;
+                if (a.activity_bar.active_idx == 4) {
+                    a.extension_shop.triggerSearch() catch {};
+                }
                 a.needs_resize = true;
                 return true;
             }
@@ -448,6 +477,8 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     a.settings_widget.allocator.free(old_cfg.keybindings.find_file);
                     a.settings_widget.allocator.free(old_cfg.keybindings.quit);
                 } else |_| {}
+                a.settings_widget.refreshThemes(a.rpc);
+                a.settings_widget.refreshPlugins();
                 a.settings_widget.is_open = true;
                 a.needs_resize = true;
                 return true;
@@ -498,6 +529,11 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     a.needs_resize = true;
                     return true;
                 } else if (std.mem.eql(u8, nk, "j") or std.mem.eql(u8, nk, "k") or std.mem.eql(u8, nk, "<Down>") or std.mem.eql(u8, nk, "<Up>")) {
+                    a.needs_resize = true;
+                    return true;
+                }
+            } else if (a.show_file_tree and a.activity_bar.active_idx == 4) {
+                if (try a.extension_shop.handleKey(nk)) {
                     a.needs_resize = true;
                     return true;
                 }
@@ -720,6 +756,27 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             a.needs_resize = true;
         }
     }
+    if (a.extension_shop.is_popup_open) {
+        if (m.action == .press or m.button == .wheel_up or m.button == .wheel_down) {
+            if (try a.extension_shop.handlePopupMouse(m, a.ren.width, a.ren.height)) {
+                a.needs_resize = true;
+                if (a.extension_shop.edit_config_path) |path| {
+                    const duped = a.allocator.dupe(u8, path) catch path;
+                    a.extension_shop.allocator.free(path);
+                    a.extension_shop.edit_config_path = null;
+                    a.extension_shop.is_popup_open = false;
+                    a.extension_shop.is_detail_open = false;
+                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, duped) catch {};
+                    a.allocator.free(duped);
+                    a.sidebar_focus = false;
+                }
+            } else if (m.action == .press) {
+                a.extension_shop.is_popup_open = false;
+                a.needs_resize = true;
+            }
+        }
+        return;
+    }
 
     if (a.settings_widget.is_open) {
         if (m.action == .press) {
@@ -735,6 +792,15 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.settings_widget.is_open = false;
                     a.lazy_widget.is_open = true;
                     a.lazy_widget.refresh(a.rpc);
+                }
+                if (a.settings_widget.edit_config_path) |path| {
+                    const duped = a.allocator.dupe(u8, path) catch path;
+                    a.settings_widget.allocator.free(path);
+                    a.settings_widget.edit_config_path = null;
+                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, duped) catch {};
+                    a.allocator.free(duped);
+                    a.sidebar_focus = false;
+                    a.needs_resize = true;
                 }
             } else {
                 a.settings_widget.is_open = false;
@@ -758,6 +824,22 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 2 and m.button == .wheel_down) {
                 a.git_panel.handleScroll(1);
                 a.needs_resize = true;
+            } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 4 and m.button == .wheel_up) {
+                if (a.extension_shop.selected_idx > 0) {
+                    a.extension_shop.selected_idx -= 1;
+                    if (a.extension_shop.selected_idx < a.extension_shop.scroll_offset) {
+                        a.extension_shop.scroll_offset = a.extension_shop.selected_idx;
+                    }
+                    a.needs_resize = true;
+                }
+            } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 4 and m.button == .wheel_down) {
+                if (a.extension_shop.selected_idx < a.extension_shop.plugins.items.len - 1) {
+                    a.extension_shop.selected_idx += 1;
+                    if (a.extension_shop.selected_idx >= a.extension_shop.scroll_offset + 5) {
+                        a.extension_shop.scroll_offset = a.extension_shop.selected_idx - 4;
+                    }
+                    a.needs_resize = true;
+                }
             } else if (a.show_file_tree and m.col >= layout.file_tree.x + layout.file_tree.w - 2 and m.col <= layout.file_tree.x + layout.file_tree.w) {
                 a.is_resizing_sidebar = true;
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h) {
@@ -877,6 +959,10 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         }
                     }
                     a.needs_resize = true;
+                } else if (a.activity_bar.active_idx == 4) {
+                    if (try a.extension_shop.handleMouse(m.col, m.row, layout.file_tree)) {
+                        a.needs_resize = true;
+                    }
                 }
             } else if (layout.panel != null and m.row == layout.panel.?.y) {
                 const px = m.col - layout.panel.?.x;
@@ -905,6 +991,9 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     if (new_idx != 99) {
                         a.sidebar_focus = true;
                     }
+                    if (new_idx == 4 and prev_idx != 4) {
+                        a.extension_shop.triggerSearch() catch {};
+                    }
                     if (prev_idx != new_idx) a.needs_resize = true;
                     if (new_idx == 99) {
                         const old_cfg = a.settings_widget.config;
@@ -921,6 +1010,8 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             a.settings_widget.allocator.free(old_cfg.keybindings.find_file);
                             a.settings_widget.allocator.free(old_cfg.keybindings.quit);
                         } else |_| {}
+                        a.settings_widget.refreshThemes(a.rpc);
+                        a.settings_widget.refreshPlugins();
                         a.settings_widget.is_open = true;
                         a.needs_resize = true;
                         a.activity_bar.active_idx = prev_idx; // Revert active idx visually

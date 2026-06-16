@@ -53,7 +53,19 @@ set.undofile = true
 set.incsearch = true
 set.updatetime = 50
 
-require("lazy").setup({
+local user_plugins_path = vim.fn.expand("~/.local/share/vide/user_plugins.json")
+local user_plugins = {}
+local up_f = io.open(user_plugins_path, "r")
+if up_f then
+    local content = up_f:read("*a")
+    up_f:close()
+    local ok, decoded = pcall(vim.json.decode, content)
+    if ok and type(decoded) == "table" then
+        user_plugins = decoded
+    end
+end
+
+local plugins_setup = {
     {
         "goolord/alpha-nvim",
         lazy = false,
@@ -404,7 +416,19 @@ require("lazy").setup({
     { "rebelot/kanagawa.nvim", lazy = true },
     { "EdenEast/nightfox.nvim", lazy = true },
     { "tahayvr/matteblack.nvim", lazy = true },
-}, {
+}
+local config_dir = vim.fn.expand("~/.local/share/vide/plugin_configs/")
+for _, p in ipairs(user_plugins) do
+    local config_path = config_dir .. p:gsub("/", "_") .. ".lua"
+    local plugin_def = { p }
+    if vim.fn.filereadable(config_path) == 1 then
+        plugin_def.config = function()
+            dofile(config_path)
+        end
+    end
+    table.insert(plugins_setup, plugin_def)
+end
+require("lazy").setup(plugins_setup, {
     root = vim.fn.stdpath("data") .. "/vide/lazy",
     lockfile = vim.fn.stdpath("data") .. "/vide/lazy-lock.json",
     performance = {
@@ -538,7 +562,11 @@ _G.vide_load_settings = function()
                 vim.g.vide_zen_handoff = true
             end
             if state.theme then
-                vim.schedule(function() vim.cmd("colorscheme " .. state.theme) end)
+                vim.schedule(function()
+                    if not pcall(vim.cmd, "colorscheme " .. state.theme) then
+                        pcall(vim.cmd, "colorscheme vscode")
+                    end
+                end)
             end
         end
     end
@@ -1399,6 +1427,11 @@ local VIDE_KEYS = {
     "  <Space> d              Delete to black hole (without yanking)",
     "  <Space> s              Substitute word under cursor everywhere",
     "  <Space> x              Make current file executable (chmod +x)",
+    "",
+    "  ── AI ASSISTANT CONTEXT ────────────────────────────────────────",
+    "  <Space> a f            Send current file path to AI assistant",
+    "  <Space> a c            Send entire file content to AI assistant",
+    "  <Space> a s (Visual)   Send selected text to AI assistant",
 }
 
 local state = { active_tab = "vim", buf = nil, win = nil }
@@ -1510,13 +1543,122 @@ end
         vim.api.nvim_create_user_command("HelpMenu", _G.open_help_menu, {})
         vim.keymap.set({ "n", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
     
+_G.last_ai_job_id = nil
+
+function _G.GetActiveAIJob()
+    local job_id = _G.last_ai_job_id
+    if not job_id then return nil end
+    local ok, res = pcall(vim.fn.jobwait, {job_id}, 0)
+    if ok and res and res[1] == -1 then
+        return job_id
+    end
+    _G.last_ai_job_id = nil
+    return nil
+end
+
+function _G.SendSelectionToAI()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then
+        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+        return
+    end
+    
+    local mode = vim.api.nvim_get_mode().mode
+    if mode:sub(1,1) == "v" or mode:sub(1,1) == "V" or mode == "\22" then
+        vim.cmd("normal! \x1b") -- exit visual mode
+    end
+    
+    local s_start = vim.fn.getpos("'<")
+    local s_end = vim.fn.getpos("'>")
+    if not s_start or not s_end or s_start[2] == 0 or s_end[2] == 0 then
+        vim.notify("No selection found. Please select some text first!", vim.log.levels.WARN)
+        return
+    end
+    
+    local lines = vim.api.nvim_buf_get_lines(0, s_start[2] - 1, s_end[2], false)
+    if #lines == 0 then return end
+    
+    if mode == "v" then
+        lines[#lines] = string.sub(lines[#lines], 1, s_end[3])
+        lines[1] = string.sub(lines[1], s_start[3])
+    end
+    
+    local text = table.concat(lines, "\n")
+    vim.fn.chansend(job_id, text)
+    vim.notify("Sent selection to AI terminal", vim.log.levels.INFO)
+end
+
+function _G.SendFilePathToAI()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then
+        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+        return
+    end
+    local fp = vim.fn.expand("%:p")
+    if fp == "" then return end
+    vim.fn.chansend(job_id, fp .. " ")
+    vim.notify("Sent file path to AI terminal", vim.log.levels.INFO)
+end
+
+function _G.SendFileContentToAI()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then
+        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+        return
+    end
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local text = table.concat(lines, "\n")
+    vim.fn.chansend(job_id, text)
+    vim.notify("Sent file content to AI terminal", vim.log.levels.INFO)
+end
+
+vim.keymap.set("v", "<leader>as", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
+vim.keymap.set("n", "<leader>af", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
+vim.keymap.set("n", "<leader>ac", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
+
+vim.keymap.set({ "n", "v", "i" }, "<M-s>", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<M-f>", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
+
+vim.keymap.set({ "n", "v", "i" }, "<C-M-s>", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<C-M-f>", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<C-M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
+
 function _G.OpenAITerminal(cmd)
     vim.cmd("botright vsplit")
     vim.cmd("wincmd L")
     vim.cmd("enew")
     local shell = vim.env.SHELL or "bash"
-    vim.fn.termopen(shell)
+    local job_id = vim.fn.termopen(shell)
+    _G.last_ai_job_id = job_id
+    
+    local run_cmd = cmd
+    if vim.fn.executable(cmd) == 0 then
+        local installers = {
+            claude = "echo 'Claude Code not found. Installing via curl...'; curl -fsSL https://claude.ai/install.sh | bash; exec $SHELL",
+            gemini = "echo 'Gemini CLI not found. Installing via npm...'; npm install -g @google/gemini-cli; gemini",
+            copilot = "echo 'GitHub Copilot CLI not found. Installing via npm...'; npm install -g @github/copilot-cli; github-copilot-cli",
+            agy = "echo 'Antigravity CLI not found. Installing via curl...'; curl -fsSL https://antigravity.google/cli/install.sh | bash; exec $SHELL",
+        }
+        if installers[cmd] then
+            run_cmd = installers[cmd]
+        else
+            run_cmd = "echo 'Command \"" .. cmd .. "\" is not installed. Please install it first.'"
+        end
+    end
+
     -- Send the command and enter
-    vim.fn.chansend(vim.b.terminal_job_id, cmd .. "\n")
+    vim.fn.chansend(job_id, run_cmd .. "\n")
     vim.cmd("startinsert")
 end
+
+-- Disable default right-click behavior to prevent popup menus which cause freezes in headless mode
+for _, mode in ipairs({ 'n', 'v', 'i', 's', 'c' }) do
+    vim.keymap.set(mode, '<RightMouse>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<RightRelease>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<RightDrag>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<2-RightMouse>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<3-RightMouse>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<4-RightMouse>', '<Nop>', { silent = true })
+end
+
