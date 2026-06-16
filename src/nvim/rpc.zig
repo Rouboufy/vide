@@ -120,7 +120,7 @@ pub const RpcClient = struct {
 
     fn waitResponse(self: *RpcClient, id: u32) !Value {
         var retries: usize = 0;
-        const max_retries = 3;
+        const max_retries = 100;
         while (true) {
             // Read with retry on WouldBlock (non-blocking stdout fd)
             const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {

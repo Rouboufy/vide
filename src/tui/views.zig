@@ -197,6 +197,12 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                     .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
                     .nerd_fonts = a.settings_widget.config.nerd_fonts,
                 });
+            } else if (a.activity_bar.active_idx == 4) {
+                a.extension_shop.draw(a.ren, layout.file_tree, .{
+                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .nerd_fonts = a.settings_widget.config.nerd_fonts,
+                });
             } else {
                 drawRect(a.ren, layout.file_tree, " ", t.fg_primary, t.bg_sidebar);
             }
@@ -435,6 +441,13 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
             .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
             .fg_comment = t.fg_secondary,
+        });
+    }
+    if (a.extension_shop.is_popup_open) {
+        a.extension_shop.drawPopup(a.ren, a.ren.width, a.ren.height, .{
+            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .nerd_fonts = a.settings_widget.config.nerd_fonts,
         });
     }
 
