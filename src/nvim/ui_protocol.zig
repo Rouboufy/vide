@@ -359,8 +359,9 @@ pub const UiState = struct {
             } else if (rows < 0) {
                 const abs_rows = @as(u16, @intCast(-rows));
                 if (bot > 0) {
-                    var y = bot - 1;
-                    while (y >= top + abs_rows) : (y -= 1) {
+                    var y = bot;
+                    while (y > top + abs_rows) {
+                        y -= 1;
                         const src_y = y - abs_rows;
                         for (left..right) |x| {
                             target.cells[@as(usize, y) * @as(usize, target.width) + x] =
