@@ -1,5 +1,13 @@
 const std = @import("std");
 const renderer = @import("../renderer.zig");
+
+fn closeFd(fd: std.posix.fd_t) void {
+    if (@hasDecl(std.posix, "close")) {
+        std.posix.close(fd);
+    } else {
+        _ = std.posix.system.close(fd);
+    }
+}
 const Color = renderer.Color;
 
 pub const Keybindings = struct {
@@ -74,7 +82,7 @@ pub const SettingsConfig = struct {
             }
             return err;
         };
-        defer std.posix.close(fd);
+        defer closeFd(fd);
 
         var buf: [4096]u8 = undefined;
         const len = std.posix.read(fd, &buf) catch 0;
@@ -119,7 +127,7 @@ pub const SettingsConfig = struct {
         
         const path_z = try alloc.dupeSentinel(u8, path, 0);
         const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-        defer std.posix.close(fd);
+        defer closeFd(fd);
 
         var buf: std.ArrayList(u8) = .empty;
         defer buf.deinit(alloc);
@@ -128,7 +136,11 @@ pub const SettingsConfig = struct {
         try std.json.Stringify.value(self.*, .{}, &aw.writer);
         var out_buf = aw.toArrayList();
         defer out_buf.deinit(alloc);
-        _ = std.posix.write(fd, out_buf.items) catch 0;
+        if (@hasDecl(std.posix, "write")) {
+            _ = std.posix.write(fd, out_buf.items) catch 0;
+        } else {
+            _ = std.posix.system.write(fd, out_buf.items.ptr, out_buf.items.len);
+        }
     }
 };
 
@@ -504,7 +516,7 @@ pub const SettingsWidget = struct {
         const fd = std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| blk: {
             if (err == error.FileNotFound) {
                 const write_fd = try std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-                defer _ = std.os.linux.close(write_fd);
+                defer closeFd(write_fd);
 
                 var template_buf: [512]u8 = undefined;
                 const template = std.fmt.bufPrint(&template_buf,
@@ -516,12 +528,16 @@ pub const SettingsWidget = struct {
                     .{p.name}
                 ) catch "";
 
-                _ = std.os.linux.write(write_fd, template.ptr, template.len);
+                if (@hasDecl(std.posix, "write")) {
+                    _ = std.posix.write(write_fd, template) catch {};
+                } else {
+                    _ = std.posix.system.write(write_fd, template.ptr, template.len);
+                }
             }
             break :blk -1;
         };
         if (fd >= 0) {
-            _ = std.os.linux.close(fd);
+            closeFd(fd);
         }
 
         self.edit_config_path = config_file_path;

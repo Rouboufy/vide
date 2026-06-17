@@ -22,6 +22,21 @@ echo "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝
 echo -e "${NC}"
 echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
 
+# Define and create XDG directories
+export XDG_CONFIG_HOME="$HOME/.config/vide"
+export XDG_DATA_HOME="$HOME/.local/share/vide"
+export XDG_STATE_HOME="$HOME/.local/state/vide"
+export XDG_CACHE_HOME="$HOME/.cache/vide"
+
+mkdir -p "$XDG_CONFIG_HOME"
+mkdir -p "$XDG_DATA_HOME"
+mkdir -p "$XDG_STATE_HOME"
+mkdir -p "$XDG_CACHE_HOME"
+mkdir -p "$HOME/.local/bin"
+
+# Make sure local bin is in PATH for the duration of this script
+export PATH="$HOME/.local/bin:$PATH"
+
 # Check and install dependencies
 MISSING_DEPS=()
 for cmd in git curl nvim; do
@@ -33,10 +48,11 @@ done
 if ! command -v zig &>/dev/null; then
     MISSING_DEPS+=("zig")
 else
-    ZIG_VER=$(zig version | cut -d. -f1,2)
-    if [[ "$ZIG_VER" == "0.14" || "$ZIG_VER" == "0.13" || "$ZIG_VER" == "0.12" || "$ZIG_VER" == "0.11" || "$ZIG_VER" == "0.10" || "$ZIG_VER" == "0.9" ]]; then
+    ZIG_MAJOR=$(zig version | cut -d. -f1)
+    ZIG_MINOR=$(zig version | cut -d. -f2)
+    if [ "$ZIG_MAJOR" -eq 0 ] && [ "$ZIG_MINOR" -lt 16 ]; then
         MISSING_DEPS+=("zig")
-        echo -e "${YELLOW}Zig $ZIG_VER is too old (requires 0.15+). Will be upgraded.${NC}"
+        echo -e "${YELLOW}Zig $(zig version) is too old (requires 0.16+). Will be upgraded.${NC}"
         if command -v snap &>/dev/null; then sudo snap remove zig &>/dev/null || true; fi
     fi
 fi
@@ -99,12 +115,12 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
                     ZIG_ARCH="x86_64-linux"
                 fi
             fi
-            ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c "import sys, json; print(json.load(sys.stdin)['master']['$ZIG_ARCH']['tarball'])")
+            ZIG_URL=$(curl -s https://ziglang.org/download/index.json | grep -A 5 "\"$ZIG_ARCH\"" | grep -o 'https://[^"]*tar\.xz' | head -n 1)
             curl -fLo "/tmp/zig.tar.xz" "$ZIG_URL"
-            sudo rm -rf /usr/local/zig
-            sudo mkdir -p /usr/local/zig
-            sudo tar -xf "/tmp/zig.tar.xz" -C /usr/local/zig --strip-components=1
-            sudo ln -sfn /usr/local/zig/zig /usr/local/bin/zig
+            rm -rf "$XDG_DATA_HOME/zig"
+            mkdir -p "$XDG_DATA_HOME/zig"
+            tar -xf "/tmp/zig.tar.xz" -C "$XDG_DATA_HOME/zig" --strip-components=1
+            ln -sfn "$XDG_DATA_HOME/zig/zig" "$HOME/.local/bin/zig"
             rm "/tmp/zig.tar.xz"
         fi
         
@@ -121,16 +137,7 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
     fi
 fi
 
-export XDG_CONFIG_HOME="$HOME/.config/vide"
-export XDG_DATA_HOME="$HOME/.local/share/vide"
-export XDG_STATE_HOME="$HOME/.local/state/vide"
-export XDG_CACHE_HOME="$HOME/.cache/vide"
 
-mkdir -p "$XDG_CONFIG_HOME"
-mkdir -p "$XDG_DATA_HOME"
-mkdir -p "$XDG_STATE_HOME"
-mkdir -p "$XDG_CACHE_HOME"
-mkdir -p "$HOME/.local/bin"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -d "$SCRIPT_DIR/config" ]; then

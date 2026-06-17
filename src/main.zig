@@ -28,6 +28,14 @@ const nvim_helpers = @import("nvim/helpers.zig");
 const views = @import("tui/views.zig");
 const events = @import("tui/events.zig");
 
+fn closeFd(fd: std.posix.fd_t) void {
+    if (@hasDecl(std.posix, "close")) {
+        std.posix.close(fd);
+    } else {
+        _ = std.posix.system.close(fd);
+    }
+}
+
 var global_term: ?*Terminal = null;
 var log_path: ?[]const u8 = null;
 
@@ -44,7 +52,7 @@ pub fn log(
     
     const path_z = alloc.dupeSentinel(u8, path, 0) catch return;
     const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, 0o644) catch return;
-    defer _ = std.os.linux.close(fd);
+    defer closeFd(fd);
 
     var buf = std.ArrayList(u8).init(alloc);
     defer buf.deinit();
@@ -148,9 +156,16 @@ fn innerMain(init: std.process.Init) !void {
     };
     std.posix.sigaction(std.posix.SIG.WINCH, &sa, null);
 
-    var sigwinch_pipe = try std.posix.pipe();
-    const flags_0 = std.posix.fcntl(sigwinch_pipe[0], std.posix.F.GETFL, 0) catch 0;
-    _ = std.posix.fcntl(sigwinch_pipe[0], std.posix.F.SETFL, flags_0 | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })))) catch 0;
+    var sigwinch_pipe: [2]std.posix.fd_t = undefined;
+    if (@TypeOf(std.posix.system.pipe2) != void) {
+        _ = std.posix.system.pipe2(&sigwinch_pipe, std.posix.O{ .NONBLOCK = true });
+    } else {
+        _ = std.posix.system.pipe(&sigwinch_pipe);
+        const flags0 = std.posix.fcntl(sigwinch_pipe[0], std.posix.F.GETFL, 0) catch 0;
+        _ = std.posix.fcntl(sigwinch_pipe[0], std.posix.F.SETFL, flags0 | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))) catch {};
+        const flags1 = std.posix.fcntl(sigwinch_pipe[1], std.posix.F.GETFL, 0) catch 0;
+        _ = std.posix.fcntl(sigwinch_pipe[1], std.posix.F.SETFL, flags1 | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))) catch {};
+    }
     input.sigwinch_pipe_write_fd = sigwinch_pipe[1];
 
     const size = try term.getSize();
@@ -496,9 +511,9 @@ fn runNvimSession(
         views.drawWorkspace(&app, layout);
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
-            if (alloc.dupeZ(u8, preview_path)) |p| {
-                std.posix.unlinkatZ(std.posix.AT.FDCWD, p, 0) catch {};
-                alloc.free(p);
+            if (alloc.dupeSentinel(u8, preview_path, 0)) |p| {
+                defer alloc.free(p);
+                _ = std.posix.system.unlink(p.ptr);
             } else |_| {}
         }
         app.was_settings_open = app.settings_widget.is_open;

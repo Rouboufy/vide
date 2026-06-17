@@ -24,11 +24,8 @@ pub const NvimProcess = struct {
         const stdout = child.stdout orelse return error.StdoutPipeFailed;
 
 
-        const flags_in = try std.posix.fcntl(stdin.handle, std.posix.F.GETFL, 0);
-        _ = try std.posix.fcntl(stdin.handle, std.posix.F.SETFL, flags_in | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })));
-
-        const flags_out = try std.posix.fcntl(stdout.handle, std.posix.F.GETFL, 0);
-        _ = try std.posix.fcntl(stdout.handle, std.posix.F.SETFL, flags_out | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })));
+        try setNonBlock(stdin.handle);
+        try setNonBlock(stdout.handle);
 
         return NvimProcess{
             .child = child,
@@ -43,3 +40,19 @@ pub const NvimProcess = struct {
         }
     }
 };
+
+fn setNonBlock(fd: std.posix.fd_t) !void {
+    if (@hasDecl(std.posix, "fcntl")) {
+        const flags = try std.posix.fcntl(fd, std.posix.F.GETFL, 0);
+        _ = try std.posix.fcntl(fd, std.posix.F.SETFL, flags | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })));
+    } else {
+        const rc = std.posix.system.fcntl(fd, std.posix.F.GETFL, @as(usize, 0));
+        const err = std.posix.errno(rc);
+        if (err != .SUCCESS) return error.FcntlGetFailed;
+        
+        const new_flags = @as(usize, @intCast(rc)) | @as(usize, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })));
+        const set_rc = std.posix.system.fcntl(fd, std.posix.F.SETFL, new_flags);
+        const set_err = std.posix.errno(set_rc);
+        if (set_err != .SUCCESS) return error.FcntlSetFailed;
+    }
+}

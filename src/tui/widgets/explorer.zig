@@ -273,7 +273,7 @@ pub const Explorer = struct {
         const new_path_z = try self.allocator.dupeSentinel(u8, new_path, 0);
         defer self.allocator.free(new_path_z);
         
-        std.posix.renameZ(old_path_z, new_path_z) catch {};
+        _ = std.posix.system.rename(old_path_z.ptr, new_path_z.ptr);
         
         self.action_state = .none;
         self.action_target_path = null;

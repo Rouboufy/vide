@@ -4,6 +4,14 @@ const Color = renderer.Color;
 const Rect = @import("../layout.zig").Rect;
 const input = @import("../input.zig");
 
+fn closeFd(fd: std.posix.fd_t) void {
+    if (@hasDecl(std.posix, "close")) {
+        std.posix.close(fd);
+    } else {
+        _ = std.posix.system.close(fd);
+    }
+}
+
 pub const StorePlugin = struct {
     name: []const u8,
     full_name: []const u8,
@@ -860,7 +868,7 @@ pub const ExtensionShop = struct {
         const fd = std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| blk: {
             if (err == error.FileNotFound) {
                 const write_fd = try std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-                defer _ = std.os.linux.close(write_fd);
+                defer closeFd(write_fd);
 
                 var template_buf: [512]u8 = undefined;
                 const template = std.fmt.bufPrint(&template_buf,
@@ -872,12 +880,16 @@ pub const ExtensionShop = struct {
                     .{p.name}
                 ) catch "";
 
-                _ = std.os.linux.write(write_fd, template.ptr, template.len);
+                if (@hasDecl(std.posix, "write")) {
+                    _ = std.posix.write(write_fd, template) catch {};
+                } else {
+                    _ = std.posix.system.write(write_fd, template.ptr, template.len);
+                }
             }
             break :blk -1;
         };
         if (fd >= 0) {
-            _ = std.os.linux.close(fd);
+            closeFd(fd);
         }
 
         self.edit_config_path = config_file_path;
