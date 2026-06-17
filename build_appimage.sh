@@ -5,9 +5,9 @@ APP_DIR="Vide.AppDir"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/usr/bin"
 
-# Build Vide targeting x86_64-v3 (AVX2, no AVX-512) for compatibility
-echo "Building Vide (x86_64-v3)..."
-zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-gnu -Dcpu=x86_64_v3
+# Build Vide targeting x86_64-linux-musl (fully static baseline) for maximum compatibility
+echo "Building Vide (x86_64-linux-musl)..."
+zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl
 
 # Copy compiled vide binary
 cp zig-out/bin/vide "$APP_DIR/usr/bin/vide"
