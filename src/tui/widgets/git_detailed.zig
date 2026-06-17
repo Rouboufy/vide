@@ -161,8 +161,7 @@ pub const GitDetailedWidget = struct {
 
         // Tabs
         var tx: u16 = x + 18;
-        inline for (@typeInfo(GitDetailedTab).@"enum".fields) |field| {
-            const tab_enum = @as(GitDetailedTab, @enumFromInt(field.value));
+        inline for (std.meta.tags(GitDetailedTab)) |tab_enum| {
             const label = tab_enum.label();
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
@@ -277,8 +276,7 @@ pub const GitDetailedWidget = struct {
             if (m.action == .press) {
                 if (m.row == y) {
                     var tx: u16 = x + 18;
-                    inline for (@typeInfo(GitDetailedTab).@"enum".fields) |field| {
-                        const tab_enum = @as(GitDetailedTab, @enumFromInt(field.value));
+                    inline for (std.meta.tags(GitDetailedTab)) |tab_enum| {
                         const label_len = tab_enum.label().len;
                         if (m.col >= tx and m.col < tx + label_len) {
                             self.selected_tab = tab_enum;
