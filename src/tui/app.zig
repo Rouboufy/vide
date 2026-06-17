@@ -19,6 +19,7 @@ const DebugConsole = @import("widgets/debug_console.zig").DebugConsole;
 const MasonWidget = @import("widgets/mason.zig").MasonWidget;
 const LazyWidget = @import("widgets/lazy.zig").LazyWidget;
 const GitDetailedWidget = @import("widgets/git_detailed.zig").GitDetailedWidget;
+const ExtensionShop = @import("widgets/extension_shop.zig").ExtensionShop;
 
 pub const Mode = enum { ide, zen, normal };
 pub const PanelPosition = enum { bottom, right };
@@ -30,6 +31,7 @@ pub const WinInfo = struct {
     width: u16,
     height: u16,
     active: bool = false,
+    name: []const u8 = "",
 };
 
 pub const TabInfo = struct {
@@ -79,6 +81,7 @@ pub const App = struct {
     mason_widget: *MasonWidget,
     lazy_widget: *LazyWidget,
     git_detailed_widget: *GitDetailedWidget,
+    extension_shop: *ExtensionShop,
     activity_bar: ActivityBar,
 
     // Mouse tracking state
@@ -148,6 +151,7 @@ pub const App = struct {
             .mason_widget = undefined,
             .lazy_widget = undefined,
             .git_detailed_widget = undefined,
+            .extension_shop = undefined,
             .activity_bar = ActivityBar{ .active_idx = 0 },
             .layout_arena = arena,
             .root_split = root_node,
@@ -157,6 +161,12 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        for (self.editor_wins.items) |win| {
+            if (win.name.len > 0) self.allocator.free(win.name);
+        }
+        for (self.terminal_wins.items) |win| {
+            if (win.name.len > 0) self.allocator.free(win.name);
+        }
         self.editor_wins.deinit();
         self.terminal_wins.deinit();
         self.layout_arena.deinit();

@@ -1,3 +1,6 @@
+local site = vim.fn.stdpath("data") .. "/vide/site"
+vim.opt.rtp:prepend(site)
+
 local lazypath = vim.fn.stdpath("data") .. "/vide/lazy/lazy.nvim"
 if not vim.uv.fs_stat(lazypath) then
   vim.fn.system({
@@ -28,7 +31,12 @@ set.smartcase = true
 set.termguicolors = true
 set.background = "dark"
 set.signcolumn = "yes"
-set.cursorline = true
+set.cursorline = false
+vim.api.nvim_create_autocmd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
+  callback = function()
+    vim.wo.cursorline = false
+  end,
+})
 set.colorcolumn = "80"
 set.clipboard:append("unnamedplus")
 set.backspace = "indent,eol,start"
@@ -45,7 +53,19 @@ set.undofile = true
 set.incsearch = true
 set.updatetime = 50
 
-require("lazy").setup({
+local user_plugins_path = vim.fn.expand("~/.local/share/vide/user_plugins.json")
+local user_plugins = {}
+local up_f = io.open(user_plugins_path, "r")
+if up_f then
+    local content = up_f:read("*a")
+    up_f:close()
+    local ok, decoded = pcall(vim.json.decode, content)
+    if ok and type(decoded) == "table" then
+        user_plugins = decoded
+    end
+end
+
+local plugins_setup = {
     {
         "goolord/alpha-nvim",
         lazy = false,
@@ -257,70 +277,33 @@ require("lazy").setup({
         config = true,
     },
     {
-        "hrsh7th/nvim-cmp",
+        "saghen/blink.cmp",
         lazy = false,
         cond = not vim.g.vide_is_terminal,
-        dependencies = {
-            "hrsh7th/cmp-nvim-lsp",
-            "hrsh7th/cmp-buffer",
-            "hrsh7th/cmp-path",
-            "L3MON4D3/LuaSnip",
-            "saadparwaiz1/cmp_luasnip",
-        },
+        dependencies = "rafamadriz/friendly-snippets",
+        version = "*",
         config = function()
-            local cmp = require("cmp")
-            local luasnip = require("luasnip")
-
-            cmp.setup({
+            require("blink.cmp").setup({
+                keymap = {
+                    preset = "none",
+                    ["<C-space>"] = { "show", "show_documentation", "hide_documentation" },
+                    ["<C-e>"] = { "hide" },
+                    ["<CR>"] = { "accept", "fallback" },
+                    ["<Tab>"] = { "select_next", "snippet_forward", "fallback" },
+                    ["<S-Tab>"] = { "select_prev", "snippet_backward", "fallback" },
+                    ["<C-b>"] = { "scroll_documentation_up", "fallback" },
+                    ["<C-f>"] = { "scroll_documentation_down", "fallback" },
+                },
+                appearance = {
+                    use_nvim_cmp_as_default = true,
+                    nerd_font_variant = "mono",
+                },
+                sources = {
+                    default = { "lsp", "path", "snippets", "buffer" },
+                },
                 enabled = function()
                     return vim.g.vide_autocomplete_enabled ~= false
                 end,
-                window = {
-                    completion = cmp.config.window.bordered(),
-                    documentation = false,
-                },
-
-                performance = {
-                    max_view_entries = 12,
-                },
-
-                snippet = {
-                    expand = function(args)
-                        luasnip.lsp_expand(args.body)
-                    end,
-                },
-                mapping = cmp.mapping.preset.insert({
-                    ["<C-b>"] = cmp.mapping.scroll_docs(-4),
-                    ["<C-f>"] = cmp.mapping.scroll_docs(4),
-                    ["<C-Space>"] = cmp.mapping.complete(),
-                    ["<C-e>"] = cmp.mapping.abort(),
-                    ["<CR>"] = cmp.mapping.confirm({ select = true }),
-                    ["<Tab>"] = cmp.mapping(function(fallback)
-                        if cmp.visible() then
-                            cmp.select_next_item()
-                        elseif luasnip.expand_or_locally_jumpable() then
-                            luasnip.expand_or_jump()
-                        else
-                            fallback()
-                        end
-                    end, { "i", "s" }),
-                    ["<S-Tab>"] = cmp.mapping(function(fallback)
-                        if cmp.visible() then
-                            cmp.select_prev_item()
-                        elseif luasnip.locally_jumpable(-1) then
-                            luasnip.jump(-1)
-                        else
-                            fallback()
-                        end
-                    end, { "i", "s" }),
-                }),
-                sources = cmp.config.sources({
-                    { name = "nvim_lsp", max_item_count = 15 },
-                    { name = "luasnip", max_item_count = 5 },
-                    { name = "path", max_item_count = 5 },
-                }, {
-                    { name = "buffer", max_item_count = 5 },
-                }),
             })
         end,
     },
@@ -331,11 +314,10 @@ require("lazy").setup({
         dependencies = {
             "williamboman/mason.nvim",
             "williamboman/mason-lspconfig.nvim",
-            "hrsh7th/cmp-nvim-lsp",
+            "saghen/blink.cmp",
         },
         config = function()
             local mason_lspconfig = require("mason-lspconfig")
-            local cmp_nvim_lsp = require("cmp_nvim_lsp")
 
             local mason_bin = vim.fn.expand("~/.local/share/nvim/mason/bin")
             if vim.fn.isdirectory(mason_bin) == 1 then
@@ -348,7 +330,7 @@ require("lazy").setup({
                 })
             end)
 
-            local capabilities = cmp_nvim_lsp.default_capabilities()
+            local capabilities = require("blink.cmp").get_lsp_capabilities()
 
             -- Apply completion capabilities + broad root_markers to all servers.
             -- root_markers is how Neovim 0.12 native LSP determines the project root.
@@ -410,17 +392,6 @@ require("lazy").setup({
                 once = false,
                 callback = enable_all,
             })
-
-            -- Trigger cmp-nvim-lsp registration on LspAttach, since Vide stays in insert mode
-            vim.api.nvim_create_autocmd("LspAttach", {
-                group = vim.api.nvim_create_augroup("VideCmpLspAttach", { clear = true }),
-                callback = function()
-                    local ok, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
-                    if ok and cmp_nvim_lsp._on_insert_enter then
-                        cmp_nvim_lsp._on_insert_enter()
-                    end
-                end,
-            })
         end,
 
     },
@@ -444,7 +415,20 @@ require("lazy").setup({
     { "rose-pine/neovim", name = "rose-pine", lazy = true },
     { "rebelot/kanagawa.nvim", lazy = true },
     { "EdenEast/nightfox.nvim", lazy = true },
-}, {
+    { "tahayvr/matteblack.nvim", lazy = true },
+}
+local config_dir = vim.fn.expand("~/.local/share/vide/plugin_configs/")
+for _, p in ipairs(user_plugins) do
+    local config_path = config_dir .. p:gsub("/", "_") .. ".lua"
+    local plugin_def = { p }
+    if vim.fn.filereadable(config_path) == 1 then
+        plugin_def.config = function()
+            dofile(config_path)
+        end
+    end
+    table.insert(plugins_setup, plugin_def)
+end
+require("lazy").setup(plugins_setup, {
     root = vim.fn.stdpath("data") .. "/vide/lazy",
     lockfile = vim.fn.stdpath("data") .. "/vide/lazy-lock.json",
     performance = {
@@ -575,22 +559,26 @@ _G.vide_load_settings = function()
             if state.zen_handoff ~= nil then
                 vim.g.vide_zen_handoff = state.zen_handoff
             else
-                vim.g.vide_zen_handoff = false
+                vim.g.vide_zen_handoff = true
             end
             if state.theme then
-                vim.schedule(function() vim.cmd("colorscheme " .. state.theme) end)
+                vim.schedule(function()
+                    if not pcall(vim.cmd, "colorscheme " .. state.theme) then
+                        pcall(vim.cmd, "colorscheme vscode")
+                    end
+                end)
             end
         end
     end
 end
 
 local M = {}
-local themes = { "vscode", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
+local themes = { "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
 function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
     if vim.g.vide_autocomplete_enabled == nil then vim.g.vide_autocomplete_enabled = true end
-    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = false end
+    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = true end
     local nerd_fonts = vim.g.vide_nerd_fonts ~= false
     local function get_toggle(is_on)
         if nerd_fonts then
@@ -788,7 +776,7 @@ function M.sync_theme()
         bg_tab_inactive = get_contrast(bg_editor, 15)
     end
     
-    local bg_accent = get_color("Function", "fg") or get_color("Statement", "fg") or "#007acc"
+    local bg_accent = get_color("VideAccent", "fg") or get_color("Function", "fg") or get_color("Statement", "fg") or "#007acc"
     
     local fg_statusbar = "#ffffff"
     do
@@ -850,7 +838,81 @@ end
 package.loaded["vide_settings"] = M
 
 vim.api.nvim_create_autocmd("ColorScheme", {
-    callback = function() require("vide_settings").sync_theme() end,
+    callback = function()
+        if vim.g.colors_name == "matteblack" then
+            local highlights = {
+                Normal = { fg = "#dcdcdc", bg = "#080808" },
+                NormalNC = { fg = "#777777", bg = "#080808" },
+                Comment = { fg = "#4a4a4a", italic = true },
+                Constant = { fg = "#ffaa66" },
+                String = { fg = "#b8b8b8" },
+                Character = { fg = "#b8b8b8" },
+                Number = { fg = "#ffb86c" },
+                Boolean = { fg = "#ffb86c" },
+                Float = { fg = "#ffb86c" },
+                Identifier = { fg = "#dcdcdc" },
+                Function = { fg = "#eeeeee" },
+                Statement = { fg = "#ff7300", bold = true },
+                Conditional = { fg = "#ff7300", bold = true },
+                Repeat = { fg = "#ff7300", bold = true },
+                Label = { fg = "#ff7300", bold = true },
+                Operator = { fg = "#a0a0a0" },
+                Keyword = { fg = "#ff7300", bold = true },
+                Exception = { fg = "#ff3333", bold = true },
+                PreProc = { fg = "#888888" },
+                Type = { fg = "#ffffff", bold = true },
+                StorageClass = { fg = "#ffffff", bold = true },
+                Structure = { fg = "#ffffff", bold = true },
+                Typedef = { fg = "#ffffff", bold = true },
+                Special = { fg = "#ffaa66" },
+                Underlined = { underline = true },
+                Error = { fg = "#ff3333", bg = "NONE", bold = true },
+                Todo = { fg = "#080808", bg = "#ff7300", bold = true },
+                
+                CursorLine = { bg = "#141414" },
+                CursorColumn = { bg = "#141414" },
+                LineNr = { fg = "#3a3a3a", bg = "#080808" },
+                CursorLineNr = { fg = "#ff7300", bg = "#141414", bold = true },
+                SignColumn = { bg = "#080808" },
+                FoldColumn = { bg = "#080808" },
+                Folded = { fg = "#666666", bg = "#141414" },
+                WinSeparator = { fg = "#1a1a1a", bg = "#080808" },
+                VertSplit = { fg = "#1a1a1a", bg = "#080808" },
+                
+                Visual = { bg = "#2d1b0d" },
+                Search = { fg = "#080808", bg = "#ff7300" },
+                IncSearch = { fg = "#080808", bg = "#ffaa66" },
+                
+                Pmenu = { fg = "#dcdcdc", bg = "#141414" },
+                PmenuSel = { fg = "#080808", bg = "#ff7300" },
+                PmenuSbar = { bg = "#1a1a1a" },
+                PmenuThumb = { bg = "#333333" },
+                
+                StatusLine = { fg = "#080808", bg = "#ff7300" },
+                StatusLineNC = { fg = "#777777", bg = "#141414" },
+                TabLine = { fg = "#777777", bg = "#141414" },
+                TabLineSel = { fg = "#ff7300", bg = "#080808", bold = true },
+                TabLineFill = { bg = "#141414" },
+                
+                ["@comment"] = { fg = "#4a4a4a", italic = true },
+                ["@function"] = { fg = "#eeeeee" },
+                ["@keyword"] = { fg = "#ff7300", bold = true },
+                ["@string"] = { fg = "#b8b8b8" },
+                ["@type"] = { fg = "#ffffff", bold = true },
+                ["@variable"] = { fg = "#dcdcdc" },
+
+                NeoTreeNormal = { fg = "#777777", bg = "#0c0c0c" },
+                NeoTreeNormalNC = { fg = "#777777", bg = "#0c0c0c" },
+                NeoTreeWinSeparator = { fg = "#1a1a1a", bg = "#0c0c0c" },
+
+                VideAccent = { fg = "#ff7300" },
+            }
+            for group, opts in pairs(highlights) do
+                vim.api.nvim_set_hl(0, group, opts)
+            end
+        end
+        require("vide_settings").sync_theme()
+    end,
 })
 vim.schedule(function() pcall(function() require("vide_settings").sync_theme() end) end)
 
@@ -1098,13 +1160,18 @@ local function notify_win_positions()
                 local pos = vim.api.nvim_win_get_position(w) -- [row, col]
                 local width = vim.api.nvim_win_get_width(w)
                 local height = vim.api.nvim_win_get_height(w)
+                local buf = vim.api.nvim_win_get_buf(w)
+                local buf_name = vim.api.nvim_buf_get_name(buf)
+                local short_name = vim.fn.fnamemodify(buf_name, ":t")
+                if short_name == "" then short_name = "[No Name]" end
                 table.insert(win_list, {
                     id = w,
                     row = pos[1],
                     col = pos[2],
                     width = width,
                     height = height,
-                    active = (w == cur_win)
+                    active = (w == cur_win),
+                    name = short_name
                 })
             end
         end
@@ -1319,7 +1386,7 @@ local VIDE_KEYS = {
     "  Leader key = <Space>",
     "",
     "  ── VIDE & WORKSPACE ────────────────────────────────────────────",
-    "  <Space> e              Toggle Left File Tree (Yazi/Neo-tree)",
+    "  <Space> e              Toggle File Explorer",
     "  <Space> m t            Toggle IDE / Zen Mode",
     "  <Space> j              Toggle Bottom Terminal Split",
     "  <Space> ?              Show Vide Quickstart Guide",
@@ -1329,7 +1396,7 @@ local VIDE_KEYS = {
     "  Ctrl+E                 Toggle and focus File Tree",
     "  Ctrl+T                 Toggle and focus Terminal panel",
     "  <Esc>                  Return focus to Editor from panels",
-    "  <Alt> h/j/k/l          Navigate splits & WezTerm panes seamlessly",
+    "  Alt + Arrow Keys       Resize panels",
     "",
     "  ── TELESCOPE & SEARCH ──────────────────────────────────────────",
     "  <Space> <Space>        Telescope: Show All Commands",
@@ -1360,6 +1427,11 @@ local VIDE_KEYS = {
     "  <Space> d              Delete to black hole (without yanking)",
     "  <Space> s              Substitute word under cursor everywhere",
     "  <Space> x              Make current file executable (chmod +x)",
+    "",
+    "  ── AI ASSISTANT CONTEXT ────────────────────────────────────────",
+    "  <Space> a f            Send current file path to AI assistant",
+    "  <Space> a c            Send entire file content to AI assistant",
+    "  <Space> a s (Visual)   Send selected text to AI assistant",
 }
 
 local state = { active_tab = "vim", buf = nil, win = nil }
@@ -1469,15 +1541,114 @@ end
         -- We bind to normal and visual mode as well. But wait, since vide forces insert mode,
         -- if the user hits <space> in insert mode it types a space. So we should create a user command.
         vim.api.nvim_create_user_command("HelpMenu", _G.open_help_menu, {})
-        vim.keymap.set({ "n", "i", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
+        vim.keymap.set({ "n", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
     
+_G.last_ai_job_id = nil
+
+function _G.GetActiveAIJob()
+    local job_id = _G.last_ai_job_id
+    if not job_id then return nil end
+    local ok, res = pcall(vim.fn.jobwait, {job_id}, 0)
+    if ok and res and res[1] == -1 then
+        return job_id
+    end
+    _G.last_ai_job_id = nil
+    return nil
+end
+
+function _G.SendSelectionToAI()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then
+        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+        return
+    end
+    
+    local mode = vim.api.nvim_get_mode().mode
+    if mode:sub(1,1) == "v" or mode:sub(1,1) == "V" or mode == "\22" then
+        vim.cmd("normal! \x1b") -- exit visual mode
+    end
+    
+    local s_start = vim.fn.getpos("'<")
+    local s_end = vim.fn.getpos("'>")
+    if not s_start or not s_end or s_start[2] == 0 or s_end[2] == 0 then
+        vim.notify("No selection found. Please select some text first!", vim.log.levels.WARN)
+        return
+    end
+    
+    local lines = vim.api.nvim_buf_get_lines(0, s_start[2] - 1, s_end[2], false)
+    if #lines == 0 then return end
+    
+    if mode == "v" then
+        lines[#lines] = string.sub(lines[#lines], 1, s_end[3])
+        lines[1] = string.sub(lines[1], s_start[3])
+    end
+    
+    local text = table.concat(lines, "\n")
+    vim.fn.chansend(job_id, text)
+    vim.notify("Sent selection to AI terminal", vim.log.levels.INFO)
+end
+
+function _G.SendFilePathToAI()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then
+        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+        return
+    end
+    local fp = vim.fn.expand("%:p")
+    if fp == "" then return end
+    vim.fn.chansend(job_id, fp .. " ")
+    vim.notify("Sent file path to AI terminal", vim.log.levels.INFO)
+end
+
+function _G.SendFileContentToAI()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then
+        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+        return
+    end
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local text = table.concat(lines, "\n")
+    vim.fn.chansend(job_id, text)
+    vim.notify("Sent file content to AI terminal", vim.log.levels.INFO)
+end
+
+vim.keymap.set("v", "<leader>as", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
+vim.keymap.set("n", "<leader>af", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
+vim.keymap.set("n", "<leader>ac", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
+
+vim.keymap.set({ "n", "v", "i" }, "<M-s>", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<M-f>", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
+
+vim.keymap.set({ "n", "v", "i" }, "<C-M-s>", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<C-M-f>", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
+vim.keymap.set({ "n", "v", "i" }, "<C-M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
+
 function _G.OpenAITerminal(cmd)
     vim.cmd("botright vsplit")
     vim.cmd("wincmd L")
     vim.cmd("enew")
     local shell = vim.env.SHELL or "bash"
-    vim.fn.termopen(shell)
+    local job_id = vim.fn.termopen(shell)
+    _G.last_ai_job_id = job_id
+    
+    local run_cmd = cmd
+    if vim.fn.executable(cmd) == 0 then
+        run_cmd = "echo 'Command \"" .. cmd .. "\" is not installed. Please install it first.'; exec $SHELL"
+    end
+
     -- Send the command and enter
-    vim.fn.chansend(vim.b.terminal_job_id, cmd .. "\n")
+    vim.fn.chansend(job_id, run_cmd .. "\n")
     vim.cmd("startinsert")
 end
+
+-- Disable default right-click behavior to prevent popup menus which cause freezes in headless mode
+for _, mode in ipairs({ 'n', 'v', 'i', 's', 'c' }) do
+    vim.keymap.set(mode, '<RightMouse>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<RightRelease>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<RightDrag>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<2-RightMouse>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<3-RightMouse>', '<Nop>', { silent = true })
+    vim.keymap.set(mode, '<4-RightMouse>', '<Nop>', { silent = true })
+end
+

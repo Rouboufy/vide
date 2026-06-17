@@ -3,7 +3,7 @@ M.win = nil
 M.buf = nil
 
 local themes = {
-    "vscode", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord",
+    "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord",
     "cyberdream", "rose-pine", "kanagawa", "nightfox"
 }
 

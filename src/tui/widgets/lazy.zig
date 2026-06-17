@@ -41,7 +41,7 @@ pub const LazyWidget = struct {
     selected_tab: LazyTab = .all,
 
     // Search functionality
-    search_query: [64]u8 = [_]u8{0} ** 64,
+    search_query: [64]u8 = @splat(0),
     search_len: usize = 0,
     is_searching: bool = false,
 
@@ -125,8 +125,8 @@ pub const LazyWidget = struct {
     fn matchesSearch(self: *const LazyWidget, p: PluginInfo) bool {
         if (self.search_len == 0) return true;
         const query = self.search_query[0..self.search_len];
-        return std.ascii.indexOfIgnoreCase(p.name, query) != null or 
-               std.ascii.indexOfIgnoreCase(p.full_name, query) != null;
+        return std.ascii.findIgnoreCase(p.name, query) != null or 
+               std.ascii.findIgnoreCase(p.full_name, query) != null;
     }
 
     fn matchesTab(self: *const LazyWidget, p: PluginInfo) bool {
@@ -213,8 +213,7 @@ pub const LazyWidget = struct {
         // Tabs
         const tab_y = y + 2;
         var tx: u16 = x + 2;
-        inline for (std.meta.fields(LazyTab)) |f| {
-            const tab_enum = @as(LazyTab, @enumFromInt(f.value));
+        inline for (std.meta.tags(LazyTab)) |tab_enum| {
             const label = tab_enum.label();
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
@@ -333,8 +332,7 @@ pub const LazyWidget = struct {
                 const tab_y = y + 2;
                 if (m.row == tab_y) {
                     var tx: u16 = x + 2;
-                    inline for (std.meta.fields(LazyTab)) |f| {
-                        const tab_enum = @as(LazyTab, @enumFromInt(f.value));
+                    inline for (std.meta.tags(LazyTab)) |tab_enum| {
                         const label_len = tab_enum.label().len;
                         if (m.col >= tx and m.col < tx + label_len) {
                             self.selected_tab = tab_enum;

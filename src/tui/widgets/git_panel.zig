@@ -2,6 +2,7 @@ const std = @import("std");
 const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const Rect = @import("../layout.zig").Rect;
+const git_utils = @import("git_utils.zig");
 
 pub const GitItem = struct {
     path: []const u8,
@@ -55,30 +56,15 @@ pub const GitPanel = struct {
         // 1. Fetch current branch
         {
             const argv = [_][]const u8{ "git", "branch", "--show-current" };
-            var child = std.process.spawn(self.io, .{
-                .argv = &argv,
-                .stdout = .pipe,
-                .stderr = .ignore,
-            }) catch {
-                self.current_branch = null;
-                return;
-            };
-
-            var stdout = std.array_list.Managed(u8).init(self.allocator);
-            defer stdout.deinit();
-            if (child.stdout) |out| {
-                while (true) {
-                    var chunk: [1024]u8 = undefined;
-                    const len = std.posix.read(out.handle, &chunk) catch 0;
-                    if (len == 0) break;
-                    stdout.appendSlice(chunk[0..len]) catch {};
+            if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |stdout| {
+                defer self.allocator.free(stdout);
+                if (stdout.len > 0) {
+                    const clean_branch = std.mem.trim(u8, stdout, " \n\r");
+                    self.current_branch = try self.arena.allocator().dupe(u8, clean_branch);
+                } else {
+                    self.current_branch = null;
                 }
-            }
-            _ = child.wait(self.io) catch {};
-            if (stdout.items.len > 0) {
-                const clean_branch = std.mem.trim(u8, stdout.items, " \n\r");
-                self.current_branch = try self.arena.allocator().dupe(u8, clean_branch);
-            } else {
+            } else |_| {
                 self.current_branch = null;
             }
         }
@@ -86,58 +72,31 @@ pub const GitPanel = struct {
         // 2. Fetch recent commits (Pipeline Graph)
         {
             const argv = [_][]const u8{ "git", "log", "--graph", "--abbrev-commit", "--format=format:%h - %s", "-n", "15" };
-            var child = std.process.spawn(self.io, .{
-                .argv = &argv,
-                .stdout = .pipe,
-                .stderr = .ignore,
-            }) catch return;
-
-            var stdout = std.array_list.Managed(u8).init(self.allocator);
-            defer stdout.deinit();
-            if (child.stdout) |out| {
-                while (true) {
-                    var chunk: [1024]u8 = undefined;
-                    const len = std.posix.read(out.handle, &chunk) catch 0;
-                    if (len == 0) break;
-                    stdout.appendSlice(chunk[0..len]) catch {};
+            if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |stdout| {
+                defer self.allocator.free(stdout);
+                var lines = std.mem.splitScalar(u8, stdout, '\n');
+                while (lines.next()) |line| {
+                    var end: usize = line.len;
+                    while (end > 0 and (line[end - 1] == '\r' or line[end - 1] == ' ')) {
+                        end -= 1;
+                    }
+                    const clean_line = line[0..end];
+                    if (clean_line.len > 0) {
+                        try self.recent_commits.append(try self.arena.allocator().dupe(u8, clean_line));
+                    }
                 }
-            }
-            _ = child.wait(self.io) catch {};
-            
-            var lines = std.mem.splitScalar(u8, stdout.items, '\n');
-            while (lines.next()) |line| {
-                var end: usize = line.len;
-                while (end > 0 and (line[end - 1] == '\r' or line[end - 1] == ' ')) {
-                    end -= 1;
-                }
-                const clean_line = line[0..end];
-                if (clean_line.len > 0) {
-                    try self.recent_commits.append(try self.arena.allocator().dupe(u8, clean_line));
-                }
-            }
+            } else |_| {}
         }
 
         // 3. Fetch status
         const argv = [_][]const u8{ "git", "status", "--porcelain" };
-        var child = std.process.spawn(self.io, .{
-            .argv = &argv,
-            .stdout = .pipe,
-            .stderr = .ignore,
-        }) catch return;
+        const stdout_val = git_utils.runGitCommand(self.allocator, self.io, &argv) catch |err| {
+            if (err == error.EndOfStream) return;
+            return;
+        };
+        defer self.allocator.free(stdout_val);
 
-        var stdout = std.array_list.Managed(u8).init(self.allocator);
-        defer stdout.deinit();
-        if (child.stdout) |out| {
-            while (true) {
-                var chunk: [1024]u8 = undefined;
-                const len = std.posix.read(out.handle, &chunk) catch 0;
-                if (len == 0) break;
-                stdout.appendSlice(chunk[0..len]) catch {};
-            }
-        }
-        _ = child.wait(self.io) catch {};
-
-        var lines = std.mem.splitScalar(u8, stdout.items, '\n');
+        var lines = std.mem.splitScalar(u8, stdout_val, '\n');
         while (lines.next()) |line| {
             if (line.len < 4) continue;
             const status = line[0..2];
@@ -324,19 +283,17 @@ pub const GitPanel = struct {
 
     fn stageFile(self: *GitPanel, path: []const u8) !void {
         const argv = [_][]const u8{ "git", "add", path };
-        var child = std.process.spawn(self.io, .{
-            .argv = &argv,
-        }) catch return;
-        _ = child.wait(self.io) catch {};
+        if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
+            self.allocator.free(res);
+        } else |_| {}
         try self.refresh();
     }
 
     fn unstageFile(self: *GitPanel, path: []const u8) !void {
         const argv = [_][]const u8{ "git", "restore", "--staged", path };
-        var child = std.process.spawn(self.io, .{
-            .argv = &argv,
-        }) catch return;
-        _ = child.wait(self.io) catch {};
+        if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
+            self.allocator.free(res);
+        } else |_| {}
         try self.refresh();
     }
 
@@ -344,10 +301,9 @@ pub const GitPanel = struct {
         if (self.commit_len == 0) return;
         const msg = self.commit_buf[0..self.commit_len];
         const argv = [_][]const u8{ "git", "commit", "-m", msg };
-        var child = std.process.spawn(self.io, .{
-            .argv = &argv,
-        }) catch return;
-        _ = child.wait(self.io) catch {};
+        if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
+            self.allocator.free(res);
+        } else |_| {}
         
         self.commit_len = 0;
         self.is_focus_commit = false;

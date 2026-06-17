@@ -29,10 +29,6 @@ paths=(
     "$HOME/.local/state/vide"
     "$HOME/.cache/vide"
     "$HOME/.local/bin/vide"
-    "$HOME/.local/bin/vide-open"
-    "$HOME/.local/bin/vide-sidebar"
-    "$HOME/.local/bin/vide-activity-bar"
-    "$HOME/.local/bin/vide-search-fzf"
 )
 
 for p in "${paths[@]}"; do

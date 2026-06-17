@@ -292,34 +292,9 @@ local function toggle_bottom_panel()
   end
 end
 
-vim.keymap.set({ "n", "i", "v", "s" }, "<leader>j", toggle_bottom_panel, { desc = "Toggle Bottom Panel" })
+vim.keymap.set({ "n", "v", "s" }, "<leader>j", toggle_bottom_panel, { desc = "Toggle Bottom Panel" })
 
--- Start RPC Server based on WezTerm Pane ID
-local nvim_pane_id = vim.env.WEZTERM_PANE
-if nvim_pane_id then
-  local pipe_path = "/tmp/vide_nvim_" .. nvim_pane_id .. ".pipe"
-  pcall(vim.fn.serverstart, pipe_path)
-end
 
--- Sync Neovim directory changes to Yazi file explorer
-local function sync_to_yazi()
-  if not nvim_pane_id then return end
-  local file_path = vim.api.nvim_buf_get_name(0)
-  local dir
-  if file_path ~= "" and vim.bo.buftype == "" then
-    dir = vim.fn.fnamemodify(file_path, ":p:h")
-  elseif vim.bo.buftype == "" then
-    dir = vim.fn.getcwd()
-  end
-  if dir and vim.fn.isdirectory(dir) == 1 then
-    local target_yazi = "vide_yazi_" .. nvim_pane_id
-    vim.fn.jobstart({ "ya", "emit-to", target_yazi, "cd", dir }, { detach = true })
-  end
-end
-
-vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
-  callback = sync_to_yazi
-})
 
 -- Initialize layout state to IDE mode on boot
 local layout_state_path = vim.fn.expand("~/.local/share/vide/layout.state")
@@ -329,81 +304,24 @@ if f then
   f:close()
 end
 
--- Toggle layout mode function
+-- Toggle layout mode function (legacy, kept for potential Neovim-only usage)
 local function toggle_mode()
-  -- Read current layout mode
   local current_mode = "ide"
   local rf = io.open(layout_state_path, "r")
   if rf then
     current_mode = rf:read("*l") or "ide"
     rf:close()
   end
-  
   local next_mode = (current_mode == "ide") and "zen" or "ide"
-  
-  -- Write next layout mode
   local wf = io.open(layout_state_path, "w")
   if wf then
     wf:write(next_mode)
     wf:close()
   end
-  
-  -- Adjust splits based on the mode
-  if nvim_pane_id then
-    if next_mode == "zen" then
-      -- Close both left splits (Sidebar and Activity Bar)
-      for i = 1, 2 do
-        local handle = io.popen("wezterm cli get-pane-direction Left 2>/dev/null")
-        if handle then
-          local left_pane_id = handle:read("*l")
-          handle:close()
-          if left_pane_id and left_pane_id ~= "" then
-            vim.fn.jobstart({ "wezterm", "cli", "kill-pane", "--pane-id", left_pane_id })
-          end
-        end
-      end
-    else
-      -- Re-spawn the sidebar splits (Sidebar and Activity Bar)
-      vim.fn.jobstart({
-        "bash", "-c",
-        "wezterm cli split-pane --left --percent 18 -- " .. vim.env.HOME .. "/.local/bin/vide-sidebar " .. nvim_pane_id .. " && wezterm cli activate-pane-direction Left && wezterm cli split-pane --left --percent 15 -- python3 " .. vim.env.HOME .. "/.local/bin/vide-activity-bar " .. nvim_pane_id .. " && wezterm cli activate-pane --pane-id " .. nvim_pane_id
-      }, {
-        on_exit = function()
-          -- Automatically synchronize tree to current directory after split opens
-          sync_to_yazi()
-        end
-      })
-    end
-  end
 end
 
 vim.keymap.set("n", "<leader>mt", toggle_mode, { desc = "Toggle IDE/Zen Mode" })
-
--- Smart focus navigation between Neovim splits and WezTerm panes
-local function navigate(direction, wez_dir)
-  local current_win = vim.api.nvim_get_current_win()
-  vim.cmd("wincmd " .. direction)
-  if vim.api.nvim_get_current_win() == current_win then
-    -- We hit the edge of Neovim splits, switch WezTerm pane
-    vim.fn.jobstart({ "wezterm", "cli", "activate-pane-direction", wez_dir })
-  end
-end
-
-vim.keymap.set({ "n", "t" }, "<A-h>", function() navigate("h", "Left") end, { desc = "Focus Left split/pane" })
-vim.keymap.set({ "n", "t" }, "<A-j>", function() navigate("j", "Down") end, { desc = "Focus Down split/pane" })
-vim.keymap.set({ "n", "t" }, "<A-k>", function() navigate("k", "Up") end, { desc = "Focus Up split/pane" })
-vim.keymap.set({ "n", "t" }, "<A-l>", function() navigate("l", "Right") end, { desc = "Focus Right split/pane" })
-
--- Conditional File Explorer Toggle (Yazi splits locally, Neo-tree over SSH/remote)
-local function toggle_tree()
-  if nvim_pane_id then
-    toggle_mode()
-  else
-    vim.cmd("Neotree toggle")
-  end
-end
-
-vim.keymap.set("n", "<leader>e", toggle_tree, { desc = "Toggle File Tree" })
+vim.keymap.set("n", "<leader>e", function() vim.cmd("Neotree toggle") end, { desc = "Toggle File Tree" })
 
 -- Onboarding Quickstart Interactive Guide
 local function open_tutorial()
@@ -420,29 +338,31 @@ local function open_tutorial()
     "  Welcome to Vide - The Terminal-Native IDE",
     "  =========================================",
     "",
-    "  Vide integrates WezTerm, Neovim, and Yazi into a single",
-    "  cohesive development environment. Here is a quick reference",
-    "  to get you started:",
+    "  Vide is a terminal-native IDE built in Zig, using Neovim as its",
+    "  core editing engine. Here is a quick reference to get started:",
     "",
     "  Core Mappings:",
     "  --------------",
-    "   * <Space> e   : Toggle Left File Tree (Yazi / Neo-tree)",
-    "   * <Space> m t : Toggle IDE / Zen Mode (Zen hides Yazi & tabs)",
-    "   * <Space> ?   : Open this tutorial guide again",
+    "   * <Space> e   : Toggle Left File Explorer",
+    "   * Ctrl+Z      : Toggle IDE / Zen Mode",
+    "   * Ctrl+T      : Toggle Terminal Panel",
+    "   * <Space> ?   : Open this guide again",
     "",
-    "  Seamless Focus Navigation:",
-    "  --------------------------",
-    "   * <Alt> + h   : Move focus to the split on the Left",
-    "   * <Alt> + j   : Move focus to the split Down",
-    "   * <Alt> + k   : Move focus to the split Up",
-    "   * <Alt> + l   : Move focus to the split on the Right",
+    "  Navigation:",
+    "  -----------",
+    "   * Ctrl+E      : Focus / toggle the File Explorer",
+    "   * <Esc>       : Return focus to the editor",
+    "   * Alt+Arrows  : Resize panels",
     "",
-    "  Dynamic Ecosystem Syncing:",
-    "  -------------------------",
-    "   * Open files in Yazi by pressing Enter. They will load",
-    "     instantly in your Neovim editor pane.",
-    "   * Change Neovim themes (e.g. `:colorscheme tokyonight-storm`)",
-    "     and WezTerm's frame color adapts dynamically.",
+    "  Files & Search:",
+    "  ---------------",
+    "   * Ctrl+F      : Find File (Telescope)",
+    "   * Ctrl+N      : New File",
+    "   * <Space>ff   : Telescope Find Files",
+    "   * <Space>fg   : Telescope Live Grep",
+    "",
+    "  Change colorscheme with :colorscheme <name>",
+    "  The editor theme updates dynamically.",
     "",
     "  [ Press 'q' or '<Esc>' to close this guide ]"
   }

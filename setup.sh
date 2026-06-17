@@ -1,6 +1,6 @@
 #!/bin/bash
 # Vide IDE One-Command Installer
-# Works on Linux and macOS
+# Supports Linux (apt, pacman, dnf, zypper)
 
 set -e
 
@@ -22,9 +22,12 @@ echo "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝
 echo -e "${NC}"
 echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
 
+# Detect OS up front
+OS_NAME="$(uname -s)"
+
 # Check and install dependencies
 MISSING_DEPS=()
-for cmd in git curl nvim; do
+for cmd in git curl nvim unzip; do
     if ! command -v "$cmd" &>/dev/null; then
         MISSING_DEPS+=("$cmd")
     fi
@@ -33,10 +36,11 @@ done
 if ! command -v zig &>/dev/null; then
     MISSING_DEPS+=("zig")
 else
-    ZIG_VER=$(zig version | cut -d. -f1,2)
-    if [[ "$ZIG_VER" == "0.14" || "$ZIG_VER" == "0.13" || "$ZIG_VER" == "0.12" || "$ZIG_VER" == "0.11" || "$ZIG_VER" == "0.10" || "$ZIG_VER" == "0.9" ]]; then
+    ZIG_VER=$(zig version | cut -d- -f1)
+    IFS='.' read -r major minor patch <<< "$ZIG_VER"
+    if [ "$major" -eq 0 ] && [ "$minor" -lt 16 ]; then
         MISSING_DEPS+=("zig")
-        echo -e "${YELLOW}Zig $ZIG_VER is too old (requires 0.15+). Will be upgraded.${NC}"
+        echo -e "${YELLOW}Zig $major.$minor is too old (requires 0.16+). Will be upgraded.${NC}"
         if command -v snap &>/dev/null; then sudo snap remove zig &>/dev/null || true; fi
     fi
 fi
@@ -55,51 +59,38 @@ if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
     read -p "Would you like to install them now? [y/N] " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        OS_NAME="$(uname -s)"
-        if [ "$OS_NAME" = "Darwin" ]; then
-            if ! command -v brew &>/dev/null; then
-                echo -e "${RED}Homebrew is required on macOS. Please install Homebrew first.${NC}"
-                exit 1
-            fi
-            brew install git curl neovim
-        else
+        if [ "$OS_NAME" = "Linux" ]; then
             if command -v apt-get &>/dev/null; then
                 sudo apt-get update
-                sudo apt-get install -y git curl python3
+                sudo apt-get install -y git curl unzip python3
                 if command -v snap &>/dev/null; then
                     sudo snap install nvim --classic || sudo apt-get install -y neovim
                 else
                     sudo apt-get install -y neovim
                 fi
             elif command -v pacman &>/dev/null; then
-                sudo pacman -Sy --noconfirm git curl neovim python
+                sudo pacman -Sy --noconfirm git curl unzip neovim python
             elif command -v dnf &>/dev/null; then
-                sudo dnf install -y git curl neovim python3
+                sudo dnf install -y git curl unzip neovim python3
             elif command -v zypper &>/dev/null; then
-                sudo zypper install -y git curl neovim python3
+                sudo zypper install -y git curl unzip neovim python3
             else
-                echo -e "${RED}Could not detect package manager. Please install dependencies manually.${NC}"
+                echo -e "${RED}Could not detect package manager. Please install dependencies manually: git curl unzip neovim${NC}"
                 exit 1
             fi
+        else
+            echo -e "${RED}Unsupported OS. Please install on Linux.${NC}"
+            exit 1
         fi
 
         if [[ " ${MISSING_DEPS[*]} " =~ " zig " ]]; then
             echo -e "${BLUE}Installing Zig (master branch) manually...${NC}"
-            ARCH_NAME="$(uname -m)"
-            if [ "$OS_NAME" = "Darwin" ]; then
-                if [ "$ARCH_NAME" = "arm64" ]; then
-                    ZIG_ARCH="aarch64-macos"
-                else
-                    ZIG_ARCH="x86_64-macos"
-                fi
+            ARCH="$(uname -m)"
+            if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["aarch64-linux"]["tarball"])')
             else
-                if [ "$ARCH_NAME" = "aarch64" ] || [ "$ARCH_NAME" = "arm64" ]; then
-                    ZIG_ARCH="aarch64-linux"
-                else
-                    ZIG_ARCH="x86_64-linux"
-                fi
+                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["x86_64-linux"]["tarball"])')
             fi
-            ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c "import sys, json; print(json.load(sys.stdin)['master']['$ZIG_ARCH']['tarball'])")
             curl -fLo "/tmp/zig.tar.xz" "$ZIG_URL"
             sudo rm -rf /usr/local/zig
             sudo mkdir -p /usr/local/zig
@@ -139,7 +130,7 @@ if [ -d "$SCRIPT_DIR/config" ]; then
 else
     echo -e "${GREEN}Downloading Vide from GitHub...${NC}"
     REPO_DIR="$XDG_DATA_HOME/repo"
-    BRANCH="dev"
+    BRANCH="main"
     if [ -d "$REPO_DIR" ]; then
         cd "$REPO_DIR" && git fetch origin && git checkout $BRANCH --quiet && git pull origin $BRANCH --quiet
     else
@@ -161,35 +152,22 @@ ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$HOME/.local/bin/vide"
 chmod +x "$SOURCE_DIR/zig-out/bin/vide"
 
 #  Check and install JetBrainsMono Nerd Font
-OS_NAME="$(uname -s)"
-if [ "$OS_NAME" = "Darwin" ]; then
-    FONT_DIR="$HOME/Library/Fonts"
-    # Check if font is installed
-    if [ ! -f "$FONT_DIR/JetBrainsMonoNerdFont-Regular.ttf" ] && [ ! -f "$FONT_DIR/JetBrains Mono Regular Nerd Font Complete.ttf" ]; then
-        echo -e "${BLUE}JetBrainsMono Nerd Font not found on macOS. Downloading font...${NC}"
-        TEMP_DIR=$(mktemp -d)
-        curl -fLo "$TEMP_DIR/JetBrainsMono.zip" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
-        unzip -oqd "$TEMP_DIR" "$TEMP_DIR/JetBrainsMono.zip"
-        cp "$TEMP_DIR"/*.ttf "$FONT_DIR/"
-        rm -rf "$TEMP_DIR"
-        echo -e "${GREEN}Font installed successfully on macOS!${NC}"
+if command -v fc-list &>/dev/null && ! fc-list : family | grep -iq "JetBrainsMono"; then
+    echo -e "${BLUE}JetBrainsMono Nerd Font not found. Downloading font...${NC}"
+    FONT_DIR="$HOME/.local/share/fonts/vide"
+    mkdir -p "$FONT_DIR"
+    FONT_ZIP="$FONT_DIR/JetBrainsMono.zip"
+    curl -fLo "$FONT_ZIP" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
+    if command -v unzip &>/dev/null; then
+        unzip -oqd "$FONT_DIR" "$FONT_ZIP"
     else
-        echo -e "${GREEN}JetBrainsMono Nerd Font is already installed on macOS.${NC}"
+        echo -e "${YELLOW}unzip not found — skipping font extraction. Install unzip and re-run to get Nerd Font icons.${NC}"
     fi
+    rm -f "$FONT_ZIP"
+    fc-cache -f "$FONT_DIR"
+    echo -e "${GREEN}Font installed and cached successfully!${NC}"
 else
- 
-    if command -v fc-list &>/dev/null && ! fc-list : family | grep -iq "JetBrainsMono"; then
-        echo -e "${BLUE}JetBrainsMono Nerd Font not found on Linux. Downloading font...${NC}"
-        FONT_DIR="$HOME/.local/share/fonts/vide"
-        mkdir -p "$FONT_DIR"
-        curl -fLo "$FONT_DIR/JetBrainsMono.zip" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
-        unzip -oqd "$FONT_DIR" "$FONT_DIR/JetBrainsMono.zip"
-        rm "$FONT_DIR/JetBrainsMono.zip"
-        fc-cache -f "$FONT_DIR"
-        echo -e "${GREEN}Font installed and cached successfully on Linux!${NC}"
-    else
-        echo -e "${GREEN}JetBrainsMono Nerd Font is already installed on Linux.${NC}"
-    fi
+    echo -e "${GREEN}JetBrainsMono Nerd Font is already installed.${NC}"
 fi
 
 #Add ~/.local/bin to PATH in shell profile if missing

@@ -2,6 +2,7 @@ const std = @import("std");
 const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const input = @import("../input.zig");
+const git_utils = @import("git_utils.zig");
 
 pub const CommitInfo = struct {
     hash: []const u8,
@@ -58,95 +59,51 @@ pub const GitDetailedWidget = struct {
 
         {
             const argv = [_][]const u8{ "git", "branch", "-a", "--format=%(refname:short)" };
-            var child = std.process.spawn(self.io, .{
-                .argv = &argv,
-                .stdout = .pipe,
-                .stderr = .ignore,
-            }) catch return;
-
-            var stdout = std.array_list.Managed(u8).init(self.allocator);
-            defer stdout.deinit();
-            if (child.stdout) |out| {
-                while (true) {
-                    var chunk: [1024]u8 = undefined;
-                    const len = std.posix.read(out.handle, &chunk) catch 0;
-                    if (len == 0) break;
-                    stdout.appendSlice(chunk[0..len]) catch {};
+            if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |stdout| {
+                defer self.allocator.free(stdout);
+                var lines = std.mem.splitScalar(u8, stdout, '\n');
+                while (lines.next()) |line| {
+                    const clean_line = std.mem.trim(u8, line, " \r");
+                    if (clean_line.len > 0 and !std.mem.endsWith(u8, clean_line, "/HEAD")) {
+                        self.branches.append(self.arena.allocator().dupe(u8, clean_line) catch continue) catch {};
+                    }
                 }
-            }
-            _ = child.wait(self.io) catch {};
-            
-            var lines = std.mem.splitScalar(u8, stdout.items, '\n');
-            while (lines.next()) |line| {
-                const clean_line = std.mem.trim(u8, line, " \r");
-                if (clean_line.len > 0 and !std.mem.endsWith(u8, clean_line, "/HEAD")) {
-                    self.branches.append(self.arena.allocator().dupe(u8, clean_line) catch continue) catch {};
-                }
-            }
+            } else |_| {}
         }
 
         {
             const argv = [_][]const u8{ "git", "branch", "--show-current" };
-            var child = std.process.spawn(self.io, .{
-                .argv = &argv,
-                .stdout = .pipe,
-                .stderr = .ignore,
-            }) catch return;
-
-            var stdout = std.array_list.Managed(u8).init(self.allocator);
-            defer stdout.deinit();
-            if (child.stdout) |out| {
-                while (true) {
-                    var chunk: [1024]u8 = undefined;
-                    const len = std.posix.read(out.handle, &chunk) catch 0;
-                    if (len == 0) break;
-                    stdout.appendSlice(chunk[0..len]) catch {};
+            if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |stdout| {
+                defer self.allocator.free(stdout);
+                if (stdout.len > 0) {
+                    const clean_branch = std.mem.trim(u8, stdout, " \n\r");
+                    self.current_branch = self.arena.allocator().dupe(u8, clean_branch) catch null;
                 }
-            }
-            _ = child.wait(self.io) catch {};
-            if (stdout.items.len > 0) {
-                const clean_branch = std.mem.trim(u8, stdout.items, " \n\r");
-                self.current_branch = self.arena.allocator().dupe(u8, clean_branch) catch null;
-            }
+            } else |_| {}
         }
 
         const argv = [_][]const u8{ "git", "log", "--pretty=format:%h|%an|%ar|%s", "-n", "100" };
-        var child = std.process.spawn(self.io, .{
-            .argv = &argv,
-            .stdout = .pipe,
-            .stderr = .ignore,
-        }) catch return;
+        if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |stdout| {
+            defer self.allocator.free(stdout);
+            var lines = std.mem.splitScalar(u8, stdout, '\n');
+            while (lines.next()) |line| {
+                const clean_line = std.mem.trim(u8, line, " \r");
+                if (clean_line.len > 0) {
+                    var fields = std.mem.splitScalar(u8, clean_line, '|');
+                    const hash = fields.next() orelse continue;
+                    const author = fields.next() orelse continue;
+                    const time = fields.next() orelse continue;
+                    const msg = fields.rest();
 
-        var stdout = std.array_list.Managed(u8).init(self.allocator);
-        defer stdout.deinit();
-        if (child.stdout) |out| {
-            while (true) {
-                var chunk: [1024]u8 = undefined;
-                const len = std.posix.read(out.handle, &chunk) catch 0;
-                if (len == 0) break;
-                stdout.appendSlice(chunk[0..len]) catch {};
+                    self.commits.append(.{
+                        .hash = self.arena.allocator().dupe(u8, hash) catch "",
+                        .author = self.arena.allocator().dupe(u8, author) catch "",
+                        .time = self.arena.allocator().dupe(u8, time) catch "",
+                        .msg = self.arena.allocator().dupe(u8, msg) catch "",
+                    }) catch {};
+                }
             }
-        }
-        _ = child.wait(self.io) catch {};
-        
-        var lines = std.mem.splitScalar(u8, stdout.items, '\n');
-        while (lines.next()) |line| {
-            const clean_line = std.mem.trim(u8, line, " \r");
-            if (clean_line.len > 0) {
-                var fields = std.mem.splitScalar(u8, clean_line, '|');
-                const hash = fields.next() orelse continue;
-                const author = fields.next() orelse continue;
-                const time = fields.next() orelse continue;
-                const msg = fields.rest();
-
-                self.commits.append(.{
-                    .hash = self.arena.allocator().dupe(u8, hash) catch "",
-                    .author = self.arena.allocator().dupe(u8, author) catch "",
-                    .time = self.arena.allocator().dupe(u8, time) catch "",
-                    .msg = self.arena.allocator().dupe(u8, msg) catch "",
-                }) catch {};
-            }
-        }
+        } else |_| {}
     }
 
     fn drawTextClipped(ren: *renderer.Renderer, x: u16, y: u16, text: []const u8, max_w: u16, fg: Color, bg: Color, bold: bool, italic: bool) void {
@@ -204,8 +161,7 @@ pub const GitDetailedWidget = struct {
 
         // Tabs
         var tx: u16 = x + 18;
-        inline for (std.meta.fields(GitDetailedTab)) |f| {
-            const tab_enum = @as(GitDetailedTab, @enumFromInt(f.value));
+        inline for (std.meta.tags(GitDetailedTab)) |tab_enum| {
             const label = tab_enum.label();
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
@@ -320,8 +276,7 @@ pub const GitDetailedWidget = struct {
             if (m.action == .press) {
                 if (m.row == y) {
                     var tx: u16 = x + 18;
-                    inline for (std.meta.fields(GitDetailedTab)) |f| {
-                        const tab_enum = @as(GitDetailedTab, @enumFromInt(f.value));
+                    inline for (std.meta.tags(GitDetailedTab)) |tab_enum| {
                         const label_len = tab_enum.label().len;
                         if (m.col >= tx and m.col < tx + label_len) {
                             self.selected_tab = tab_enum;
@@ -373,10 +328,9 @@ pub const GitDetailedWidget = struct {
                 if (self.selected_idx < self.branches.items.len) {
                     const branch = self.branches.items[self.selected_idx];
                     const argv = [_][]const u8{ "git", "checkout", branch };
-                    var child = std.process.spawn(self.io, .{
-                        .argv = &argv,
-                    }) catch return true;
-                    _ = child.wait(self.io) catch {};
+                    if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
+                        self.allocator.free(res);
+                    } else |_| {}
                     self.refresh();
                 }
             }
@@ -385,10 +339,9 @@ pub const GitDetailedWidget = struct {
             if (self.selected_tab == .history and self.selected_idx < self.commits.items.len) {
                 const hash = self.commits.items[self.selected_idx].hash;
                 const argv = [_][]const u8{ "git", "checkout", hash };
-                var child = std.process.spawn(self.io, .{
-                    .argv = &argv,
-                }) catch return true;
-                _ = child.wait(self.io) catch {};
+                if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
+                    self.allocator.free(res);
+                } else |_| {}
                 self.refresh();
             }
             return true;
@@ -396,10 +349,9 @@ pub const GitDetailedWidget = struct {
             if (self.selected_tab == .history and self.selected_idx < self.commits.items.len) {
                 const hash = self.commits.items[self.selected_idx].hash;
                 const argv = [_][]const u8{ "git", "reset", "--hard", hash };
-                var child = std.process.spawn(self.io, .{
-                    .argv = &argv,
-                }) catch return true;
-                _ = child.wait(self.io) catch {};
+                if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
+                    self.allocator.free(res);
+                } else |_| {}
                 self.refresh();
             }
             return true;

@@ -81,6 +81,8 @@ pub const UiState = struct {
     toggle_zen_requested: bool = false,
     toggle_ide_requested: bool = false,
     theme_changed: bool = false,
+    cursorline_bg: Color = .none,
+    normal_bg: Color = .none,
 
     pub fn init(allocator: std.mem.Allocator) UiState {
         return .{
@@ -142,6 +144,271 @@ pub const UiState = struct {
         return .{ .x = @as(i32, self.cursor_x), .y = @as(i32, self.cursor_y) };
     }
 
+    fn handleDefaultColorsSet(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 2) continue;
+            const fg = arg.array[0].integer;
+            const bg = arg.array[1].integer;
+            self.default_fg = if (fg != -1) Color{ .rgb = .{
+                .r = @as(u8, @intCast((fg >> 16) & 0xff)),
+                .g = @as(u8, @intCast((fg >> 8) & 0xff)),
+                .b = @as(u8, @intCast(fg & 0xff)),
+            } } else .none;
+            self.default_bg = if (bg != -1) Color{ .rgb = .{
+                .r = @as(u8, @intCast((bg >> 16) & 0xff)),
+                .g = @as(u8, @intCast((bg >> 8) & 0xff)),
+                .b = @as(u8, @intCast(bg & 0xff)),
+            } } else .none;
+        }
+    }
+
+    fn handleHlAttrDefine(self: *UiState, args: []const Value) !void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 2) continue;
+            const id = arg.array[0].integer;
+            const rgb_attrs = arg.array[1];
+            var hl = Highlight{ .fg = .none, .bg = .none };
+            if (rgb_attrs == .map) {
+                for (rgb_attrs.map) |kv| {
+                    if (kv.key != .string) continue;
+                    const key = kv.key.string;
+                    if (std.mem.eql(u8, key, "foreground")) {
+                        const val = kv.value.integer;
+                        hl.fg = Color{ .rgb = .{
+                            .r = @as(u8, @intCast((val >> 16) & 0xff)),
+                            .g = @as(u8, @intCast((val >> 8) & 0xff)),
+                            .b = @as(u8, @intCast(val & 0xff)),
+                        } };
+                    } else if (std.mem.eql(u8, key, "background")) {
+                        const val = kv.value.integer;
+                        hl.bg = Color{ .rgb = .{
+                            .r = @as(u8, @intCast((val >> 16) & 0xff)),
+                            .g = @as(u8, @intCast((val >> 8) & 0xff)),
+                            .b = @as(u8, @intCast(val & 0xff)),
+                        } };
+                    } else if (std.mem.eql(u8, key, "bold")) {
+                        hl.bold = kv.value.bool;
+                    } else if (std.mem.eql(u8, key, "italic")) {
+                        hl.italic = kv.value.bool;
+                    } else if (std.mem.eql(u8, key, "reverse")) {
+                        hl.reverse = kv.value.bool;
+                    }
+                }
+            }
+            try self.highlights.put(id, hl);
+            if (arg.array.len >= 4) {
+                const info = arg.array[3];
+                if (info == .array) {
+                    for (info.array) |inf| {
+                        if (inf == .map) {
+                            var is_cursorline = false;
+                            var is_normal = false;
+                            for (inf.map) |kv| {
+                                if (kv.key == .string and (std.mem.eql(u8, kv.key.string, "ui_name") or std.mem.eql(u8, kv.key.string, "hi_name"))) {
+                                    if (kv.value == .string and std.mem.eql(u8, kv.value.string, "CursorLine")) {
+                                        is_cursorline = true;
+                                    }
+                                    if (kv.value == .string and std.mem.eql(u8, kv.value.string, "Normal")) {
+                                        is_normal = true;
+                                    }
+                                }
+                            }
+                            if (is_cursorline) {
+                                self.cursorline_bg = hl.bg;
+                            }
+                            if (is_normal) {
+                                self.normal_bg = hl.bg;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handleGridResize(self: *UiState, args: []const Value) !void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 3) continue;
+            const id = arg.array[0].integer;
+            const w = @as(u16, @intCast(arg.array[1].integer));
+            const h = @as(u16, @intCast(arg.array[2].integer));
+            if (id == 1) {
+                try self.grid.resize(w, h);
+            } else {
+                const g = try self.getOrCreate(id);
+                try g.resize(w, h);
+            }
+        }
+    }
+
+    fn handleGridClear(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 1) continue;
+            const id = arg.array[0].integer;
+            if (id == 1) {
+                self.grid.clear();
+            } else {
+                if (self.get(id)) |g| g.clear();
+            }
+        }
+    }
+
+    fn handleGridDestroy(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 1) continue;
+            const id = arg.array[0].integer;
+            if (id != 1) self.remove(id);
+        }
+    }
+
+    fn handleWinPos(self: *UiState, args: []const Value) !void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 4) continue;
+            const id = arg.array[0].integer;
+            if (id == 1) continue;
+            const g = try self.getOrCreate(id);
+            g.row = @as(i32, @intCast(arg.array[2].integer));
+            g.col = @as(i32, @intCast(arg.array[3].integer));
+            g.is_float = false;
+            g.visible = true;
+        }
+    }
+
+    fn handleMsgSetPos(self: *UiState, args: []const Value) !void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 3) continue;
+            const id = arg.array[0].integer;
+            const g = try self.getOrCreate(id);
+            g.row = @as(i32, @intCast(arg.array[1].integer));
+            g.col = 0;
+            g.is_float = true;
+            g.visible = true;
+        }
+    }
+
+    fn handleWinFloatPos(self: *UiState, args: []const Value) !void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 1) continue;
+            const id = arg.array[0].integer;
+            if (id == 1) continue;
+            const g = try self.getOrCreate(id);
+            g.is_float = true;
+            g.visible = true;
+            if (arg.array.len >= 11 and
+                arg.array[9] == .integer and
+                arg.array[10] == .integer)
+            {
+                g.row = @as(i32, @intCast(arg.array[9].integer));
+                g.col = @as(i32, @intCast(arg.array[10].integer));
+            }
+        }
+    }
+
+    fn handleWinHide(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 1) continue;
+            const id = arg.array[0].integer;
+            if (self.get(id)) |g| g.visible = false;
+        }
+    }
+
+    fn handleWinClose(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 1) continue;
+            self.remove(arg.array[0].integer);
+        }
+    }
+
+    fn handleGridCursorGoto(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 3) continue;
+            self.cursor_grid = arg.array[0].integer;
+            self.cursor_y = @as(u16, @intCast(arg.array[1].integer));
+            self.cursor_x = @as(u16, @intCast(arg.array[2].integer));
+        }
+    }
+
+    fn handleGridScroll(self: *UiState, args: []const Value) void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 7) continue;
+            const id = arg.array[0].integer;
+            const target: *GridData = if (id == 1) &self.grid else blk: {
+                if (self.get(id)) |g| break :blk g;
+                continue;
+            };
+            const top: u16 = @as(u16, @intCast(@max(0, arg.array[1].integer)));
+            const bot: u16 = @as(u16, @intCast(@max(0, arg.array[2].integer)));
+            const left: u16 = @as(u16, @intCast(@max(0, arg.array[3].integer)));
+            const right: u16 = @as(u16, @intCast(@max(0, arg.array[4].integer)));
+            const rows: i64 = arg.array[5].integer;
+            if (top >= target.height or bot > target.height or
+                left >= target.width or right > target.width or
+                top >= bot or left >= right) continue;
+            if (rows > 0) {
+                var y = top;
+                const ur = @as(u16, @intCast(rows));
+                if (bot > ur) {
+                    while (y < bot - ur) : (y += 1) {
+                        const src_y = y + ur;
+                        for (left..right) |x| {
+                            target.cells[@as(usize, y) * @as(usize, target.width) + x] =
+                                target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
+                        }
+                    }
+                }
+            } else if (rows < 0) {
+                const abs_rows = @as(u16, @intCast(-rows));
+                if (bot > 0) {
+                    var y = bot;
+                    while (y > top + abs_rows) {
+                        y -= 1;
+                        const src_y = y - abs_rows;
+                        for (left..right) |x| {
+                            target.cells[@as(usize, y) * @as(usize, target.width) + x] =
+                                target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handleGridLine(self: *UiState, args: []const Value) !void {
+        for (args) |arg| {
+            if (arg != .array or arg.array.len < 4) continue;
+            const id = arg.array[0].integer;
+            const row = @as(u16, @intCast(arg.array[1].integer));
+            var col = @as(u16, @intCast(arg.array[2].integer));
+            const cells_val = arg.array[3];
+            if (cells_val != .array) continue;
+
+            const target: *GridData = if (id == 1) &self.grid else blk: {
+                if (self.get(id)) |g| break :blk g;
+                const g = self.getOrCreate(id) catch continue;
+                break :blk g;
+            };
+
+            var current_hl_id: i64 = 0;
+            for (cells_val.array) |c| {
+                if (c != .array or c.array.len < 1) continue;
+                const text = if (c.array[0] == .string) c.array[0].string else " ";
+                if (c.array.len >= 2) current_hl_id = c.array[1].integer;
+                const repeat_i = if (c.array.len >= 3) c.array[2].integer else 1;
+                const repeat: usize = if (repeat_i > 0) @as(usize, @intCast(repeat_i)) else 1;
+                const hl = self.highlights.get(current_hl_id) orelse Highlight{ .fg = .none, .bg = .none };
+                var rep: usize = 0;
+                while (rep < repeat) : (rep += 1) {
+                    if (row < target.height and col < target.width) {
+                        var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic, .reverse = hl.reverse };
+                        cell.setChar(text);
+                        target.cells[@as(usize, row) * @as(usize, target.width) + col] = cell;
+                    }
+                    col += 1;
+                }
+            }
+        }
+    }
+
     pub fn handleRedraw(self: *UiState, events: []const Value) !void {
         for (events) |ev| {
             if (ev != .array or ev.array.len < 2) continue;
@@ -149,220 +416,31 @@ pub const UiState = struct {
             const args = ev.array[1..];
 
             if (std.mem.eql(u8, name, "default_colors_set")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 2) continue;
-                    const fg = arg.array[0].integer;
-                    const bg = arg.array[1].integer;
-                    self.default_fg = if (fg != -1) Color{ .rgb = .{
-                        .r = @as(u8, @intCast((fg >> 16) & 0xff)),
-                        .g = @as(u8, @intCast((fg >> 8) & 0xff)),
-                        .b = @as(u8, @intCast(fg & 0xff)),
-                    } } else .none;
-                    self.default_bg = if (bg != -1) Color{ .rgb = .{
-                        .r = @as(u8, @intCast((bg >> 16) & 0xff)),
-                        .g = @as(u8, @intCast((bg >> 8) & 0xff)),
-                        .b = @as(u8, @intCast(bg & 0xff)),
-                    } } else .none;
-                }
+                self.handleDefaultColorsSet(args);
             } else if (std.mem.eql(u8, name, "hl_attr_define")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 2) continue;
-                    const id = arg.array[0].integer;
-                    const rgb_attrs = arg.array[1];
-                    var hl = Highlight{ .fg = .none, .bg = .none };
-                    if (rgb_attrs == .map) {
-                        for (rgb_attrs.map) |kv| {
-                            if (kv.key != .string) continue;
-                            const key = kv.key.string;
-                            if (std.mem.eql(u8, key, "foreground")) {
-                                const val = kv.value.integer;
-                                hl.fg = Color{ .rgb = .{
-                                    .r = @as(u8, @intCast((val >> 16) & 0xff)),
-                                    .g = @as(u8, @intCast((val >> 8) & 0xff)),
-                                    .b = @as(u8, @intCast(val & 0xff)),
-                                } };
-                            } else if (std.mem.eql(u8, key, "background")) {
-                                const val = kv.value.integer;
-                                hl.bg = Color{ .rgb = .{
-                                    .r = @as(u8, @intCast((val >> 16) & 0xff)),
-                                    .g = @as(u8, @intCast((val >> 8) & 0xff)),
-                                    .b = @as(u8, @intCast(val & 0xff)),
-                                } };
-                            } else if (std.mem.eql(u8, key, "bold")) {
-                                hl.bold = kv.value.bool;
-                            } else if (std.mem.eql(u8, key, "italic")) {
-                                hl.italic = kv.value.bool;
-                            } else if (std.mem.eql(u8, key, "reverse")) {
-                                hl.reverse = kv.value.bool;
-                            }
-                        }
-                    }
-                    try self.highlights.put(id, hl);
-                }
+                try self.handleHlAttrDefine(args);
             } else if (std.mem.eql(u8, name, "grid_resize")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 3) continue;
-                    const id = arg.array[0].integer;
-                    const w = @as(u16, @intCast(arg.array[1].integer));
-                    const h = @as(u16, @intCast(arg.array[2].integer));
-                    if (id == 1) {
-                        try self.grid.resize(w, h);
-                    } else {
-                        const g = try self.getOrCreate(id);
-                        try g.resize(w, h);
-                    }
-                }
+                try self.handleGridResize(args);
             } else if (std.mem.eql(u8, name, "grid_clear")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 1) continue;
-                    const id = arg.array[0].integer;
-                    if (id == 1) {
-                        self.grid.clear();
-                    } else {
-                        if (self.get(id)) |g| g.clear();
-                    }
-                }
+                self.handleGridClear(args);
             } else if (std.mem.eql(u8, name, "grid_destroy")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 1) continue;
-                    const id = arg.array[0].integer;
-                    if (id != 1) self.remove(id);
-                }
+                self.handleGridDestroy(args);
             } else if (std.mem.eql(u8, name, "win_pos")) {
-                // win_pos [grid, win, start_row, start_col, width, height]
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 4) continue;
-                    const id = arg.array[0].integer;
-                    if (id == 1) continue;
-                    const g = try self.getOrCreate(id);
-                    g.row = @as(i32, @intCast(arg.array[2].integer));
-                    g.col = @as(i32, @intCast(arg.array[3].integer));
-                    g.is_float = false;
-                    g.visible = true;
-                }
+                try self.handleWinPos(args);
             } else if (std.mem.eql(u8, name, "msg_set_pos")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 3) continue;
-                    const id = arg.array[0].integer;
-                    const g = try self.getOrCreate(id);
-                    g.row = @as(i32, @intCast(arg.array[1].integer));
-                    g.col = 0;
-                    g.is_float = true;
-                    g.visible = true;
-                }
+                try self.handleMsgSetPos(args);
             } else if (std.mem.eql(u8, name, "win_float_pos")) {
-                // win_float_pos [grid, win, anchor, anchor_grid, anchor_row, anchor_col,
-                //                focusable, zindex, mouse_in_float, win_row, win_col]
-                // With ext_multigrid: win_row=arg[9], win_col=arg[10]
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 1) continue;
-                    const id = arg.array[0].integer;
-                    if (id == 1) continue;
-                    const g = try self.getOrCreate(id);
-                    g.is_float = true;
-                    g.visible = true;
-                    if (arg.array.len >= 11 and
-                        arg.array[9] == .integer and
-                        arg.array[10] == .integer)
-                    {
-                        g.row = @as(i32, @intCast(arg.array[9].integer));
-                        g.col = @as(i32, @intCast(arg.array[10].integer));
-                    }
-                }
+                try self.handleWinFloatPos(args);
             } else if (std.mem.eql(u8, name, "win_hide")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 1) continue;
-                    const id = arg.array[0].integer;
-                    if (self.get(id)) |g| g.visible = false;
-                }
+                self.handleWinHide(args);
             } else if (std.mem.eql(u8, name, "win_close")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 1) continue;
-                    self.remove(arg.array[0].integer);
-                }
+                self.handleWinClose(args);
             } else if (std.mem.eql(u8, name, "grid_cursor_goto")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 3) continue;
-                    self.cursor_grid = arg.array[0].integer;
-                    self.cursor_y = @as(u16, @intCast(arg.array[1].integer));
-                    self.cursor_x = @as(u16, @intCast(arg.array[2].integer));
-                }
+                self.handleGridCursorGoto(args);
             } else if (std.mem.eql(u8, name, "grid_scroll")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 7) continue;
-                    const id = arg.array[0].integer;
-                    const target: *GridData = if (id == 1) &self.grid else blk: {
-                        if (self.get(id)) |g| break :blk g;
-                        continue;
-                    };
-                    const top: u16 = @as(u16, @intCast(@max(0, arg.array[1].integer)));
-                    const bot: u16 = @as(u16, @intCast(@max(0, arg.array[2].integer)));
-                    const left: u16 = @as(u16, @intCast(@max(0, arg.array[3].integer)));
-                    const right: u16 = @as(u16, @intCast(@max(0, arg.array[4].integer)));
-                    const rows: i64 = arg.array[5].integer;
-                    if (top >= target.height or bot > target.height or
-                        left >= target.width or right > target.width or
-                        top >= bot or left >= right) continue;
-                    if (rows > 0) {
-                        var y = top;
-                        const ur = @as(u16, @intCast(rows));
-                        if (bot > ur) {
-                            while (y < bot - ur) : (y += 1) {
-                                const src_y = y + ur;
-                                for (left..right) |x| {
-                                    target.cells[@as(usize, y) * @as(usize, target.width) + x] =
-                                        target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
-                                }
-                            }
-                        }
-                    } else if (rows < 0) {
-                        const abs_rows = @as(u16, @intCast(-rows));
-                        if (bot > 0) {
-                            var y = bot - 1;
-                            while (y >= top + abs_rows) : (y -= 1) {
-                                const src_y = y - abs_rows;
-                                for (left..right) |x| {
-                                    target.cells[@as(usize, y) * @as(usize, target.width) + x] =
-                                        target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
-                                }
-                            }
-                        }
-                    }
-                }
+                self.handleGridScroll(args);
             } else if (std.mem.eql(u8, name, "grid_line")) {
-                for (args) |arg| {
-                    if (arg != .array or arg.array.len < 4) continue;
-                    const id = arg.array[0].integer;
-                    const row = @as(u16, @intCast(arg.array[1].integer));
-                    var col = @as(u16, @intCast(arg.array[2].integer));
-                    const cells_val = arg.array[3];
-                    if (cells_val != .array) continue;
-
-                    const target: *GridData = if (id == 1) &self.grid else blk: {
-                        if (self.get(id)) |g| break :blk g;
-                        const g = self.getOrCreate(id) catch continue;
-                        break :blk g;
-                    };
-
-                    var current_hl_id: i64 = 0;
-                    for (cells_val.array) |c| {
-                        if (c != .array or c.array.len < 1) continue;
-                        const text = if (c.array[0] == .string) c.array[0].string else " ";
-                        if (c.array.len >= 2) current_hl_id = c.array[1].integer;
-                        const repeat_i = if (c.array.len >= 3) c.array[2].integer else 1;
-                        const repeat: usize = if (repeat_i > 0) @as(usize, @intCast(repeat_i)) else 1;
-                        const hl = self.highlights.get(current_hl_id) orelse Highlight{ .fg = .none, .bg = .none };
-                        var rep: usize = 0;
-                        while (rep < repeat) : (rep += 1) {
-                            if (row < target.height and col < target.width) {
-                                var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic, .reverse = hl.reverse };
-                                cell.setChar(text);
-                                target.cells[@as(usize, row) * @as(usize, target.width) + col] = cell;
-                            }
-                            col += 1;
-                        }
-                    }
-                }
+                try self.handleGridLine(args);
             }
         }
     }

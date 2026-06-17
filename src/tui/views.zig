@@ -82,13 +82,14 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 const sy_i = @as(i32, @intCast(layout.editor.y)) + fg.row + @as(i32, @intCast(gy));
                 if (sy_i < 0 or sy_i >= @as(i32, @intCast(layout.editor.y + layout.editor.h))) continue;
                 const sy = @as(u16, @intCast(sy_i));
+
                 var gx: u16 = 0;
                 while (gx < fg.width) : (gx += 1) {
                     const sx_i = @as(i32, @intCast(layout.editor.x)) + fg.col + @as(i32, @intCast(gx));
                     if (sx_i < 0 or sx_i >= @as(i32, @intCast(layout.editor.x + layout.editor.w))) continue;
                     const sx = @as(u16, @intCast(sx_i));
                     var cell = fg.cells[@as(usize, gy) * @as(usize, fg.width) + gx];
-                    if (std.meta.eql(cell.bg, a.ui_state.default_bg) or std.meta.activeTag(cell.bg) == .none) {
+                    if (std.meta.eql(cell.bg, a.ui_state.default_bg) or std.meta.eql(cell.bg, a.ui_state.normal_bg) or std.meta.eql(cell.bg, a.ui_state.cursorline_bg) or std.meta.eql(cell.bg, t.bg_editor) or std.meta.activeTag(cell.bg) == .none) {
                         cell.bg = t.bg_editor;
                     }
                     if (std.meta.eql(cell.fg, a.ui_state.default_fg) or std.meta.activeTag(cell.fg) == .none) {
@@ -192,6 +193,12 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 });
             } else if (a.activity_bar.active_idx == 3) {
                 a.ai_panel.draw(a.ren, layout.file_tree, .{
+                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .nerd_fonts = a.settings_widget.config.nerd_fonts,
+                });
+            } else if (a.activity_bar.active_idx == 4) {
+                a.extension_shop.draw(a.ren, layout.file_tree, .{
                     .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
                     .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
                     .nerd_fonts = a.settings_widget.config.nerd_fonts,
@@ -436,6 +443,13 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             .fg_comment = t.fg_secondary,
         });
     }
+    if (a.extension_shop.is_popup_open) {
+        a.extension_shop.drawPopup(a.ren, a.ren.width, a.ren.height, .{
+            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .nerd_fonts = a.settings_widget.config.nerd_fonts,
+        });
+    }
 
     // Draw split dropdown menu if open
     if (a.show_split_menu) {
@@ -495,23 +509,37 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         }
     }
 
-    // Draw close buttons on each active split window if there are multiple splits
+    // Draw filename title bars and close buttons on each split window if there are multiple splits
     if (a.editor_wins.items.len > 1) {
         for (a.editor_wins.items) |win| {
             if (win.width > 4 and win.height > 1) {
-                const w_gx = win.col + win.width - 2;
-                const w_gy = win.row;
-                var cell = Cell{
-                    .char = [_]u8{ 226, 156, 150, 0 }, .len = 3, // '✖' is \u{2716} which is 3-bytes: [226, 156, 150]
-                    .fg = if (win.active) Color{ .rgb = .{ .r = 255, .g = 80, .b = 80 } } else t.fg_secondary,
-                    .bg = t.bg_editor,
-                };
-                if (w_gy < a.ui_state.grid.height and w_gx < a.ui_state.grid.width) {
-                    const orig = a.ui_state.grid.cells[@as(usize, w_gy) * @as(usize, a.ui_state.grid.width) + w_gx];
-                    if (std.meta.activeTag(orig.bg) != .none) {
-                        cell.bg = orig.bg;
+                const win_sx = layout.editor.x + win.col;
+                const win_sy = layout.editor.y + win.row;
+
+                // Draw filename title bar across the top of this pane
+                if (win_sy < a.ren.height) {
+                    const title_bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive;
+                    const title_fg = if (win.active) t.fg_primary else t.fg_secondary;
+                    // Fill the title row background
+                    drawRect(a.ren, Rect{ .x = win_sx, .y = win_sy, .w = win.width, .h = 1 }, " ", title_fg, title_bg);
+                    // Draw the filename centered in the title bar
+                    const name = if (win.name.len > 0) win.name else "[No Name]";
+                    const name_len = @as(u16, @intCast(@min(name.len, win.width -| 4)));
+                    const padding = (win.width -| name_len) / 2;
+                    const title_x = win_sx + padding;
+                    if (title_x < win_sx + win.width) {
+                        drawText(a.ren, title_x, win_sy, name[0..name_len], title_fg, title_bg, win.active, false);
                     }
                 }
+
+                // Draw close button (top-right corner of pane, over the title bar)
+                const w_gx = win.col + win.width - 2;
+                const w_gy = win.row;
+                const cell = Cell{
+                    .char = [_]u8{ 226, 156, 150, 0 }, .len = 3, // '✖'
+                    .fg = if (win.active) Color{ .rgb = .{ .r = 255, .g = 80, .b = 80 } } else t.fg_secondary,
+                    .bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive,
+                };
                 if (layout.editor.x + w_gx < a.ren.width and layout.editor.y + w_gy < a.ren.height) {
                     a.ren.setCell(layout.editor.x + w_gx, layout.editor.y + w_gy, cell);
                 }
