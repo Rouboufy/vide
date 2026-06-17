@@ -84,7 +84,7 @@ Before installing Vide, make sure you have the following:
 | Dependency | Minimum Version | Notes |
 | :--- | :--- | :--- |
 | **Neovim** | `>= 0.10.0` | Required as the editor engine |
-| **Zig** | `>= 0.15.0 (master)` | Required to build from source — installed automatically by `setup.sh` if missing |
+| **Zig** | `>= 0.16.0 (master)` | Required to build from source — installed automatically by `setup.sh` if missing |
 | **git** | any | Required to clone the repository |
 | **curl** | any | Required by `setup.sh` |
 | **unzip** | any | Required to install the Nerd Font |
@@ -143,7 +143,7 @@ If you prefer to build from source yourself:
 git clone https://github.com/Rouboufy/vide.git
 cd vide
 
-# 2. Build the binary (requires Zig >= 0.15.0)
+# 2. Build the binary (requires Zig >= 0.16.0)
 zig build -Doptimize=ReleaseFast
 
 # 3. Run Vide directly

@@ -213,8 +213,8 @@ pub const LazyWidget = struct {
         // Tabs
         const tab_y = y + 2;
         var tx: u16 = x + 2;
-        inline for (@typeInfo(LazyTab).@"enum".field_values) |val| {
-            const tab_enum = @as(LazyTab, @enumFromInt(val));
+        inline for (@typeInfo(LazyTab).@"enum".fields) |field| {
+            const tab_enum = @as(LazyTab, @enumFromInt(field.value));
             const label = tab_enum.label();
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
@@ -333,8 +333,8 @@ pub const LazyWidget = struct {
                 const tab_y = y + 2;
                 if (m.row == tab_y) {
                     var tx: u16 = x + 2;
-                    inline for (@typeInfo(LazyTab).@"enum".field_values) |val| {
-                        const tab_enum = @as(LazyTab, @enumFromInt(val));
+                    inline for (@typeInfo(LazyTab).@"enum".fields) |field| {
+                        const tab_enum = @as(LazyTab, @enumFromInt(field.value));
                         const label_len = tab_enum.label().len;
                         if (m.col >= tx and m.col < tx + label_len) {
                             self.selected_tab = tab_enum;

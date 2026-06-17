@@ -38,9 +38,9 @@ if ! command -v zig &>/dev/null; then
 else
     ZIG_VER=$(zig version | cut -d- -f1)
     IFS='.' read -r major minor patch <<< "$ZIG_VER"
-    if [ "$major" -eq 0 ] && [ "$minor" -lt 15 ]; then
+    if [ "$major" -eq 0 ] && [ "$minor" -lt 16 ]; then
         MISSING_DEPS+=("zig")
-        echo -e "${YELLOW}Zig $major.$minor is too old (requires 0.15+). Will be upgraded.${NC}"
+        echo -e "${YELLOW}Zig $major.$minor is too old (requires 0.16+). Will be upgraded.${NC}"
         if command -v snap &>/dev/null; then sudo snap remove zig &>/dev/null || true; fi
     fi
 fi

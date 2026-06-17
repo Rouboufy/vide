@@ -819,7 +819,11 @@ pub const ExtensionShop = struct {
             .stderr = .ignore,
         });
         const term = try child.wait(self.io);
-        if (!term.success()) {
+        const success = switch (term) {
+            .exited => |code| code == 0,
+            else => false,
+        };
+        if (!success) {
             self.setMessage("Failed to update plugin");
             return;
         }
