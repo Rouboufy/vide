@@ -9,7 +9,6 @@ on:
       - packaging/vide.svg
       - docs/**
       - README.md
-      - TODO.md
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -37,7 +36,7 @@ jobs:
           cp index.html _site/
           cp assets/site.css _site/assets/
           cp packaging/vide.svg _site/packaging/
-          cp README.md TODO.md _site/
+          cp README.md _site/
           cp -R docs/. _site/docs/
       - uses: actions/upload-pages-artifact@v3
         with:
