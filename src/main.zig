@@ -572,6 +572,14 @@ fn runNvimSession(
             }
         }
 
+        if (settings_widget.pollSoftwareUpdate()) |status| {
+            switch (status) {
+                .success => app.notify(.info, "Vide was updated successfully. Restart Vide to use the new version.", .{}),
+                .failure => app.notify(.failure, "Software update failed. See {s}/software-update.log", .{app_data_dir}),
+                else => {},
+            }
+        }
+
         const cols = ren.width;
         const rows = ren.height;
         const layout = Layout.compute(cols, rows, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);

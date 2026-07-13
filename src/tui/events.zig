@@ -63,6 +63,18 @@ fn ensureTerminalStarted(a: *App) !void {
     a.terminal_started = true;
 }
 
+fn startRequestedSoftwareUpdate(a: *App) void {
+    if (!a.settings_widget.software_update_requested) return;
+    a.settings_widget.software_update_requested = false;
+    a.settings_widget.startSoftwareUpdate() catch |err| {
+        a.settings_widget.software_update_status = .failure;
+        a.notify(.failure, "Unable to start software update: {}", .{err});
+        std.log.err("Unable to start Vide software update: {}", .{err});
+        return;
+    };
+    a.notify(.info, "Downloading the latest Vide release in the background...", .{});
+}
+
 pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     if (a.terminal_focus) {
         if (std.mem.eql(u8, k.raw, "\x1bv") or std.mem.eql(u8, k.raw, "\x1c")) { // Alt+v or Ctrl+\ -> Vertical Split
@@ -301,6 +313,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (a.settings_widget.is_open) {
             if (a.settings_widget.handleKey(nk)) {
                 a.needs_resize = true;
+                startRequestedSoftwareUpdate(a);
                 if (a.settings_widget.open_mason) {
                     a.settings_widget.open_mason = false;
                     a.settings_widget.is_open = false;
@@ -838,6 +851,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         if (m.action == .press) {
             if (a.settings_widget.handleMouse(m.col, m.row, a.ren.width, a.ren.height)) {
                 a.needs_resize = true;
+                startRequestedSoftwareUpdate(a);
                 if (a.settings_widget.save_failed) {
                     a.settings_widget.save_failed = false;
                     a.notify(.failure, "Settings could not be saved; check path permissions and the Vide log.", .{});

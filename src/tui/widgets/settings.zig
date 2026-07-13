@@ -190,6 +190,8 @@ pub const SettingsWidget = struct {
 
     open_mason: bool = false,
     open_lazy: bool = false,
+    software_update_requested: bool = false,
+    software_update_status: SoftwareUpdateStatus = .idle,
 
     keyboard_focus: FocusMode = .tabs,
     hover_row: usize = 0,
@@ -214,6 +216,8 @@ pub const SettingsWidget = struct {
 
     pub const FocusMode = enum { tabs, content, dropdown };
 
+    pub const SoftwareUpdateStatus = enum { idle, running, success, failure };
+
     pub const DropdownType = enum { none, theme, indent_size, indent_type, line_numbers, colorcolumn, split_separator, mode };
 
     pub const supported_modes = [_][]const u8{ "normal", "ide", "zen" };
@@ -234,6 +238,25 @@ pub const SettingsWidget = struct {
         "Keybindings",
         "About",
     };
+
+    const software_updater =
+        \\#!/bin/sh
+        \\status_file=$1
+        \\log_file=$2
+        \\exec >"$log_file" 2>&1
+        \\result=failure
+        \\tmp_dir=
+        \\cleanup() {
+        \\    printf '%s\\n' "$result" >"$status_file"
+        \\    [ -z "$tmp_dir" ] || rm -rf "$tmp_dir"
+        \\}
+        \\trap cleanup EXIT INT TERM
+        \\tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/vide-software-update.XXXXXX") || exit 1
+        \\if curl -fsSL --retry 3 -o "$tmp_dir/setup.sh" "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh" &&
+        \\   bash "$tmp_dir/setup.sh" --no-plugins; then
+        \\    result=success
+        \\fi
+    ;
 
     pub fn init(allocator: std.mem.Allocator, settings_path: []const u8, io: std.Io, data_dir: []const u8) SettingsWidget {
         var load_failed = false;
@@ -274,6 +297,66 @@ pub const SettingsWidget = struct {
         };
         widget.setThemesAndGroup(&supported_themes) catch {};
         return widget;
+    }
+
+    fn updatePath(self: *const SettingsWidget, file_name: []const u8) ![]u8 {
+        return std.fs.path.join(self.allocator, &.{ self.data_dir, file_name });
+    }
+
+    pub fn startSoftwareUpdate(self: *SettingsWidget) !void {
+        if (self.software_update_status == .running) return;
+        const script_path = try self.updatePath("software-update.sh");
+        defer self.allocator.free(script_path);
+        const status_path = try self.updatePath("software-update.status");
+        defer self.allocator.free(status_path);
+        const log_path = try self.updatePath("software-update.log");
+        defer self.allocator.free(log_path);
+
+        std.Io.Dir.cwd().deleteFile(self.io, status_path) catch {};
+        try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = script_path, .data = software_updater });
+
+        // The outer shell exits immediately after detaching the updater. Vide
+        // remains responsive and the updater can finish if the app is closed.
+        const argv = &[_][]const u8{
+            "sh",
+            "-c",
+            "sh \"$1\" \"$2\" \"$3\" >/dev/null 2>&1 &",
+            "vide-software-update",
+            script_path,
+            status_path,
+            log_path,
+        };
+        var child = try std.process.spawn(self.io, .{
+            .argv = argv,
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        });
+        const term = try child.wait(self.io);
+        if (term != .exited or term.exited != 0) return error.UpdateLaunchFailed;
+        self.software_update_status = .running;
+    }
+
+    pub fn pollSoftwareUpdate(self: *SettingsWidget) ?SoftwareUpdateStatus {
+        if (self.software_update_status != .running) return null;
+        const status_path = self.updatePath("software-update.status") catch return null;
+        defer self.allocator.free(status_path);
+        const status_path_z = self.allocator.dupeSentinel(u8, status_path, 0) catch return null;
+        defer self.allocator.free(status_path_z);
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, status_path_z, .{ .ACCMODE = .RDONLY }, 0) catch return null;
+        defer _ = std.posix.system.close(fd);
+        var buf: [16]u8 = undefined;
+        const rc = std.posix.system.read(fd, &buf, buf.len);
+        if (std.posix.errno(rc) != .SUCCESS) return null;
+        const result = std.mem.trim(u8, buf[0..@intCast(rc)], " \r\n\t");
+        if (std.mem.eql(u8, result, "success")) {
+            self.software_update_status = .success;
+        } else if (std.mem.eql(u8, result, "failure")) {
+            self.software_update_status = .failure;
+        } else {
+            return null;
+        }
+        return self.software_update_status;
     }
 
     pub fn deinit(self: *SettingsWidget) void {
@@ -785,16 +868,36 @@ pub const SettingsWidget = struct {
                 const nvim_line = std.fmt.bufPrint(&buf, "Neovim version: {s}", .{nvim_version}) catch "Neovim version: unknown";
                 ren.drawText(content_x, content_y + 4, nvim_line, theme.fg_primary, theme.bg_sidebar, false, false);
 
-                ren.drawText(content_x, content_y + 7, "Runtime paths", theme.fg_primary, theme.bg_sidebar, true, false);
+                const update_label = switch (self.software_update_status) {
+                    .idle => "Update to Latest Version",
+                    .running => "Updating Vide...",
+                    .success => "Updated - Restart Vide",
+                    .failure => "Update Failed - Retry",
+                };
+                const update_state: primitives.ControlState = if (self.software_update_status == .running)
+                    .disabled
+                else if (self.keyboard_focus == .content)
+                    .focused
+                else
+                    .normal;
+                (primitives.Button{ .rect = .{ .x = content_x, .y = content_y + 6, .w = 28, .h = 1 }, .state = update_state }).draw(ren, update_label, .{
+                    .fg = theme.fg_secondary,
+                    .bg = theme.bg_sidebar,
+                    .accent_fg = theme.fg_primary,
+                    .accent_bg = theme.bg_accent,
+                    .muted_fg = theme.fg_secondary,
+                });
+
+                ren.drawText(content_x, content_y + 8, "Runtime paths", theme.fg_primary, theme.bg_sidebar, true, false);
                 a: {
                     const available = if (w > 26) w - 26 else 1;
-                    ren.drawText(content_x, content_y + 9, "Data:", theme.fg_secondary, theme.bg_sidebar, false, false);
-                    ren.drawTextClipped(content_x + 10, content_y + 9, available, self.data_dir, theme.fg_primary, theme.bg_sidebar, false, false);
-                    ren.drawText(content_x, content_y + 11, "Settings:", theme.fg_secondary, theme.bg_sidebar, false, false);
-                    ren.drawTextClipped(content_x + 10, content_y + 11, available, self.settings_path, theme.fg_primary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 10, "Data:", theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawTextClipped(content_x + 10, content_y + 10, available, self.data_dir, theme.fg_primary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 12, "Settings:", theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawTextClipped(content_x + 10, content_y + 12, available, self.settings_path, theme.fg_primary, theme.bg_sidebar, false, false);
                     const log_path = std.fmt.bufPrint(&buf, "{s}/vide.log", .{self.data_dir}) catch self.data_dir;
-                    ren.drawText(content_x, content_y + 13, "Log:", theme.fg_secondary, theme.bg_sidebar, false, false);
-                    ren.drawTextClipped(content_x + 10, content_y + 13, available, log_path, theme.fg_primary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 14, "Log:", theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawTextClipped(content_x + 10, content_y + 14, available, log_path, theme.fg_primary, theme.bg_sidebar, false, false);
                     break :a;
                 }
             },
@@ -1290,6 +1393,9 @@ pub const SettingsWidget = struct {
                     }
                 } else if (self.active_tab == 4) {
                     self.active_binding = self.hover_row;
+                } else if (self.active_tab == 5) {
+                    if (self.software_update_status != .running) self.software_update_requested = true;
+                    return true;
                 }
                 self.has_unsaved_changes = true;
                 return true;
@@ -1604,6 +1710,12 @@ pub const SettingsWidget = struct {
                             }
                         }
                     },
+                    5 => {
+                        const update_button = primitives.Button{ .rect = .{ .x = content_x, .y = content_y + 6, .w = 28, .h = 1 } };
+                        if (update_button.hit(mx, my) and self.software_update_status != .running) {
+                            self.software_update_requested = true;
+                        }
+                    },
                     else => {},
                 }
                 if (changed) {
@@ -1633,4 +1745,11 @@ test "settings roundtrip preserves canonical mode defaults" {
     try std.testing.expect(!loaded.zen_handoff);
     try std.testing.expect(!loaded.nerd_fonts);
     try std.testing.expectEqualStrings("", loaded.colorcolumn);
+}
+
+test "software updater uses the official release installer" {
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "--no-plugins") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "success") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "failure") != null);
 }
