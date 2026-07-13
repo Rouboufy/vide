@@ -58,8 +58,8 @@ jobs:
         run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
 
   macos-smoke:
-    # macOS end-to-end behavior is still tracked as deferred in TODO.md. Keep
-    # collecting the full smoke log without blocking Linux release readiness.
+    # macOS end-to-end behavior still needs broader verification. Keep collecting
+    # the full smoke log without blocking Linux release readiness.
     continue-on-error: true
     runs-on: macos-latest
     steps:
@@ -91,5 +91,5 @@ jobs:
       - name: Check Markdown links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --no-progress --exclude-path TODO.md "**/*.md"
+          args: --no-progress "**/*.md"
           fail: true
