@@ -40,7 +40,7 @@ pub const Explorer = struct {
     expanded_dirs: std.StringHashMap(void),
     items: std.array_list.Managed(ExplorerItem),
     arena: std.heap.ArenaAllocator,
-    
+
     scroll_y: usize = 0,
     selected_idx: ?usize = null,
 
@@ -76,7 +76,7 @@ pub const Explorer = struct {
         self.expanded_dirs.deinit();
         self.items.deinit();
         self.arena.deinit();
-        
+
         var it_neo = self.neovim_modified.keyIterator();
         while (it_neo.next()) |k| self.allocator.free(k.*);
         self.neovim_modified.deinit();
@@ -97,7 +97,7 @@ pub const Explorer = struct {
         var changed = false;
 
         // 1. Refresh Neovim modified and saved buffers
-        const script = 
+        const script =
             \\local res = { modified = {}, saved = {} }
             \\for _, buf in ipairs(vim.api.nvim_list_bufs()) do
             \\    local name = vim.api.nvim_buf_get_name(buf)
@@ -127,7 +127,7 @@ pub const Explorer = struct {
             if (res == .map) {
                 var new_mod = std.StringHashMap(void).init(self.allocator);
                 var new_sav = std.StringHashMap(void).init(self.allocator);
-                
+
                 for (res.map) |kv| {
                     if (kv.key == .string and std.mem.eql(u8, kv.key.string, "modified") and kv.value == .array) {
                         for (kv.value.array) |item| {
@@ -139,7 +139,7 @@ pub const Explorer = struct {
                         }
                     }
                 }
-                
+
                 if (new_mod.count() != self.neovim_modified.count()) changed = true;
                 var it_mod = self.neovim_modified.keyIterator();
                 while (it_mod.next()) |k| {
@@ -148,7 +148,7 @@ pub const Explorer = struct {
                 }
                 self.neovim_modified.deinit();
                 self.neovim_modified = new_mod;
-                
+
                 if (new_sav.count() != self.session_saved.count()) changed = true;
                 var it_sav = self.session_saved.keyIterator();
                 while (it_sav.next()) |k| {
@@ -159,7 +159,7 @@ pub const Explorer = struct {
                 self.session_saved = new_sav;
             }
         }
-        
+
         return changed;
     }
 
@@ -170,7 +170,7 @@ pub const Explorer = struct {
         var iter = dir.iterate();
         const EntryInfo = struct { name: []const u8, is_dir: bool };
         var entries = std.array_list.Managed(EntryInfo).init(self.arena.allocator());
-        
+
         while (try iter.next(self.io)) |entry| {
             if (std.mem.eql(u8, entry.name, ".git") or std.mem.eql(u8, entry.name, "zig-cache") or std.mem.eql(u8, entry.name, "zig-out")) continue;
             try entries.append(.{
@@ -189,10 +189,10 @@ pub const Explorer = struct {
         }.lessThan);
 
         for (entries.items) |entry| {
-            const rel_path = if (std.mem.eql(u8, dir_path, ".")) 
-                entry.name 
-            else 
-                try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{dir_path, entry.name});
+            const rel_path = if (std.mem.eql(u8, dir_path, "."))
+                entry.name
+            else
+                try std.fmt.allocPrint(self.arena.allocator(), "{s}/{s}", .{ dir_path, entry.name });
 
             const expanded = self.expanded_dirs.contains(rel_path);
 
@@ -218,7 +218,7 @@ pub const Explorer = struct {
         }
         try self.refresh();
     }
-    
+
     pub fn handleDelete(self: *Explorer) !void {
         if (self.action_target_path) |path| {
             if (std.Io.Dir.cwd().deleteFile(self.io, path)) {} else |err| {
@@ -231,25 +231,27 @@ pub const Explorer = struct {
         self.action_target_path = null;
         try self.refresh();
     }
-    
+
     pub fn handleCreateFile(self: *Explorer) !void {
         if (self.input_len == 0) {
             self.action_state = .none;
             return;
         }
         const name = self.input_buf[0..self.input_len];
-        const path = if (self.action_target_path) |p| 
-            try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{p, name})
+        const path = if (self.action_target_path) |p|
+            try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ p, name })
         else
             try self.allocator.dupe(u8, name);
         defer self.allocator.free(path);
-        
+
         if (self.action_state == .creating_dir) {
             if (std.Io.Dir.cwd().createDir(self.io, path, .default_dir)) {} else |_| {}
         } else {
-            if (std.Io.Dir.cwd().createFile(self.io, path, .{})) |*f| { f.close(self.io); } else |_| {}
+            if (std.Io.Dir.cwd().createFile(self.io, path, .{})) |*f| {
+                f.close(self.io);
+            } else |_| {}
         }
-        
+
         self.action_state = .none;
         self.action_target_path = null;
         self.input_len = 0;
@@ -262,19 +264,14 @@ pub const Explorer = struct {
         }
         const new_name = self.input_buf[0..self.input_len];
         const old_path = self.action_target_path.?;
-        
+
         // Find parent directory of old_path
         const dir_part = std.fs.path.dirname(old_path) orelse ".";
-        const new_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{dir_part, new_name});
+        const new_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir_part, new_name });
         defer self.allocator.free(new_path);
-        
-        const old_path_z = try self.allocator.dupeSentinel(u8, old_path, 0);
-        defer self.allocator.free(old_path_z);
-        const new_path_z = try self.allocator.dupeSentinel(u8, new_path, 0);
-        defer self.allocator.free(new_path_z);
-        
-        _ = std.os.linux.rename(old_path_z, new_path_z);
-        
+
+        try std.Io.Dir.renameAbsolute(old_path, new_path, self.io);
+
         self.action_state = .none;
         self.action_target_path = null;
         self.input_len = 0;
@@ -283,21 +280,21 @@ pub const Explorer = struct {
 
     pub fn handleMenuClick(self: *Explorer, col: u16, row: u16) !bool {
         if (!self.show_menu) return false;
-        
+
         const mx = self.menu_x;
         const my = self.menu_y;
         const menu_w: u16 = 16;
-        const menu_h: u16 = if (self.selected_idx) |idx| 
+        const menu_h: u16 = if (self.selected_idx) |idx|
             (if (self.items.items[idx].is_dir) @as(u16, 4) else @as(u16, 2))
-        else 
+        else
             @as(u16, 2);
-            
+
         // Check if the click is within the menu boundaries
         if (col >= mx and col < mx + menu_w and row > my and row <= my + menu_h) {
             const rel_row = row - my - 1; // 0-indexed option index
-            
+
             self.show_menu = false; // Close menu after choice
-            
+
             if (self.selected_idx) |idx| {
                 const item = self.items.items[idx];
                 if (item.is_dir) {
@@ -363,14 +360,14 @@ pub const Explorer = struct {
             }
             return true;
         }
-        
+
         return false;
     }
 
     pub fn handleMouse(self: *Explorer, m_col: u16, m_row: u16, rect: Rect) !?[]const u8 {
         if (m_col >= rect.x and m_col < rect.x + rect.w and m_row >= rect.y and m_row < rect.y + rect.h) {
             const rel_y = m_row - rect.y;
-            
+
             // Handle action bar (top line)
             if (rel_y == 0) {
                 if (m_col >= rect.x + rect.w - 8 and m_col <= rect.x + rect.w - 6) {
@@ -404,7 +401,7 @@ pub const Explorer = struct {
                 }
                 return null;
             }
-            
+
             if (self.action_state != .none) {
                 return null; // Don't allow clicking items while prompt is open
             }
@@ -565,10 +562,10 @@ pub const Explorer = struct {
 
     pub fn draw(self: *Explorer, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
         rend.drawRect(rect, " ", colors.fg_primary, colors.bg_sidebar);
-        
+
         // Draw title and buttons
         drawTextClipped(rend, rect.x + 1, rect.y, "EXPLORER", rect.w - 1, colors.fg_secondary, colors.bg_sidebar, true, false);
-        
+
         if (rect.w >= 8) {
             drawTextClipped(rend, rect.x + rect.w - 8, rect.y, "+F", 2, colors.fg_accent, colors.bg_sidebar, true, false);
             drawTextClipped(rend, rect.x + rect.w - 5, rect.y, "+D", 2, colors.fg_accent, colors.bg_sidebar, true, false);
@@ -577,14 +574,17 @@ pub const Explorer = struct {
 
         const max_items = if (rect.h > 0) @max(1, rect.h - 1) else 0;
         var y: u16 = 1;
-        
+
         // Draw Items
         var i: usize = self.scroll_y;
-        while (i < self.items.items.len and y < max_items) : ({ i += 1; y += 1; }) {
+        while (i < self.items.items.len and y < max_items) : ({
+            i += 1;
+            y += 1;
+        }) {
             const item = self.items.items[i];
             const is_selected = (self.selected_idx != null and self.selected_idx.? == i);
             const bg = if (is_selected) colors.bg_editor else colors.bg_sidebar;
-            
+
             // Highlight selected row
             if (is_selected) {
                 rend.drawRect(Rect{ .x = rect.x, .y = rect.y + y, .w = rect.w, .h = 1 }, " ", colors.fg_primary, bg);
@@ -593,7 +593,7 @@ pub const Explorer = struct {
 
             const indent = @as(usize, item.depth) * 2;
             const prefix = if (item.is_dir) (if (item.expanded) "v " else "> ") else "  ";
-            
+
             // Status check
             const is_unsaved = self.neovim_modified.contains(item.path);
             const is_session_saved = self.session_saved.contains(item.path);
@@ -601,13 +601,13 @@ pub const Explorer = struct {
             // Icon
             const icon = if (colors.nerd_fonts) (if (item.is_dir) "󰉋 " else getFileIcon(item.name)) else "";
             const text_x = rect.x + 1 + @as(u16, @intCast(@min(32000, indent)));
-            
+
             var avail_w: u16 = 0;
             if (text_x < rect.x + rect.w) avail_w = rect.x + rect.w - text_x;
             if (avail_w > 0) {
                 var buf: [256]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{prefix, icon, item.name}) catch continue;
-                
+                const formatted = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ prefix, icon, item.name }) catch continue;
+
                 var item_fg = colors.fg_primary;
                 if (is_unsaved) {
                     item_fg = .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }; // Red-ish
@@ -616,14 +616,14 @@ pub const Explorer = struct {
                 }
 
                 drawTextClipped(rend, text_x, rect.y + y, formatted, avail_w, item_fg, bg, false, false);
-                
+
                 // Draw 'C' indicator at the end if modified
                 if (is_unsaved or is_session_saved) {
-                    const indicator_fg = if (is_unsaved) 
-                        Color{ .rgb = .{ .r = 255, .g = 0, .b = 0 } } 
-                    else 
+                    const indicator_fg = if (is_unsaved)
+                        Color{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }
+                    else
                         Color{ .rgb = .{ .r = 0, .g = 255, .b = 0 } };
-                    
+
                     if (rect.w > 3) {
                         rend.drawText(rect.x + rect.w - 2, rect.y + y, "C", indicator_fg, bg, true, false);
                     }
@@ -635,7 +635,7 @@ pub const Explorer = struct {
         if (self.action_state != .none and rect.h > 2) {
             const prompt_y = if (rect.h > 0) rect.y + rect.h - 1 else rect.y;
             rend.drawRect(Rect{ .x = rect.x, .y = prompt_y - 1, .w = rect.w, .h = 2 }, " ", colors.fg_primary, colors.bg_editor);
-            
+
             const ptext = switch (self.action_state) {
                 .creating_file => "New File:",
                 .creating_dir => "New Dir:",
@@ -644,30 +644,29 @@ pub const Explorer = struct {
                 else => "",
             };
             drawTextClipped(rend, rect.x + 1, prompt_y - 1, ptext, rect.w - 2, colors.fg_accent, colors.bg_editor, true, false);
-            
+
             var val_buf: [256]u8 = undefined;
-            const val_text = if (self.action_state == .deleting) 
+            const val_text = if (self.action_state == .deleting)
                 self.action_target_path orelse ""
             else
                 self.input_buf[0..self.input_len];
-            
+
             const display_val = std.fmt.bufPrint(&val_buf, "{s}_", .{val_text}) catch val_text;
             drawTextClipped(rend, rect.x + 1, prompt_y, display_val, rect.w - 2, colors.fg_primary, colors.bg_editor, false, false);
         }
 
         // Draw context menu if show_menu == true
         if (self.show_menu) {
-
             const mx = self.menu_x;
             const my = self.menu_y;
-            
+
             const bg_menu = colors.bg_editor;
             const fg_menu = colors.fg_primary;
             const border_fg = colors.fg_accent;
-            
+
             // Draw top border
             rend.drawText(mx, my, "┌──────────────┐", border_fg, bg_menu, false, false);
-            
+
             // Draw options
             if (self.selected_idx) |idx| {
                 if (self.items.items[idx].is_dir) {

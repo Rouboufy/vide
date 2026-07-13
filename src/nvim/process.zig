@@ -5,11 +5,11 @@ pub const NvimProcess = struct {
     stdin: std.Io.File,
     stdout: std.Io.File,
 
-    pub fn spawn(io: std.Io, allocator: std.mem.Allocator) !NvimProcess {
-        _ = allocator;
+    pub fn spawn(io: std.Io, environ_map: *const std.process.Environ.Map) !NvimProcess {
         const argv = [_][]const u8{ "nvim", "--clean", "--embed", "--headless" };
         var child = try std.process.spawn(io, .{
             .argv = &argv,
+            .environ_map = environ_map,
             .stdin = .pipe,
             .stdout = .pipe,
             .stderr = .inherit,
@@ -22,7 +22,6 @@ pub const NvimProcess = struct {
 
         const stdin = child.stdin orelse return error.StdinPipeFailed;
         const stdout = child.stdout orelse return error.StdoutPipeFailed;
-
 
         const flags_in_val = std.posix.system.fcntl(stdin.handle, std.posix.F.GETFL, @as(usize, 0));
         const flags_in = @as(usize, @intCast(flags_in_val));

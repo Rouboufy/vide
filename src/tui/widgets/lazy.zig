@@ -6,6 +6,7 @@ const Value = msgpack.Value;
 const rpc_mod = @import("../../nvim/rpc.zig");
 const RpcClient = rpc_mod.RpcClient;
 const input = @import("../input.zig");
+const primitives = @import("primitives.zig");
 
 pub const LazyTab = enum {
     all,
@@ -59,7 +60,7 @@ pub const LazyWidget = struct {
     }
 
     pub fn refresh(self: *LazyWidget, rpc: *RpcClient) void {
-        const script = 
+        const script =
             \\local has_lazy, config = pcall(require, 'lazy.core.config')
             \\if not has_lazy then return {} end
             \\local res = {}
@@ -85,7 +86,7 @@ pub const LazyWidget = struct {
             if (res == .array) {
                 _ = self.arena.reset(.retain_capacity);
                 self.plugins.clearRetainingCapacity();
-                
+
                 for (res.array) |item| {
                     if (item == .map) {
                         var p: PluginInfo = .{ .name = "", .full_name = "" };
@@ -109,14 +110,14 @@ pub const LazyWidget = struct {
                         }
                     }
                 }
-                
+
                 // Sort alphabetically
                 std.sort.block(PluginInfo, self.plugins.items, {}, struct {
                     fn lessThan(_: void, a: PluginInfo, b: PluginInfo) bool {
                         return std.mem.lessThan(u8, a.name, b.name);
                     }
                 }.lessThan);
-                
+
                 self.ensureSelectionValid();
             }
         }
@@ -125,8 +126,8 @@ pub const LazyWidget = struct {
     fn matchesSearch(self: *const LazyWidget, p: PluginInfo) bool {
         if (self.search_len == 0) return true;
         const query = self.search_query[0..self.search_len];
-        return std.ascii.findIgnoreCase(p.name, query) != null or 
-               std.ascii.findIgnoreCase(p.full_name, query) != null;
+        return std.ascii.findIgnoreCase(p.name, query) != null or
+            std.ascii.findIgnoreCase(p.full_name, query) != null;
     }
 
     fn matchesTab(self: *const LazyWidget, p: PluginInfo) bool {
@@ -140,7 +141,7 @@ pub const LazyWidget = struct {
 
     fn ensureSelectionValid(self: *LazyWidget) void {
         if (self.plugins.items.len == 0) return;
-        
+
         if (self.selected_idx < self.plugins.items.len) {
             const p = self.plugins.items[self.selected_idx];
             if (self.matchesTab(p) and self.matchesSearch(p)) return;
@@ -157,29 +158,18 @@ pub const LazyWidget = struct {
     pub fn draw(self: *const LazyWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
         if (!self.is_open) return;
 
-        const w: u16 = @min(84, screen_w -| 4);
-        const h: u16 = @min(28, screen_h -| 4);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 84, 28, 2);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const w = modal.rect.w;
+        const h = modal.rect.h;
 
-        // Shadow
-        ren.drawRect(.{ .x = x + 1, .y = y + 1, .w = w, .h = h }, " ", theme.bg_editor, theme.bg_editor);
-        // Background
-        ren.drawRect(.{ .x = x, .y = y, .w = w, .h = h }, " ", theme.fg_primary, theme.bg_sidebar);
+        if (!primitives.usable(modal, 40, 15)) {
+            primitives.drawSizeWarning(ren, "Plugin Manager", theme.fg_primary, theme.bg_sidebar);
+            return;
+        }
 
-        // Border
-        for (x..x + w) |bx| {
-            ren.drawText(@intCast(bx), y, "─", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(@intCast(bx), y + h - 1, "─", theme.border_color, theme.bg_sidebar, false, false);
-        }
-        for (y..y + h) |by| {
-            ren.drawText(x, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(x + w - 1, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
-        }
-        ren.drawText(x, y, "┌", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y, "┐", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x, y + h - 1, "└", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y + h - 1, "┘", theme.border_color, theme.bg_sidebar, false, false);
+        primitives.drawModalFrame(ren, modal, .square, theme.fg_primary, theme.bg_sidebar, theme.border_color, theme.bg_editor);
 
         // Red Close Button Top Right
         ren.drawText(x + w - 2, y, "X", .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }, theme.bg_sidebar, true, false);
@@ -187,13 +177,13 @@ pub const LazyWidget = struct {
         // Header
         const header_text = " LAZY.NVIM ";
         ren.drawText(x + 2, y, header_text, theme.bg_sidebar, theme.fg_accent, true, false);
-        
+
         // Search Bar
         const search_x = x + 13;
         if (self.is_searching or self.search_len > 0) {
             var search_buf: [80]u8 = undefined;
             const display_query = if (self.search_len > 0) self.search_query[0..self.search_len] else "";
-            const search_line = std.fmt.bufPrint(&search_buf, " Search: {s}{s} ", .{display_query, if (self.is_searching) "_" else ""}) catch "";
+            const search_line = std.fmt.bufPrint(&search_buf, " Search: {s}{s} ", .{ display_query, if (self.is_searching) "_" else "" }) catch "";
             ren.drawText(search_x, y, search_line, theme.bg_sidebar, theme.fg_primary, false, false);
         } else {
             ren.drawText(search_x, y, " [/] Search ", theme.fg_comment, theme.bg_sidebar, false, false);
@@ -221,7 +211,7 @@ pub const LazyWidget = struct {
             ren.drawText(tx, tab_y, label, fg, bg, is_selected, false);
             tx += @as(u16, @intCast(label.len)) + 1;
         }
-        
+
         for (x + 1..x + w - 1) |bx| {
             ren.drawText(@intCast(bx), tab_y + 1, "─", theme.border_color, theme.bg_sidebar, false, false);
         }
@@ -229,57 +219,57 @@ pub const LazyWidget = struct {
         // List
         const list_y = tab_y + 4;
         const visible_items = h - 8;
-        
+
         var rendered_count: usize = 0;
         var skipped_count: usize = 0;
-        
+
         for (self.plugins.items, 0..) |p, i| {
             if (!self.matchesTab(p) or !self.matchesSearch(p)) continue;
-            
+
             if (skipped_count < self.scroll_offset) {
                 skipped_count += 1;
                 continue;
             }
-            
+
             if (rendered_count >= visible_items) break;
-            
+
             const py = list_y + @as(u16, @intCast(rendered_count));
             const is_selected = (i == self.selected_idx);
             const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
             const fg = if (is_selected) theme.fg_accent else theme.fg_primary;
-            
+
             if (is_selected) {
                 for (x + 1..x + w - 1) |bx| {
                     ren.drawText(@intCast(bx), py, " ", fg, bg, false, false);
                 }
             }
-            
+
             const icon = if (p.is_loaded) "⚡" else "💤";
-            
+
             const max_name_len = w - 12;
-            const display_name = if (p.name.len > max_name_len) 
-                p.name[0 .. max_name_len - 3] 
-            else 
+            const display_name = if (p.name.len > max_name_len)
+                p.name[0 .. max_name_len - 3]
+            else
                 p.name;
             const dots = if (p.name.len > max_name_len) "..." else "";
-            
-            const line = std.fmt.bufPrint(&buf, "{s} {s} {s}{s}", .{
-                if (is_selected) "»" else " ",
-                icon,
-                display_name,
-                dots
-            }) catch continue;
-            
+
+            const line = std.fmt.bufPrint(&buf, "{s} {s} {s}{s}", .{ if (is_selected) "»" else " ", icon, display_name, dots }) catch continue;
+
             ren.drawText(x + 2, py, line, fg, bg, is_selected, false);
-            
+
             if (p.commit.len > 0) {
                 const c_text = if (p.commit.len > 7) p.commit[0..7] else p.commit;
                 ren.drawText(x + w - 4 - @as(u16, @intCast(c_text.len)), py, c_text, theme.fg_comment, bg, false, false);
             }
-            
+
             rendered_count += 1;
         }
-        
+
+        if (rendered_count == 0) {
+            const message = if (self.search_len > 0) "No plugins match this search." else "No plugins loaded. Retry synchronization or inspect the log.";
+            ren.drawTextClipped(x + 3, list_y + 1, w -| 6, message, theme.fg_secondary, theme.bg_sidebar, false, false);
+        }
+
         // Scrollbar
         if (tab_total > visible_items) {
             const scroll_h = visible_items - 2;
@@ -297,34 +287,46 @@ pub const LazyWidget = struct {
         const footer_text = " [/] search | u: update | s: sync | x: clean | <Esc> close ";
         const display_footer = if (footer_text.len > w - 4) footer_text[0 .. w - 7] else footer_text;
         const footer_dots = if (footer_text.len > w - 4) "..." else "";
-        const final_footer = std.fmt.bufPrint(&buf, "{s}{s}", .{display_footer, footer_dots}) catch footer_text;
+        const final_footer = std.fmt.bufPrint(&buf, "{s}{s}", .{ display_footer, footer_dots }) catch footer_text;
         ren.drawText(x + 2, footer_y, final_footer, theme.fg_comment, theme.bg_sidebar, false, false);
     }
 
     pub fn handleMouse(self: *LazyWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16) bool {
         if (!self.is_open) return false;
 
-        const w: u16 = @min(84, screen_w -| 4);
-        const h: u16 = @min(28, screen_h -| 4);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 84, 28, 2);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const h = modal.rect.h;
 
-        if (m.col >= x and m.col < x + w and m.row >= y and m.row < y + h) {
-            if (m.action == .press and m.row == y and m.col == x + w - 2) {
+        if (!primitives.usable(modal, 40, 15)) {
+            if (m.action == .press) self.is_open = false;
+            return true;
+        }
+
+        if (modal.contains(m.col, m.row)) {
+            if (m.action == .press and primitives.containsRect(modal.closeButton(), m.col, m.row)) {
                 self.is_open = false;
                 return true;
             }
 
             if (m.button == .wheel_up) {
-                if (self.scroll_offset > 0) self.scroll_offset -= 1;
+                var tab_total: usize = 0;
+                for (self.plugins.items) |p| if (self.matchesTab(p) and self.matchesSearch(p)) {
+                    tab_total += 1;
+                };
+                var list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = y + 6, .w = modal.rect.w -| 2, .h = h -| 8 }, .item_count = tab_total, .offset = self.scroll_offset };
+                list.scroll(-1);
+                self.scroll_offset = list.offset;
                 return true;
             } else if (m.button == .wheel_down) {
                 var tab_total: usize = 0;
-                for (self.plugins.items) |p| if (self.matchesTab(p) and self.matchesSearch(p)) { tab_total += 1; };
-                const visible_items = h - 8;
-                if (tab_total > visible_items and self.scroll_offset < tab_total - visible_items) {
-                    self.scroll_offset += 1;
-                }
+                for (self.plugins.items) |p| if (self.matchesTab(p) and self.matchesSearch(p)) {
+                    tab_total += 1;
+                };
+                var list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = y + 6, .w = modal.rect.w -| 2, .h = h -| 8 }, .item_count = tab_total, .offset = self.scroll_offset };
+                list.scroll(1);
+                self.scroll_offset = list.offset;
                 return true;
             }
 
@@ -431,7 +433,7 @@ pub const LazyWidget = struct {
             _ = rpc.call("nvim_command", &[_]Value{.{ .string = "Lazy update" }}) catch null;
             return true;
         } else if (std.mem.eql(u8, key, "s")) {
-            _ = rpc.call("nvim_command", &[_]Value{.{ .string = "Lazy sync" }}) catch null;
+            rpc.notify("nvim_command", &[_]Value{.{ .string = "lua vim.schedule(function() if vim.g.vide_plugins_disabled then _G.vide_retry_plugins() else _G.vide_native_notice('info', 'Synchronizing plugins...'); vim.cmd('Lazy sync') end end)" }}) catch {};
             return true;
         } else if (std.mem.eql(u8, key, "x")) {
             _ = rpc.call("nvim_command", &[_]Value{.{ .string = "Lazy clean" }}) catch null;
@@ -443,7 +445,7 @@ pub const LazyWidget = struct {
             self.ensureSelectionValid();
             return true;
         }
-        return true; 
+        return true;
     }
 
     fn ensureVisible(self: *LazyWidget) void {

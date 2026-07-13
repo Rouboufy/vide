@@ -6,6 +6,7 @@ const Value = msgpack.Value;
 const rpc_mod = @import("../../nvim/rpc.zig");
 const RpcClient = rpc_mod.RpcClient;
 const input = @import("../input.zig");
+const primitives = @import("primitives.zig");
 
 pub const MasonTab = enum {
     lsp,
@@ -69,6 +70,8 @@ pub const MasonWidget = struct {
     install_status: InstallStatus = .idle,
     status_message: [128]u8 = @splat(0),
     status_len: usize = 0,
+    health_summary: [256]u8 = @splat(0),
+    health_len: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) MasonWidget {
         return .{
@@ -148,6 +151,28 @@ pub const MasonWidget = struct {
                 self.ensureSelectionValid();
             }
         }
+        self.refreshHealth(rpc);
+    }
+
+    fn refreshHealth(self: *MasonWidget, rpc: *RpcClient) void {
+        const script =
+            \\local active = {}
+            \\for _, client in ipairs(vim.lsp.get_clients()) do table.insert(active, client.name) end
+            \\local recommended = vim.g.vide_recommended_servers or {}
+            \\local commands = { zls='zls', lua_ls='lua-language-server', pyright='pyright-langserver', rust_analyzer='rust-analyzer', ts_ls='typescript-language-server', gopls='gopls', clangd='clangd' }
+            \\local missing = {}
+            \\for _, server in ipairs(recommended) do local cmd=commands[server]; if cmd and vim.fn.executable(cmd)==0 then table.insert(missing, cmd) end end
+            \\return string.format('Active: %s | Recommended: %s | Missing: %s', #active>0 and table.concat(active, ',') or 'none', #recommended>0 and table.concat(recommended, ',') or 'manual', #missing>0 and table.concat(missing, ',') or 'none')
+        ;
+        var params = [_]Value{ .{ .string = script }, .{ .array = &[_]Value{} } };
+        if (rpc.call("nvim_exec_lua", &params) catch null) |res| {
+            defer msgpack.freeValue(res, self.allocator);
+            if (res == .string) {
+                const len = @min(res.string.len, self.health_summary.len);
+                @memcpy(self.health_summary[0..len], res.string[0..len]);
+                self.health_len = len;
+            }
+        }
     }
 
     fn matchesSearch(self: *const MasonWidget, pkg: MasonPackage) bool {
@@ -187,37 +212,27 @@ pub const MasonWidget = struct {
 
     pub fn draw(self: *const MasonWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
         if (!self.is_open) return;
-        if (screen_w < 40 or screen_h < 15) return;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 84, 30, 2);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const w = modal.rect.w;
+        const h = modal.rect.h;
 
-        const w: u16 = @min(84, screen_w -| 4);
-        const h: u16 = @min(30, screen_h -| 4);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
-
-        // Shadow
-        ren.drawRect(.{ .x = x + 1, .y = y + 1, .w = w, .h = h }, " ", theme.bg_editor, theme.bg_editor);
-        // Background
-        ren.drawRect(.{ .x = x, .y = y, .w = w, .h = h }, " ", theme.fg_primary, theme.bg_sidebar);
-
-        // Border — rounded corners like settings
-        for (x..x + w) |bx| {
-            ren.drawText(@intCast(bx), y, "─", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(@intCast(bx), y + h - 1, "─", theme.border_color, theme.bg_sidebar, false, false);
+        if (!primitives.usable(modal, 40, 15)) {
+            primitives.drawSizeWarning(ren, "Mason Package Manager", theme.fg_primary, theme.bg_sidebar);
+            return;
         }
-        for (y..y + h) |by| {
-            ren.drawText(x, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(x + w - 1, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
-        }
-        ren.drawText(x, y, "╭", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y, "╮", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x, y + h - 1, "╰", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y + h - 1, "╯", theme.border_color, theme.bg_sidebar, false, false);
+
+        primitives.drawModalFrame(ren, modal, .rounded, theme.fg_primary, theme.bg_sidebar, theme.border_color, theme.bg_editor);
 
         // Close button
         ren.drawText(x + w - 3, y, " × ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, true, false);
 
         // Header
         ren.drawText(x + 2, y, "  Mason Package Manager ", theme.fg_accent, theme.bg_sidebar, true, false);
+        if (self.health_len > 0 and w > 8) {
+            ren.drawTextClipped(x + 2, y + 1, w - 4, self.health_summary[0..self.health_len], theme.fg_secondary, theme.bg_sidebar, false, false);
+        }
 
         // Search bar
         const search_x = x + 28;
@@ -335,6 +350,11 @@ pub const MasonWidget = struct {
             rendered_count += 1;
         }
 
+        if (rendered_count == 0) {
+            const message = if (self.search_len > 0) "No packages match this search." else "No packages available. Refresh Mason or check the log.";
+            ren.drawTextClipped(x + 3, list_y + 1, w -| 6, message, theme.fg_secondary, theme.bg_sidebar, false, false);
+        }
+
         // Scrollbar
         if (tab_total > visible_items) {
             const scroll_h = visible_items -| 2;
@@ -361,15 +381,12 @@ pub const MasonWidget = struct {
         const pending = self.pendingCount();
         var btn_buf: [32]u8 = undefined;
         const btn_label = if (pending > 0)
-            std.fmt.bufPrint(&btn_buf, "[ Install ({d}) ]", .{pending}) catch "[ Install ]"
+            std.fmt.bufPrint(&btn_buf, "Install ({d})", .{pending}) catch "Install"
         else
-            "[ Install & Close ]";
-        const btn_x = x + w - 2 - @as(u16, @intCast(btn_label.len));
-        const btn_color: Color = if (pending > 0)
-            theme.fg_accent
-        else
-            theme.fg_secondary;
-        ren.drawText(btn_x, footer_y, btn_label, btn_color, theme.bg_sidebar, pending > 0, false);
+            "Install & Close";
+        const btn_w = @as(u16, @intCast(btn_label.len)) + 2;
+        const install_button = primitives.Button{ .rect = .{ .x = x + w - 2 - btn_w, .y = footer_y, .w = btn_w, .h = 1 }, .state = if (pending > 0) .selected else .normal };
+        install_button.draw(ren, btn_label, .{ .fg = theme.fg_secondary, .bg = theme.bg_sidebar, .accent_fg = theme.fg_primary, .accent_bg = theme.fg_accent, .muted_fg = theme.fg_secondary });
 
         // Status overlay (shown during/after install)
         if (self.install_status != .idle) {
@@ -377,25 +394,8 @@ pub const MasonWidget = struct {
             const oh: u16 = 7;
             const ox: u16 = x + (w -| ow) / 2;
             const oy: u16 = y + (h -| oh) / 2;
-
-            // Shadow
-            ren.drawRect(.{ .x = ox + 1, .y = oy + 1, .w = ow, .h = oh }, " ", theme.bg_editor, theme.bg_editor);
-            // Background
-            ren.drawRect(.{ .x = ox, .y = oy, .w = ow, .h = oh }, " ", theme.fg_primary, theme.bg_editor);
-
-            // Border
-            for (@as(usize, ox)..ox + ow) |bx| {
-                ren.drawText(@intCast(bx), oy, "─", theme.border_color, theme.bg_editor, false, false);
-                ren.drawText(@intCast(bx), oy + oh - 1, "─", theme.border_color, theme.bg_editor, false, false);
-            }
-            for (@as(usize, oy)..oy + oh) |by| {
-                ren.drawText(ox, @intCast(by), "│", theme.border_color, theme.bg_editor, false, false);
-                ren.drawText(ox + ow - 1, @intCast(by), "│", theme.border_color, theme.bg_editor, false, false);
-            }
-            ren.drawText(ox, oy, "╭", theme.border_color, theme.bg_editor, false, false);
-            ren.drawText(ox + ow - 1, oy, "╮", theme.border_color, theme.bg_editor, false, false);
-            ren.drawText(ox, oy + oh - 1, "╰", theme.border_color, theme.bg_editor, false, false);
-            ren.drawText(ox + ow - 1, oy + oh - 1, "╯", theme.border_color, theme.bg_editor, false, false);
+            const overlay = primitives.Modal{ .rect = .{ .x = ox, .y = oy, .w = ow, .h = oh } };
+            primitives.drawModalFrame(ren, overlay, .rounded, theme.fg_primary, theme.bg_editor, theme.border_color, theme.bg_editor);
 
             switch (self.install_status) {
                 .installing => {
@@ -430,10 +430,16 @@ pub const MasonWidget = struct {
     pub fn handleMouse(self: *MasonWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16, rpc: *RpcClient) bool {
         if (!self.is_open) return false;
 
-        const w: u16 = @min(84, screen_w -| 4);
-        const h: u16 = @min(30, screen_h -| 4);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 84, 30, 2);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const w = modal.rect.w;
+        const h = modal.rect.h;
+
+        if (!primitives.usable(modal, 40, 15)) {
+            if (m.action == .press) self.is_open = false;
+            return true;
+        }
 
         // If status overlay is showing, any click dismisses it
         if (self.install_status == .success or self.install_status == .err) {
@@ -444,24 +450,31 @@ pub const MasonWidget = struct {
             return true;
         }
 
-        if (m.col >= x and m.col < x + w and m.row >= y and m.row < y + h) {
+        if (modal.contains(m.col, m.row)) {
             // Close button
-            if (m.action == .press and m.row == y and m.col >= x + w - 3 and m.col < x + w - 1) {
+            if (m.action == .press and primitives.containsRect(modal.closeButton(), m.col, m.row)) {
                 self.is_open = false;
                 return true;
             }
 
             // Scroll wheel
             if (m.button == .wheel_up) {
-                if (self.scroll_offset > 0) self.scroll_offset -= 1;
+                var tab_total: usize = 0;
+                for (self.packages.items) |pkg| if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) {
+                    tab_total += 1;
+                };
+                var list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = y + 8, .w = w -| 2, .h = h -| 10 }, .item_count = tab_total, .offset = self.scroll_offset };
+                list.scroll(-1);
+                self.scroll_offset = list.offset;
                 return true;
             } else if (m.button == .wheel_down) {
                 var tab_total: usize = 0;
-                for (self.packages.items) |pkg| if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) { tab_total += 1; };
-                const visible_items = h -| 10;
-                if (tab_total > visible_items and self.scroll_offset < tab_total - visible_items) {
-                    self.scroll_offset += 1;
-                }
+                for (self.packages.items) |pkg| if (pkg.tabs.contains(self.selected_tab) and self.matchesSearch(pkg)) {
+                    tab_total += 1;
+                };
+                var list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = y + 8, .w = w -| 2, .h = h -| 10 }, .item_count = tab_total, .offset = self.scroll_offset };
+                list.scroll(1);
+                self.scroll_offset = list.offset;
                 return true;
             }
 
@@ -511,11 +524,12 @@ pub const MasonWidget = struct {
                     var btn_buf: [32]u8 = undefined;
                     const pending = self.pendingCount();
                     const btn_label = if (pending > 0)
-                        std.fmt.bufPrint(&btn_buf, "[ Install ({d}) ]", .{pending}) catch "[ Install ]"
+                        std.fmt.bufPrint(&btn_buf, "Install ({d})", .{pending}) catch "Install"
                     else
-                        "[ Install & Close ]";
-                    const btn_x = x + w - 2 - @as(u16, @intCast(btn_label.len));
-                    if (m.col >= btn_x and m.col < x + w - 2) {
+                        "Install & Close";
+                    const btn_w = @as(u16, @intCast(btn_label.len)) + 2;
+                    const install_button = primitives.Button{ .rect = .{ .x = x + w - 2 - btn_w, .y = footer_y, .w = btn_w, .h = 1 } };
+                    if (install_button.hit(m.col, m.row)) {
                         self.installAndClose(rpc);
                         return true;
                     }
@@ -643,12 +657,10 @@ pub const MasonWidget = struct {
             if (pkg.selected != pkg.is_installed) {
                 count += 1;
                 if (pkg.selected) {
-                    const line = std.fmt.bufPrint(buf[offset..],
-                        "\ntable.insert(to_install, '{s}')", .{pkg.name}) catch continue;
+                    const line = std.fmt.bufPrint(buf[offset..], "\ntable.insert(to_install, '{s}')", .{pkg.name}) catch continue;
                     offset += line.len;
                 } else {
-                    const line = std.fmt.bufPrint(buf[offset..],
-                        "\ntable.insert(to_uninstall, '{s}')", .{pkg.name}) catch continue;
+                    const line = std.fmt.bufPrint(buf[offset..], "\ntable.insert(to_uninstall, '{s}')", .{pkg.name}) catch continue;
                     offset += line.len;
                 }
             }

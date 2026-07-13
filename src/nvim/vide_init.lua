@@ -1,8 +1,16 @@
-local site = vim.fn.stdpath("data") .. "/vide/site"
+local site = vim.fn.stdpath("data") .. "/site"
 vim.opt.rtp:prepend(site)
 
-local lazypath = vim.fn.stdpath("data") .. "/vide/lazy/lazy.nvim"
-if not vim.uv.fs_stat(lazypath) then
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+local plugins_disabled = os.getenv("VIDE_DISABLE_PLUGINS") == "1"
+local pending_plugin_notice = nil
+local plugin_bootstrapped = false
+
+_G.vide_native_notice = function(level, message)
+  pcall(vim.rpcnotify, 1, "vide_notice", level, message)
+end
+
+if not plugins_disabled and not vim.uv.fs_stat(lazypath) then
   vim.fn.system({
     "git",
     "clone",
@@ -11,8 +19,14 @@ if not vim.uv.fs_stat(lazypath) then
     "--branch=stable",
     lazypath,
   })
+  if vim.v.shell_error ~= 0 or not vim.uv.fs_stat(lazypath) then
+    plugins_disabled = true
+    pending_plugin_notice = "Plugin bootstrap failed; starting offline. Check the log/network, then retry from Settings > Plugins."
+  else
+    plugin_bootstrapped = true
+  end
 end
-vim.opt.rtp:prepend(lazypath)
+if vim.uv.fs_stat(lazypath) then vim.opt.rtp:prepend(lazypath) end
 
 vim.g.mapleader = " "
 vim.opt.hidden = true
@@ -37,8 +51,13 @@ vim.api.nvim_create_autocmd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
     vim.wo.cursorline = false
   end,
 })
-set.colorcolumn = "80"
+set.colorcolumn = ""
 set.clipboard:append("unnamedplus")
+if vim.fn.has("clipboard") == 0 then
+  vim.defer_fn(function()
+    _G.vide_native_notice("warning", "No Neovim clipboard provider was detected; install xclip, xsel, wl-clipboard, or pbcopy support.")
+  end, 150)
+end
 set.backspace = "indent,eol,start"
 set.splitbelow = true
 set.splitright = true
@@ -53,7 +72,7 @@ set.undofile = true
 set.incsearch = true
 set.updatetime = 50
 
-local user_plugins_path = vim.fn.expand("~/.local/share/vide/user_plugins.json")
+local user_plugins_path = vim.fn.stdpath("data") .. "/user_plugins.json"
 local user_plugins = {}
 local up_f = io.open(user_plugins_path, "r")
 if up_f then
@@ -141,7 +160,7 @@ local plugins_setup = {
             end
 
             _G.vide_update_dashboard_keys = function()
-                local path = vim.fn.expand("~/.local/share/vide/settings.json")
+                local path = vim.fn.stdpath("data") .. "/settings.json"
                 local f = io.open(path, "r")
                 local state = {}
                 if f then
@@ -169,7 +188,7 @@ local plugins_setup = {
                 local help_key = format_key(raw_help)
                 
                 local term = os.getenv("TERM") or ""
-                local nerd_fonts = true
+                local nerd_fonts = false
                 if state.nerd_fonts ~= nil then
                     nerd_fonts = state.nerd_fonts
                 end
@@ -256,14 +275,14 @@ local plugins_setup = {
         "nvim-treesitter/nvim-treesitter",
         build = function()
             local ts = require("nvim-treesitter")
-            local site = vim.fn.stdpath("data") .. "/vide/site"
+            local site = vim.fn.stdpath("data") .. "/site"
             ts.setup({ install_dir = site })
             ts.install({ "c", "lua", "vim", "vimdoc", "query", "zig", "markdown", "markdown_inline" }):wait()
         end,
         event = { "BufReadPost", "BufNewFile" },
         config = function()
             local ts = require("nvim-treesitter")
-            local site = vim.fn.stdpath("data") .. "/vide/site"
+            local site = vim.fn.stdpath("data") .. "/site"
             ts.setup({
                 install_dir = site
             })
@@ -317,18 +336,27 @@ local plugins_setup = {
             "saghen/blink.cmp",
         },
         config = function()
-            local mason_lspconfig = require("mason-lspconfig")
+            local lsp_ok, mason_lspconfig = pcall(require, "mason-lspconfig")
+            if not lsp_ok then
+                _G.vide_native_notice("error", "LSP setup is unavailable because mason-lspconfig failed to load.")
+                return
+            end
 
-            local mason_bin = vim.fn.expand("~/.local/share/nvim/mason/bin")
+            local mason_bin = vim.fn.stdpath("data") .. "/mason/bin"
             if vim.fn.isdirectory(mason_bin) == 1 then
                 vim.env.PATH = mason_bin .. ":" .. vim.env.PATH
             end
 
-            pcall(function()
+            local mason_ok, mason_err = pcall(function()
                 require("mason").setup({
-                    install_root_dir = vim.fn.expand("~/.local/share/nvim/mason"),
+                    install_root_dir = vim.fn.stdpath("data") .. "/mason",
                 })
             end)
+            if not mason_ok then
+                _G.vide_native_notice("error", "Mason setup failed; open Settings > Plugins and retry after checking the log.")
+                vim.schedule(function() vim.notify(tostring(mason_err), vim.log.levels.ERROR) end)
+                return
+            end
 
             local capabilities = require("blink.cmp").get_lsp_capabilities()
 
@@ -344,6 +372,7 @@ local plugins_setup = {
                     'compile_commands.json', 'compile_flags.txt',
                     '.clangd', '.clang-tidy',
                     'build.zig', 'build.zig.zon',
+                    '.luarc.json', '.luarc.jsonc',
                     'pyrightconfig.json',
                     'Makefile', 'CMakeLists.txt',
                     'go.mod', 'go.sum',
@@ -360,10 +389,55 @@ local plugins_setup = {
                 },
             })
 
+            local project_servers = {}
+            local seen_servers = {}
+            local function recommend(server)
+                if not seen_servers[server] then
+                    seen_servers[server] = true
+                    table.insert(project_servers, server)
+                end
+            end
+            local cwd = vim.fn.getcwd()
+            local marker_servers = {
+                ["build.zig"] = "zls",
+                [".luarc.json"] = "lua_ls",
+                ["stylua.toml"] = "lua_ls",
+                ["pyproject.toml"] = "pyright",
+                ["requirements.txt"] = "pyright",
+                ["Cargo.toml"] = "rust_analyzer",
+                ["package.json"] = "ts_ls",
+                ["go.mod"] = "gopls",
+                ["compile_commands.json"] = "clangd",
+                ["CMakeLists.txt"] = "clangd",
+            }
+            for marker, server in pairs(marker_servers) do
+                if vim.uv.fs_stat(cwd .. "/" .. marker) then recommend(server) end
+            end
+            if #project_servers == 0 then
+                local ext_server = {
+                    zig = "zls", lua = "lua_ls", py = "pyright", rs = "rust_analyzer",
+                    js = "ts_ls", jsx = "ts_ls", ts = "ts_ls", tsx = "ts_ls",
+                    go = "gopls", c = "clangd", h = "clangd", cpp = "clangd", hpp = "clangd",
+                }
+                local ext = vim.fn.expand("%:e"):lower()
+                if ext_server[ext] then recommend(ext_server[ext]) end
+            end
+            vim.g.vide_recommended_servers = project_servers
+
             mason_lspconfig.setup({
-                ensure_installed = { "lua_ls", "zls" },
+                ensure_installed = project_servers,
                 automatic_enable = true,
             })
+
+            if #project_servers > 0 then
+                vim.defer_fn(function()
+                    _G.vide_native_notice("info", "Project language tools: " .. table.concat(project_servers, ", "))
+                end, 200)
+            else
+                vim.defer_fn(function()
+                    _G.vide_native_notice("info", "No project language markers detected; choose tools manually in Mason.")
+                end, 200)
+            end
 
             -- Enable all installed servers immediately (mason-lspconfig's async refresh
             -- sometimes misses servers on first load)
@@ -417,44 +491,171 @@ local plugins_setup = {
     { "EdenEast/nightfox.nvim", lazy = true },
     { "tahayvr/matteblack.nvim", lazy = true },
 }
-local config_dir = vim.fn.expand("~/.local/share/vide/plugin_configs/")
+local config_dir = vim.fn.stdpath("data") .. "/plugin_configs/"
 for _, p in ipairs(user_plugins) do
     local config_path = config_dir .. p:gsub("/", "_") .. ".lua"
     local plugin_def = { p }
     if vim.fn.filereadable(config_path) == 1 then
         plugin_def.config = function()
-            dofile(config_path)
+            local ok, err = pcall(dofile, config_path)
+            if not ok then
+                _G.vide_native_notice("error", "Plugin config failed for " .. p .. "; disable it or repair its config.")
+                vim.schedule(function() vim.notify(tostring(err), vim.log.levels.ERROR) end)
+            end
         end
     end
     table.insert(plugins_setup, plugin_def)
 end
-require("lazy").setup(plugins_setup, {
-    root = vim.fn.stdpath("data") .. "/vide/lazy",
-    lockfile = vim.fn.stdpath("data") .. "/vide/lazy-lock.json",
-    performance = {
-        rtp = {
-            reset = false, -- Prevent lazy.nvim from adding user's ~/.config/nvim back to RTP
+if not plugins_disabled then
+    local lazy_ok, lazy = pcall(require, "lazy")
+    if lazy_ok then
+      local setup_ok, setup_err = pcall(lazy.setup, plugins_setup, {
+        root = vim.fn.stdpath("data") .. "/lazy",
+        lockfile = vim.fn.stdpath("data") .. "/lazy-lock.json",
+        performance = {
+            rtp = {
+                reset = false, -- Prevent lazy.nvim from adding user's ~/.config/nvim back to RTP
+            }
         }
-    }
-})
+      })
+      if not setup_ok then
+        plugins_disabled = true
+        pending_plugin_notice = "Plugin setup failed; Vide continued without plugins. Use VIDE_DISABLE_PLUGINS=1 to repair safely."
+        vim.schedule(function() vim.notify(tostring(setup_err), vim.log.levels.ERROR) end)
+      end
+    else
+      plugins_disabled = true
+      pending_plugin_notice = "lazy.nvim is unavailable; Vide continued offline. Retry plugin sync from Settings > Plugins."
+    end
+end
+
+if plugins_disabled then
+  vim.g.vide_plugins_disabled = true
+end
+
+_G.vide_retry_plugins = function()
+  _G.vide_native_notice("info", "Retrying plugin bootstrap and synchronization...")
+  if not vim.uv.fs_stat(lazypath) then
+    vim.fn.system({ "git", "clone", "--filter=blob:none",
+      "https://github.com/folke/lazy.nvim.git", "--branch=stable", lazypath })
+  end
+  if vim.v.shell_error ~= 0 or not vim.uv.fs_stat(lazypath) then
+    _G.vide_native_notice("error", "Plugin retry failed. Check network access and the Vide log, or continue offline.")
+    return
+  end
+  vim.opt.rtp:prepend(lazypath)
+  local lazy_ok, lazy = pcall(require, "lazy")
+  local setup_ok, setup_err = false, nil
+  if lazy_ok then
+    setup_ok, setup_err = pcall(lazy.setup, plugins_setup, {
+      root = vim.fn.stdpath("data") .. "/lazy",
+      lockfile = vim.fn.stdpath("data") .. "/lazy-lock.json",
+      performance = { rtp = { reset = false } },
+    })
+  end
+  if not lazy_ok or not setup_ok then
+    _G.vide_native_notice("error", "Plugin setup retry failed; continue offline or use VIDE_DISABLE_PLUGINS=1.")
+    if setup_err then vim.notify(tostring(setup_err), vim.log.levels.ERROR) end
+    return
+  end
+  plugins_disabled = false
+  vim.g.vide_plugins_disabled = false
+  _G.vide_native_notice("info", "Plugin manager recovered; synchronizing plugins.")
+  vim.cmd("Lazy sync")
+end
+
+if pending_plugin_notice then
+  vim.defer_fn(function() _G.vide_native_notice("warning", pending_plugin_notice) end, 100)
+elseif plugin_bootstrapped then
+  vim.defer_fn(function() _G.vide_native_notice("info", "Plugin manager installed; bundled plugins are synchronizing.") end, 100)
+elseif os.getenv("VIDE_DISABLE_PLUGINS") == "1" then
+  vim.defer_fn(function() _G.vide_native_notice("warning", "Plugins are disabled for this recovery session.") end, 100)
+end
+
+local ide_mappings = {
+    i = {
+        ['<Esc>'] = '<nop>',
+        ['<C-Left>'] = '<C-o>b', ['<C-Right>'] = '<C-o>w',
+        ['<D-Left>'] = '<Home>', ['<D-Right>'] = '<End>',
+        ['<S-Left>'] = '<C-o>v<Left>', ['<S-Right>'] = '<C-o>v<Right>',
+        ['<S-Up>'] = '<C-o>v<Up>', ['<S-Down>'] = '<C-o>v<Down>',
+        ['<S-Home>'] = '<C-o>v<Home>', ['<S-End>'] = '<C-o>v<End>',
+        ['<C-S-Left>'] = '<C-o>v<C-Left>', ['<C-S-Right>'] = '<C-o>v<C-Right>',
+        ['<D-S-Left>'] = '<C-o>v<C-Left>', ['<D-S-Right>'] = '<C-o>v<C-Right>',
+        ['<D-S-Home>'] = '<C-o>v<Home>', ['<D-S-End>'] = '<C-o>v<End>',
+    },
+    n = { ['<Esc>'] = 'i' },
+    v = {
+        ['<Esc>'] = '<C-c>i',
+        ['<S-Left>'] = '<Left>', ['<S-Right>'] = '<Right>',
+        ['<S-Up>'] = '<Up>', ['<S-Down>'] = '<Down>',
+        ['<S-Home>'] = '<Home>', ['<S-End>'] = '<End>',
+        ['<C-S-Left>'] = 'b', ['<C-S-Right>'] = 'w',
+        ['<D-S-Left>'] = 'b', ['<D-S-Right>'] = 'w',
+        ['<D-S-Home>'] = '<Home>', ['<D-S-End>'] = '<End>',
+        ['<BS>'] = '"_c', ['<Del>'] = '"_c',
+    },
+}
+
+local function ide_startinsert()
+    if vim.g.vide_ide_mode and vim.bo.modifiable and
+        (vim.bo.buftype == '' or vim.bo.buftype == 'acwrite') then
+        vim.schedule(function() pcall(vim.cmd, 'startinsert') end)
+    end
+end
+
+local function ide_clipboard_register()
+    return vim.fn.has('clipboard') == 1 and '+' or '"'
+end
+
+_G.vide_ide_action = function(action)
+    local mode = vim.api.nvim_get_mode().mode
+    local visual = mode:match('[vV\22]') ~= nil
+    if action == 'save' then vim.cmd('write')
+    elseif action == 'undo' then pcall(vim.cmd, 'undo')
+    elseif action == 'redo' then pcall(vim.cmd, 'redo')
+    elseif action == 'select_all' then vim.cmd('normal! ggVG'); return
+    elseif action == 'select_line' then vim.cmd('normal! V'); return
+    elseif action == 'copy' and visual then
+        vim.cmd('normal! "' .. ide_clipboard_register() .. 'y')
+    elseif action == 'cut' and visual then
+        vim.cmd('normal! "' .. ide_clipboard_register() .. 'd')
+    elseif action == 'paste' then
+        if visual then vim.cmd('normal! "_d') end
+        vim.cmd('normal! "' .. ide_clipboard_register() .. 'p')
+    elseif action == 'find' then vim.cmd('Telescope current_buffer_fuzzy_find')
+    elseif action == 'replace' then vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(':%s/', true, false, true), 'n', false); return
+    elseif action == 'new' then vim.cmd('enew')
+    elseif action == 'close' then vim.cmd('confirm bdelete')
+    elseif action == 'next_buffer' then vim.cmd('bnext')
+    elseif action == 'previous_buffer' then vim.cmd('bprevious')
+    end
+    ide_startinsert()
+end
+
+local function ide_action_map(modes, lhs, action)
+    vim.keymap.set(modes, lhs, function() _G.vide_ide_action(action) end,
+        { silent = true, desc = 'IDE: ' .. action:gsub('_', ' ') })
+end
 
 _G.vide_enable_ide_mode = function()
     vim.g.vide_ide_mode = true
-    vim.cmd("startinsert")
-    pcall(vim.keymap.set, 'i', '<Esc>', '<nop>', { desc = "Disable Esc in IDE mode" })
-    pcall(vim.keymap.set, 'n', '<Esc>', 'i', { desc = "Disable Esc in IDE mode" })
-    pcall(vim.keymap.set, 'v', '<Esc>', '<C-c>i', { desc = "Disable Esc in IDE mode" })
-    pcall(vim.keymap.set, {'i', 'n', 'v', 's'}, '<C-s>', function() vim.cmd("write") vim.cmd("startinsert") end, { desc = "Save File" })
-    pcall(vim.keymap.set, {'i', 'n', 'v', 's'}, '<C-z>', function() pcall(vim.cmd, "undo") vim.cmd("startinsert") end, { desc = "Undo" })
-    pcall(vim.keymap.set, {'i', 'n', 'v', 's'}, '<C-y>', function() pcall(vim.cmd, "redo") vim.cmd("startinsert") end, { desc = "Redo" })
-    pcall(vim.keymap.set, 'v', '<BS>', '"_c', { desc = "Delete selection" })
-    pcall(vim.keymap.set, 'v', '<Del>', '"_c', { desc = "Delete selection" })
-    vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+    for mode, mappings in pairs(ide_mappings) do
+        for lhs, rhs in pairs(mappings) do vim.keymap.set(mode, lhs, rhs, { silent = true, desc = 'IDE mode' }) end
+    end
+    for _, spec in ipairs({
+        { '<C-s>', 'save' }, { '<D-s>', 'save' }, { '<C-z>', 'undo' },
+        { '<D-z>', 'undo' }, { '<C-y>', 'redo' }, { '<C-S-z>', 'redo' }, { '<D-S-z>', 'redo' },
+        { '<C-a>', 'select_all' }, { '<D-a>', 'select_all' }, { '<C-l>', 'select_line' },
+        { '<C-c>', 'copy' }, { '<D-c>', 'copy' }, { '<C-x>', 'cut' }, { '<D-x>', 'cut' },
+        { '<C-v>', 'paste' }, { '<D-v>', 'paste' }, { '<C-f>', 'find' }, { '<D-f>', 'find' },
+        { '<C-h>', 'replace' }, { '<D-r>', 'replace' },
+    }) do ide_action_map({ 'i', 'n', 'v', 's' }, spec[1], spec[2]) end
+    ide_startinsert()
+    vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter", "ModeChanged" }, {
         group = vim.api.nvim_create_augroup("VideIdeMode", { clear = true }),
-        callback = function()
-            if vim.g.vide_ide_mode and vim.bo.modifiable and (vim.bo.buftype == "" or vim.bo.buftype == "acwrite") then
-                vim.schedule(function() pcall(vim.cmd, "startinsert") end)
-            end
+        callback = function(event)
+            if event.event ~= 'ModeChanged' or vim.api.nvim_get_mode().mode == 'n' then ide_startinsert() end
         end,
     })
 end
@@ -462,20 +663,20 @@ end
 _G.vide_disable_ide_mode = function()
     vim.g.vide_ide_mode = false
     vim.cmd("stopinsert")
-    pcall(vim.keymap.del, 'i', '<Esc>')
-    pcall(vim.keymap.del, 'n', '<Esc>')
-    pcall(vim.keymap.del, 'v', '<Esc>')
-    pcall(vim.keymap.del, {'i', 'n', 'v', 's'}, '<C-s>')
-    pcall(vim.keymap.del, {'i', 'n', 'v', 's'}, '<C-z>')
-    pcall(vim.keymap.del, {'i', 'n', 'v', 's'}, '<C-y>')
-    pcall(vim.keymap.del, 'v', '<BS>')
-    pcall(vim.keymap.del, 'v', '<Del>')
+    for mode, mappings in pairs(ide_mappings) do
+        for lhs in pairs(mappings) do pcall(vim.keymap.del, mode, lhs) end
+    end
+    for _, lhs in ipairs({ '<C-s>', '<D-s>', '<C-z>', '<D-z>', '<C-y>', '<C-S-z>', '<D-S-z>',
+        '<C-a>', '<D-a>', '<C-l>', '<C-c>', '<D-c>', '<C-x>', '<D-x>', '<C-v>', '<D-v>',
+        '<C-f>', '<D-f>', '<C-h>', '<D-r>' }) do
+        for _, mode in ipairs({ 'i', 'n', 'v', 's' }) do pcall(vim.keymap.del, mode, lhs) end
+    end
     pcall(vim.api.nvim_del_augroup_by_name, "VideIdeMode")
 end
 
 _G.vide_save_settings = function()
     local state = {}
-    local path = vim.fn.expand("~/.local/share/vide/settings.json")
+    local path = vim.fn.stdpath("data") .. "/settings.json"
     local f = io.open(path, "r")
     if f then
         local content = f:read("*a")
@@ -504,8 +705,38 @@ _G.vide_save_settings = function()
     if f_w then f_w:write(vim.fn.json_encode(state)); f_w:close() end
 end
 
+local vide_colorcolumn = ""
+local function apply_colorcolumn_to_window(win)
+    if not vim.api.nvim_win_is_valid(win) then return end
+    local buf = vim.api.nvim_win_get_buf(win)
+    local buftype = vim.bo[buf].buftype
+    local filetype = vim.bo[buf].filetype
+    local excluded = buftype ~= "" or filetype == "dashboard" or filetype == "alpha"
+        or filetype == "help" or filetype == "vide-settings"
+    vim.wo[win].colorcolumn = excluded and "" or vide_colorcolumn
+end
+
+_G.vide_apply_colorcolumn = function(value)
+    local allowed = { [""] = true, ["80"] = true, ["100"] = true,
+        ["120"] = true, ["80,120"] = true }
+    vide_colorcolumn = allowed[value] and value or ""
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        apply_colorcolumn_to_window(win)
+    end
+end
+
+local colorcolumn_group = vim.api.nvim_create_augroup("VideColorColumn", { clear = true })
+vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "FileType" }, {
+    group = colorcolumn_group,
+    callback = function(args)
+        for _, win in ipairs(vim.fn.win_findbuf(args.buf)) do
+            apply_colorcolumn_to_window(win)
+        end
+    end,
+})
+
 _G.vide_load_settings = function()
-    local f = io.open(vim.fn.expand("~/.local/share/vide/settings.json"), "r")
+    local f = io.open(vim.fn.stdpath("data") .. "/settings.json", "r")
     if f then
         local content = f:read("*a")
         f:close()
@@ -523,7 +754,6 @@ _G.vide_load_settings = function()
             if mode == "zen" then
                 vim.g.vide_zen_mode = true
                 vim.g.vide_ide_mode = false
-                vim.schedule(function() vim.rpcnotify(1, "vide_toggle_zen") end)
             elseif mode == "ide" then
                 vim.g.vide_zen_mode = false
                 vim.g.vide_ide_mode = true
@@ -546,7 +776,7 @@ _G.vide_load_settings = function()
             if state.nerd_fonts ~= nil then
                 vim.g.vide_nerd_fonts = state.nerd_fonts
             else
-                vim.g.vide_nerd_fonts = true
+                vim.g.vide_nerd_fonts = false
             end
             if term == "linux" then
                 vim.g.vide_nerd_fonts = false
@@ -559,7 +789,10 @@ _G.vide_load_settings = function()
             if state.zen_handoff ~= nil then
                 vim.g.vide_zen_handoff = state.zen_handoff
             else
-                vim.g.vide_zen_handoff = true
+                vim.g.vide_zen_handoff = false
+            end
+            if _G.vide_apply_colorcolumn then
+                _G.vide_apply_colorcolumn(state.colorcolumn or "")
             end
             if state.theme then
                 vim.schedule(function()
@@ -578,7 +811,7 @@ function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
     if vim.g.vide_autocomplete_enabled == nil then vim.g.vide_autocomplete_enabled = true end
-    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = true end
+    if vim.g.vide_zen_handoff == nil then vim.g.vide_zen_handoff = false end
     local nerd_fonts = vim.g.vide_nerd_fonts ~= false
     local function get_toggle(is_on)
         if nerd_fonts then
@@ -819,11 +1052,6 @@ function M.sync_theme()
         end
     end
 
-    local f = io.open("/home/blanglai/vide/vide_error.log", "a")
-    if f then
-        f:write("sync_theme bg_editor=" .. bg_editor .. " default_bg=" .. (get_color("Normal", "bg") or "nil") .. "\n")
-        f:close()
-    end
     vim.api.nvim_set_hl(0, "NormalFloat", { fg = fg_primary, bg = bg_sidebar })
     vim.api.nvim_set_hl(0, "FloatBorder", { fg = border_color, bg = bg_sidebar })
 
@@ -920,7 +1148,32 @@ if _G.vide_load_settings then _G.vide_load_settings() end
 
 -- Global function to restart dashboard when tabs close
 _G.vide_alpha_start = function()
-    vim.cmd("Alpha")
+    if vim.fn.exists(':Alpha') == 2 then
+        vim.cmd("Alpha")
+        return
+    end
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].buftype = 'nofile'
+    vim.bo[buf].bufhidden = 'wipe'
+    vim.bo[buf].swapfile = false
+    vim.bo[buf].filetype = 'vide_dashboard'
+    local lines = {
+        '', '                         VIDE', '',
+        '              Terminal-native editor and IDE', '',
+        '              Ctrl+N   New file',
+        '              Ctrl+F   Find files',
+        '              Ctrl+E   Toggle explorer',
+        '              Ctrl+T   Toggle terminal',
+        '              F11      Zen / previous mode', '',
+        '              Plugins are offline for this session.',
+    }
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+    vim.api.nvim_win_set_buf(0, buf)
+    vim.wo.number = false
+    vim.wo.relativenumber = false
+    vim.wo.signcolumn = 'no'
+    vim.wo.colorcolumn = ''
 end
 
 -- Force dashboard on initial empty load
@@ -1001,7 +1254,7 @@ local function toggle_terminal(direction)
 end
 vim.keymap.set("n", "<leader>ot", function() toggle_terminal("bo") end, { desc = "Toggle bottom terminal" })
 vim.keymap.set("n", "<leader>oT", function() toggle_terminal("vert") end, { desc = "Toggle vertical terminal" })
-vim.keymap.set("n", "<leader>db", "<cmd>Alpha<CR>", { desc = "Go back to dashboard menu" })
+vim.keymap.set("n", "<leader>db", _G.vide_alpha_start, { desc = "Go back to dashboard menu" })
 
 vim.keymap.set("n", "<leader>th", "<cmd>lua require('vide_settings').open()<cr>")
 
@@ -1390,6 +1643,7 @@ local VIDE_KEYS = {
     "  <Space> m t            Toggle IDE / Zen Mode",
     "  <Space> j              Toggle Bottom Terminal Split",
     "  <Space> ?              Show Vide Quickstart Guide",
+    "  :VideOnboarding        Reopen the first-run guide",
     "  <Space> ,              Open Settings",
     "",
     "  ── TTY & KEYBOARD NAVIGATION ───────────────────────────────────",
@@ -1478,7 +1732,7 @@ local function render()
     for _, l in ipairs(header) do table.insert(lines, l) end
     for _, l in ipairs(content) do table.insert(lines, l) end
     table.insert(lines, "")
-    table.insert(lines, "  [Tab]/[1]/[2] Switch tab  │  [/] Search  │  [q/Esc] Close")
+    table.insert(lines, "  [Tab]/[1]/[2] Switch  │  [o] Onboarding  │  [/] Search  │  [q] Close")
 
     vim.bo[state.buf].modifiable = true
     vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
@@ -1526,6 +1780,10 @@ _G.open_help_menu = function()
     end, "Switch tab")
     map("1", function() state.active_tab = "vim";  render() end, "Vim Motions tab")
     map("2", function() state.active_tab = "vide"; render() end, "Vide Keys tab")
+    map("o", function()
+        pcall(vim.api.nvim_win_close, state.win, true)
+        vim.schedule(function() vim.cmd('VideOnboarding') end)
+    end, "Open onboarding")
 
     -- Search within the buffer using built-in /
     map("/", function()
@@ -1542,7 +1800,100 @@ end
         -- if the user hits <space> in insert mode it types a space. So we should create a user command.
         vim.api.nvim_create_user_command("HelpMenu", _G.open_help_menu, {})
         vim.keymap.set({ "n", "v" }, "<leader>hk", _G.open_help_menu, { desc = "Show Help Menu" })
-    
+
+-- --- FIRST-RUN ONBOARDING --- --
+local onboarding = { buf = nil, win = nil }
+local onboarding_marker = vim.fn.stdpath('data') .. '/onboarding-complete'
+
+local function onboarding_capabilities()
+    local term = vim.env.TERM or ''
+    local colorterm = (vim.env.COLORTERM or ''):lower()
+    local true_color = colorterm == 'truecolor' or colorterm == '24bit' or term:find('direct', 1, true) ~= nil
+    local mouse = term ~= '' and term ~= 'dumb' and term ~= 'linux' and vim.o.mouse ~= ''
+    local shell = vim.env.SHELL or vim.o.shell or ''
+    return {
+        { 'True color', true_color, true_color and '24-bit color detected' or 'using portable terminal colors' },
+        { 'Mouse', mouse, mouse and 'click and drag reporting available' or 'keyboard controls remain available' },
+        { 'Nerd Font', vim.g.vide_nerd_fonts == true, vim.g.vide_nerd_fonts == true and 'enabled in Settings' or 'portable symbols enabled' },
+        { 'Clipboard', vim.fn.has('clipboard') == 1, vim.fn.has('clipboard') == 1 and 'system provider detected' or 'uses an editor register until a provider is installed' },
+        { 'Shell', shell ~= '' and vim.fn.executable(shell) == 1, shell ~= '' and shell or 'not detected' },
+    }
+end
+
+local function complete_onboarding()
+    vim.fn.mkdir(vim.fn.fnamemodify(onboarding_marker, ':h'), 'p')
+    vim.fn.writefile({ 'completed' }, onboarding_marker)
+    if onboarding.win and vim.api.nvim_win_is_valid(onboarding.win) then pcall(vim.api.nvim_win_close, onboarding.win, true) end
+end
+_G.vide_onboarding_dismiss = complete_onboarding
+
+_G.vide_onboarding_choose = function(mode)
+    if mode == 'ide' then
+        vim.g.vide_zen_mode = false
+        _G.vide_enable_ide_mode()
+    else
+        vim.g.vide_zen_mode = false
+        _G.vide_disable_ide_mode()
+    end
+    _G.vide_save_settings()
+    complete_onboarding()
+end
+
+_G.open_vide_onboarding = function()
+    if onboarding.win and vim.api.nvim_win_is_valid(onboarding.win) then return end
+    if vim.fn.mode() == 'i' then vim.cmd('stopinsert') end
+    local width = math.max(1, math.min(76, vim.o.columns - 4))
+    local height = math.max(1, math.min(29, vim.o.lines - 4))
+    onboarding.buf = vim.api.nvim_create_buf(false, true)
+    onboarding.win = vim.api.nvim_open_win(onboarding.buf, true, {
+        relative = 'editor', width = width, height = height,
+        row = math.max(0, math.floor((vim.o.lines - height) / 2)),
+        col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+        style = 'minimal', border = 'rounded', title = ' Welcome to Vide ', title_pos = 'center',
+    })
+    vim.bo[onboarding.buf].buftype = 'nofile'
+    vim.bo[onboarding.buf].bufhidden = 'wipe'
+    vim.bo[onboarding.buf].swapfile = false
+    vim.bo[onboarding.buf].filetype = 'vide-onboarding'
+    local lines = {
+        '', '  Choose how editing should work:',
+        '    [n] NORMAL  Vim-style modal editing with full command access',
+        '    [i] IDE     Modeless text editing with familiar desktop shortcuts',
+        '', '  Your environment:',
+    }
+    for _, capability in ipairs(onboarding_capabilities()) do
+        table.insert(lines, string.format('    [%s] %-11s %s', capability[2] and 'OK' or '--', capability[1], capability[3]))
+    end
+    vim.list_extend(lines, {
+        '', '  Mouse: click to focus, drag in text to select, use the status-row',
+        '  menus for file/edit actions, and drag panel borders to resize.',
+        '', '  Six essentials:',
+        '    Ctrl+S Save     Ctrl+F Find       Ctrl+Z Undo',
+        '    Ctrl+E Files    Ctrl+T Terminal   F11 Zen / previous mode',
+        '', '  [l] Review optional language servers    [q] Dismiss',
+        '  Reopen later with :VideOnboarding or from the Vide Help page.',
+    })
+    vim.api.nvim_buf_set_lines(onboarding.buf, 0, -1, false, lines)
+    vim.bo[onboarding.buf].modifiable = false
+    local map = function(key, callback, desc)
+        vim.keymap.set({ 'n', 'i' }, key, callback, { buffer = onboarding.buf, silent = true, desc = desc })
+    end
+    map('n', function() _G.vide_onboarding_choose('normal') end, 'Choose Normal mode')
+    map('i', function() _G.vide_onboarding_choose('ide') end, 'Choose IDE mode')
+    map('q', complete_onboarding, 'Dismiss onboarding')
+    map('<Esc>', complete_onboarding, 'Dismiss onboarding')
+    map('l', function()
+        complete_onboarding()
+        if vim.fn.exists(':Mason') == 2 then vim.cmd('Mason')
+        else _G.vide_native_notice('warning', 'Language-server setup is optional and unavailable while plugins are disabled; reopen it later from Settings > Plugins.') end
+    end, 'Review language servers')
+end
+
+vim.api.nvim_create_user_command('VideOnboarding', _G.open_vide_onboarding, {})
+if vim.env.VIDE_SKIP_ONBOARDING ~= '1' and vim.uv.fs_stat(onboarding_marker) == nil then
+    vim.schedule(_G.open_vide_onboarding)
+end
+
 _G.last_ai_job_id = nil
 
 function _G.GetActiveAIJob()
@@ -1652,3 +2003,24 @@ for _, mode in ipairs({ 'n', 'v', 'i', 's', 'c' }) do
     vim.keymap.set(mode, '<4-RightMouse>', '<Nop>', { silent = true })
 end
 
+-- Vide owns the visual tab strip, but Neovim remains the source of truth for
+-- buffers. Notify the frontend after every relevant buffer lifecycle event.
+local function vide_notify_buffers()
+    local buffers = {}
+    for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+        local name = info.name or ""
+        table.insert(buffers, {
+            bufnr = info.bufnr,
+            name = name,
+            relative_name = name == "" and "" or vim.fn.fnamemodify(name, ":."),
+            changed = info.changed == 1,
+        })
+    end
+    vim.rpcnotify(1, "vide_buffers", buffers, vim.api.nvim_get_current_buf())
+end
+
+vim.api.nvim_create_autocmd({ "BufAdd", "BufDelete", "BufEnter", "BufFilePost", "BufModifiedSet", "BufWritePost" }, {
+    group = vim.api.nvim_create_augroup("VideBufferSync", { clear = true }),
+    callback = function() vim.schedule(vide_notify_buffers) end,
+})
+vim.schedule(vide_notify_buffers)

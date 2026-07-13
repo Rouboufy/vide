@@ -48,12 +48,44 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
 
     if (std.mem.eql(u8, method, "redraw") and params == .array) {
         try ui_state.handleRedraw(params.array);
-    } else if (std.mem.eql(u8, method, "vide_buf_enter") and params == .array and params.array.len > 0) {
-        if (params.array[0] == .string) {
-            if (ui_state.current_buf_path) |p| ui_state.allocator.free(p);
-            ui_state.current_buf_path = try ui_state.allocator.dupe(u8, params.array[0].string);
-            ui_state.buf_path_changed = true;
+    } else if (std.mem.eql(u8, method, "vide_buffers") and ui_state == app.ui_state and params == .array and params.array.len >= 2 and params.array[0] == .array) {
+        for (app.tabs.items) |tab| {
+            app.allocator.free(tab.name);
+            if (tab.path) |path| app.allocator.free(path);
         }
+        app.tabs.clearRetainingCapacity();
+        var modified_it = app.explorer.neovim_modified.keyIterator();
+        while (modified_it.next()) |key| app.allocator.free(key.*);
+        app.explorer.neovim_modified.clearRetainingCapacity();
+
+        const active_bufnr = if (params.array[1] == .integer) params.array[1].integer else 0;
+        for (params.array[0].array) |entry| {
+            if (entry != .map) continue;
+            var bufnr: i64 = 0;
+            var path: []const u8 = "";
+            var relative_path: []const u8 = "";
+            var changed = false;
+            for (entry.map) |kv| {
+                if (kv.key != .string) continue;
+                if (std.mem.eql(u8, kv.key.string, "bufnr") and kv.value == .integer) bufnr = kv.value.integer;
+                if (std.mem.eql(u8, kv.key.string, "name") and kv.value == .string) path = kv.value.string;
+                if (std.mem.eql(u8, kv.key.string, "relative_name") and kv.value == .string) relative_path = kv.value.string;
+                if (std.mem.eql(u8, kv.key.string, "changed") and kv.value == .bool) changed = kv.value.bool;
+            }
+            const display_name = if (path.len == 0) "[No Name]" else std.fs.path.basename(path);
+            const name_copy = try app.allocator.dupe(u8, display_name);
+            errdefer app.allocator.free(name_copy);
+            const path_copy = if (path.len == 0) null else try app.allocator.dupe(u8, path);
+            try app.tabs.append(.{ .bufnr = bufnr, .name = name_copy, .path = path_copy });
+            if (changed and relative_path.len > 0) {
+                const modified_path = try app.allocator.dupe(u8, relative_path);
+                errdefer app.allocator.free(modified_path);
+                try app.explorer.neovim_modified.put(modified_path, {});
+            }
+            if (bufnr == active_bufnr) app.active_tab = app.tabs.items.len - 1;
+        }
+        if (app.tabs.items.len == 0) app.active_tab = 0;
+        app.needs_resize = true;
     } else if (std.mem.eql(u8, method, "vide_telescope_rect")) {
         if (params == .array and params.array.len >= 2) {
             for (params.array[0..2], 0..) |p, i| {
@@ -86,20 +118,22 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
         ui_state.toggle_zen_requested = true;
     } else if (std.mem.eql(u8, method, "vide_toggle_ide")) {
         ui_state.toggle_ide_requested = true;
+    } else if (std.mem.eql(u8, method, "vide_notice") and params == .array and params.array.len >= 2 and
+        params.array[0] == .string and params.array[1] == .string)
+    {
+        const level: @import("../tui/app.zig").NoticeLevel = if (std.mem.eql(u8, params.array[0].string, "error"))
+            .failure
+        else if (std.mem.eql(u8, params.array[0].string, "warning"))
+            .warning
+        else
+            .info;
+        app.notify(level, "{s}", .{params.array[1].string});
+        std.log.info("Neovim notice [{s}]: {s}", .{ params.array[0].string, params.array[1].string });
     } else if (std.mem.eql(u8, method, "vide_settings_changed")) {
-        const old_cfg = app.settings_widget.config;
+        var old_cfg = app.settings_widget.config;
         if (settings.SettingsConfig.load(app.settings_widget.allocator, app.settings_widget.settings_path)) |new_cfg| {
             app.settings_widget.config = new_cfg;
-            app.settings_widget.allocator.free(old_cfg.theme);
-            app.settings_widget.allocator.free(old_cfg.line_numbers);
-            app.settings_widget.allocator.free(old_cfg.split_separator);
-            app.settings_widget.allocator.free(old_cfg.mode);
-            app.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
-            app.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
-            app.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
-            app.settings_widget.allocator.free(old_cfg.keybindings.new_file);
-            app.settings_widget.allocator.free(old_cfg.keybindings.find_file);
-            app.settings_widget.allocator.free(old_cfg.keybindings.quit);
+            old_cfg.deinit(app.settings_widget.allocator);
 
             if (std.mem.eql(u8, app.settings_widget.config.mode, "zen")) {
                 app.mode = .zen;
@@ -116,7 +150,10 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
                 app.lazy_widget.is_open = false;
                 app.git_detailed_widget.is_open = false;
             }
-        } else |_| {}
+        } else |err| {
+            app.notify(.failure, "Settings reload failed; keeping the current settings.", .{});
+            std.log.err("Settings reload failed: {}", .{err});
+        }
         app.needs_resize = true;
     } else if (std.mem.eql(u8, method, "vide_win_count") and params == .array and params.array.len > 0) {
         if (params.array[0] == .integer) {

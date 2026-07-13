@@ -1,0 +1,36 @@
+    │ EXPLORER             +F +D  │  [No Name]    x   demo.lua    x  +                                        |     -
+▋ E │   .luarc.json               │H 1   local value = vim.api.nvim
+    │   demo.lua                  │~   󰻾 and
+    │                             │~   󰻾 break
+  S │                             │~   󰻾 else
+    │                             │~   󰻾 end
+    │                             │~   󰻾 false
+  G │                             │~   󰻾 goto
+    │                             │~   󰻾 local
+    │                             │~   󰻾 nil
+  A │                             │~   󰻾 not
+    │                             │~   󰻾 or
+    │                             │~
+  X │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+  * │                             │/tmp/vide-capture.7b9mFA/completion-project/demo.lua           H:1 1,1            All
+    │                             │-- INSERT --
+  NORMAL     * main  demo.lua                                                                  Focus: Editor   [?] Help

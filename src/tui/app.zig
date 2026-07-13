@@ -23,6 +23,7 @@ const ExtensionShop = @import("widgets/extension_shop.zig").ExtensionShop;
 
 pub const Mode = enum { ide, zen, normal };
 pub const PanelPosition = enum { bottom, right };
+pub const NoticeLevel = enum { info, warning, failure };
 
 pub const WinInfo = struct {
     id: i64,
@@ -35,6 +36,7 @@ pub const WinInfo = struct {
 };
 
 pub const TabInfo = struct {
+    bufnr: i64 = 0,
     name: []const u8,
     path: ?[]const u8,
 };
@@ -50,21 +52,26 @@ pub const App = struct {
     ren: *renderer.Renderer,
     rpc: *rpc_client.RpcClient,
     rpc_term: *rpc_client.RpcClient,
-    
+
     ui_state: *ui.UiState,
     ui_term: *ui.UiState,
-    
+
     active_theme: theme.Theme,
     mode: Mode,
     prev_mode: Mode,
-    
+
     tabs: std.array_list.Managed(TabInfo),
     active_tab: usize,
-    
+
     terminal_focus: bool,
+    terminal_started: bool,
+    notice_text: [256]u8,
+    notice_len: usize,
+    notice_level: NoticeLevel,
+    notice_deadline: i64,
     show_file_tree: bool,
     show_terminal_panel: bool,
-    
+
     needs_resize: bool,
     terminal_panel_height: u16,
     terminal_panel_width: u16, // For right-side panel
@@ -94,6 +101,7 @@ pub const App = struct {
     last_explorer_refresh: i64 = 0,
 
     show_split_menu: bool = false,
+    ide_menu: ?u8 = null, // 0=File, 1=Edit, 2=Selection, 3=Buffer
     quit_requested: bool = false,
     split_menu_dir: enum { right, bottom } = .right,
     split_menu_x: u16 = 0,
@@ -113,12 +121,12 @@ pub const App = struct {
     pub fn init(allocator: std.mem.Allocator, term: *Terminal, ren: *renderer.Renderer, rpc: *rpc_client.RpcClient, rpc_term: *rpc_client.RpcClient, ui_state: *ui.UiState, ui_term: *ui.UiState) App {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const arena_alloc = arena.allocator();
-        
+
         const editor_node = arena_alloc.create(SplitNode) catch unreachable;
         editor_node.* = .{ .data = .{ .view = .editor } };
-        
+
         const root_node = editor_node;
-        
+
         return App{
             .allocator = allocator,
             .term = term,
@@ -133,6 +141,11 @@ pub const App = struct {
             .tabs = std.array_list.Managed(TabInfo).init(allocator),
             .active_tab = 0,
             .terminal_focus = false,
+            .terminal_started = false,
+            .notice_text = undefined,
+            .notice_len = 0,
+            .notice_level = .info,
+            .notice_deadline = 0,
             .sidebar_focus = false,
             .show_file_tree = true,
             .show_terminal_panel = false,
@@ -172,6 +185,27 @@ pub const App = struct {
         self.layout_arena.deinit();
     }
 
+    pub fn notify(self: *App, level: NoticeLevel, comptime format: []const u8, args: anytype) void {
+        const text = std.fmt.bufPrint(&self.notice_text, format, args) catch "Operation failed";
+        self.notice_len = text.len;
+        self.notice_level = level;
+        var ts: std.posix.timespec = undefined;
+        _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
+        self.notice_deadline = ts.sec + 5;
+        self.needs_resize = true;
+    }
+
+    pub fn activeNotice(self: *App) ?[]const u8 {
+        if (self.notice_len == 0) return null;
+        var ts: std.posix.timespec = undefined;
+        _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
+        if (ts.sec >= self.notice_deadline) {
+            self.notice_len = 0;
+            return null;
+        }
+        return self.notice_text[0..self.notice_len];
+    }
+
     pub fn updateLayoutTree(self: *App) void {
         _ = self.layout_arena.reset(.retain_capacity);
         const alloc = self.layout_arena.allocator();
@@ -180,12 +214,12 @@ pub const App = struct {
             editor_node.* = .{ .data = .{ .view = .editor } };
             const panel_node = alloc.create(SplitNode) catch return;
             panel_node.* = .{ .data = .{ .view = .panel } };
-            
+
             const split_node = alloc.create(SplitNode) catch return;
             const total_w = self.ren.width;
             const total_h = self.ren.height;
             const content_h = if (total_h > 2) total_h - 2 else 1;
-            
+
             if (self.panel_position == .bottom) {
                 const panel_h = @as(f32, @floatFromInt(self.terminal_panel_height));
                 const content_h_f = @as(f32, @floatFromInt(content_h));
@@ -195,7 +229,7 @@ pub const App = struct {
                     .ratio = ratio,
                     .child1 = editor_node,
                     .child2 = panel_node,
-                }}};
+                } } };
             } else {
                 const tree_w = if (self.show_file_tree) self.file_tree_width else 0;
                 const content_w = if (total_w > 5 + tree_w) total_w - 5 - tree_w else 1;
@@ -207,9 +241,9 @@ pub const App = struct {
                     .ratio = ratio,
                     .child1 = editor_node,
                     .child2 = panel_node,
-                }}};
+                } } };
             }
-            
+
             self.root_split = split_node;
         } else {
             const editor_node = alloc.create(SplitNode) catch return;

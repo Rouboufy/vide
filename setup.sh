@@ -1,191 +1,229 @@
-#!/bin/bash
-# Vide IDE One-Command Installer
-# Supports Linux (apt, pacman, dnf, zypper)
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-# Colors
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+REPO="Rouboufy/vide"
+ZIG_VERSION="0.16.0"
+DRY_RUN=false
+NO_PLUGINS=false
+SOURCE_BUILD=false
+ASSUME_YES=false
+RELEASE_ASSET=""
 
-# ASCII Logo
-echo -e "${BLUE}"
-echo "██╗   ██╗██╗██████╗ ███████╗"
-echo "██║   ██║██║██╔══██╗██╔════╝"
-echo "██║   ██║██║██║  ██║█████╗  "
-echo "╚██╗ ██╔╝██║██║  ██║██╔══╝  "
-echo " ╚████╔╝ ██║██████╔╝███████╗"
-echo "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝"
-echo -e "${NC}"
-echo -e "Installing Vide IDE - The terminal-native developer environment...\n"
+usage() {
+    cat <<'EOF'
+Usage: setup.sh [options]
 
-# Detect OS up front
-OS_NAME="$(uname -s)"
+Options:
+  --dry-run       Print the actions that would be taken without changing files.
+  --no-plugins    Skip the headless Neovim plugin bootstrap.
+  --source        Build from source instead of installing a release binary.
+  --yes           Allow dependency installation without an interactive prompt.
+  -h, --help      Show this help.
 
-# Check and install dependencies
-MISSING_DEPS=()
-for cmd in git curl nvim unzip; do
-    if ! command -v "$cmd" &>/dev/null; then
-        MISSING_DEPS+=("$cmd")
-    fi
+Without a terminal, missing system dependencies cause installation to stop unless
+--yes is supplied. Existing Vide settings and plugin data are never removed.
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        --no-plugins) NO_PLUGINS=true ;;
+        --source) SOURCE_BUILD=true ;;
+        --yes) ASSUME_YES=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
 done
 
-if ! command -v zig &>/dev/null; then
-    MISSING_DEPS+=("zig")
+run() {
+    printf '+ '
+    printf '%q ' "$@"
+    printf '\n'
+    if ! $DRY_RUN; then
+        "$@"
+    fi
+}
+
+version_at_least() {
+    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+}
+
+OS_NAME="${VIDE_TEST_PLATFORM:-$(uname -s)}"
+ARCH="${VIDE_TEST_ARCH:-$(uname -m)}"
+IS_WSL=false
+if [ "${VIDE_TEST_WSL:-0}" = 1 ] || { [ "$OS_NAME" = Linux ] && rg -qi microsoft /proc/version 2>/dev/null; }; then
+    IS_WSL=true
+fi
+
+declare -a MISSING=()
+if [ -n "${VIDE_TEST_MISSING:-}" ]; then
+    read -r -a MISSING <<< "$VIDE_TEST_MISSING"
 else
-    ZIG_VER=$(zig version | cut -d- -f1)
-    IFS='.' read -r major minor patch <<< "$ZIG_VER"
-    if [ "$major" -eq 0 ] && [ "$minor" -lt 16 ]; then
-        MISSING_DEPS+=("zig")
-        echo -e "${YELLOW}Zig $major.$minor is too old (requires 0.16+). Will be upgraded.${NC}"
-        if command -v snap &>/dev/null; then sudo snap remove zig &>/dev/null || true; fi
+    for cmd in curl nvim; do
+        command -v "$cmd" >/dev/null 2>&1 || MISSING+=("$cmd")
+    done
+    if command -v nvim >/dev/null 2>&1; then
+        NVIM_VERSION="$(nvim --version | head -n1 | awk '{gsub(/^v/, "", $2); print $2}')"
+        version_at_least "$NVIM_VERSION" 0.10.0 || MISSING+=("neovim>=0.10.0")
     fi
-fi
-
-if command -v nvim &>/dev/null; then
-    NVIM_VER=$(nvim --version | head -n 1 | awk '{print $2}' | sed 's/v//')
-    IFS='.' read -r major minor patch <<< "$NVIM_VER"
-    if [ "$major" -eq 0 ] && [ "$minor" -lt 10 ]; then
-        MISSING_DEPS+=("nvim(>=0.10.0)")
-    fi
-fi
-
-if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
-    echo -e "${YELLOW}Missing dependencies: ${MISSING_DEPS[*]}${NC}"
-    echo -e "${YELLOW}Warning: Installing system dependencies will require sudo privileges.${NC}"
-    read -p "Would you like to install them now? [y/N] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if [ "$OS_NAME" = "Linux" ]; then
-            if command -v apt-get &>/dev/null; then
-                sudo apt-get update
-                sudo apt-get install -y git curl unzip python3
-                if command -v snap &>/dev/null; then
-                    sudo snap install nvim --classic || sudo apt-get install -y neovim
-                else
-                    sudo apt-get install -y neovim
-                fi
-            elif command -v pacman &>/dev/null; then
-                sudo pacman -Sy --noconfirm git curl unzip neovim python
-            elif command -v dnf &>/dev/null; then
-                sudo dnf install -y git curl unzip neovim python3
-            elif command -v zypper &>/dev/null; then
-                sudo zypper install -y git curl unzip neovim python3
-            else
-                echo -e "${RED}Could not detect package manager. Please install dependencies manually: git curl unzip neovim${NC}"
-                exit 1
-            fi
-        else
-            echo -e "${RED}Unsupported OS. Please install on Linux.${NC}"
+    if $SOURCE_BUILD; then
+        command -v git >/dev/null 2>&1 || MISSING+=("git")
+        if ! command -v zig >/dev/null 2>&1 || [ "$(zig version)" != "$ZIG_VERSION" ]; then
+            echo "Source builds require Zig $ZIG_VERSION exactly. Install it from https://ziglang.org/download/ and retry." >&2
             exit 1
         fi
+    fi
+fi
 
-        if [[ " ${MISSING_DEPS[*]} " =~ " zig " ]]; then
-            echo -e "${BLUE}Installing Zig (master branch) manually...${NC}"
-            ARCH="$(uname -m)"
-            if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["aarch64-linux"]["tarball"])')
-            else
-                ZIG_URL=$(curl -s https://ziglang.org/download/index.json | python3 -c 'import sys, json; print(json.load(sys.stdin)["master"]["x86_64-linux"]["tarball"])')
-            fi
-            curl -fLo "/tmp/zig.tar.xz" "$ZIG_URL"
-            sudo rm -rf /usr/local/zig
-            sudo mkdir -p /usr/local/zig
-            sudo tar -xf "/tmp/zig.tar.xz" -C /usr/local/zig --strip-components=1
-            sudo ln -sfn /usr/local/zig/zig /usr/local/bin/zig
-            rm "/tmp/zig.tar.xz"
+install_dependencies() {
+    declare -a packages=()
+    for dependency in "${MISSING[@]}"; do
+        case "$dependency" in
+            curl) packages+=("curl") ;;
+            nvim|neovim*) packages+=("neovim") ;;
+            git) packages+=("git") ;;
+            *) echo "No automatic package mapping for $dependency" >&2; exit 1 ;;
+        esac
+    done
+
+    local manager="${VIDE_TEST_PACKAGE_MANAGER:-}"
+    if [ "$OS_NAME" = Linux ]; then
+        if [ "$manager" = apt ] || { [ -z "$manager" ] && command -v apt-get >/dev/null 2>&1; }; then
+            run sudo apt-get update
+            run sudo apt-get install -y "${packages[@]}"
+        elif [ "$manager" = pacman ] || { [ -z "$manager" ] && command -v pacman >/dev/null 2>&1; }; then
+            run sudo pacman -S --needed --noconfirm "${packages[@]}"
+        elif [ "$manager" = dnf ] || { [ -z "$manager" ] && command -v dnf >/dev/null 2>&1; }; then
+            run sudo dnf install -y "${packages[@]}"
+        elif [ "$manager" = zypper ] || { [ -z "$manager" ] && command -v zypper >/dev/null 2>&1; }; then
+            run sudo zypper install -y "${packages[@]}"
+        else
+            echo "No supported package manager found; install: ${MISSING[*]}" >&2
+            exit 1
         fi
-        
-        # Re-check basic tools after install
-        for cmd in git curl zig nvim; do
-            if ! command -v "$cmd" &>/dev/null; then
-                echo -e "${RED}Error: Failed to install $cmd. Please install it manually.${NC}"
-                exit 1
-            fi
-        done
+    elif [ "$OS_NAME" = Darwin ] && { [ "$manager" = brew ] || { [ -z "$manager" ] && command -v brew >/dev/null 2>&1; }; }; then
+        run brew install "${packages[@]}"
     else
-        echo -e "${RED}Please install dependencies manually to continue.${NC}"
+        echo "Automatic dependency installation is unavailable; install: ${MISSING[*]}" >&2
         exit 1
     fi
+}
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo "Missing or unsupported dependencies: ${MISSING[*]}"
+    if ! $ASSUME_YES; then
+        if [ ! -r /dev/tty ]; then
+            echo "Noninteractive installation will not change system packages. Re-run with --yes or install dependencies manually." >&2
+            exit 1
+        fi
+        read -r -p "Install system dependencies now? [y/N] " reply </dev/tty
+        [[ "$reply" =~ ^[Yy]$ ]] || exit 1
+    fi
+    install_dependencies
 fi
 
-export XDG_CONFIG_HOME="$HOME/.config/vide"
-export XDG_DATA_HOME="$HOME/.local/share/vide"
-export XDG_STATE_HOME="$HOME/.local/state/vide"
-export XDG_CACHE_HOME="$HOME/.cache/vide"
+release_asset() {
+    case "$OS_NAME/$ARCH" in
+        Linux/x86_64|Linux/amd64) printf '%s' "vide-linux-x86_64" ;;
+        Linux/aarch64|Linux/arm64) printf '%s' "vide-linux-aarch64" ;;
+        Darwin/x86_64|Darwin/amd64) printf '%s' "vide-macos-x86_64" ;;
+        Darwin/aarch64|Darwin/arm64) printf '%s' "vide-macos-aarch64" ;;
+        *) return 1 ;;
+    esac
+}
 
-mkdir -p "$XDG_CONFIG_HOME"
-mkdir -p "$XDG_DATA_HOME"
-mkdir -p "$XDG_STATE_HOME"
-mkdir -p "$XDG_CACHE_HOME"
-mkdir -p "$HOME/.local/bin"
+hash_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+if [ "${VIDE_TEST_ONLY:-0}" = release ]; then
+    release_asset || { echo "unsupported: $OS_NAME/$ARCH"; exit 1; }
+    exit 0
+fi
+
+if [ "${VIDE_TEST_ONLY:-0}" = 1 ]; then
+    $IS_WSL && echo "WSL path detected"
+    exit 0
+fi
+
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/vide"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/vide"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/vide"
+CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}/vide"
+BIN_DIR="$HOME/.local/bin"
+run mkdir -p "$CONFIG_HOME" "$DATA_HOME" "$STATE_HOME" "$CACHE_HOME" "$BIN_DIR"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -d "$SCRIPT_DIR/config" ]; then
-    echo -e "${GREEN}Detected local repository installation...${NC}"
-    SOURCE_DIR="$SCRIPT_DIR"
-else
-    echo -e "${GREEN}Downloading Vide from GitHub...${NC}"
-    REPO_DIR="$XDG_DATA_HOME/repo"
-    BRANCH="main"
-    if [ -d "$REPO_DIR" ]; then
-        cd "$REPO_DIR" && git fetch origin && git checkout $BRANCH --quiet && git pull origin $BRANCH --quiet
+SOURCE_DIR="$SCRIPT_DIR"
+
+if ! $SOURCE_BUILD; then
+    RELEASE_ASSET="$(release_asset)" || {
+        echo "No release binary is published for $OS_NAME/$ARCH. Re-run with --source." >&2
+        exit 1
+    }
+    RELEASE_BASE="https://github.com/$REPO/releases/latest/download"
+    if $DRY_RUN; then
+        DOWNLOAD_DIR="${TMPDIR:-/tmp}/vide-install.dry-run"
     else
-        git clone -b $BRANCH --quiet https://github.com/Rouboufy/vide.git "$REPO_DIR"
+        DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vide-install.XXXXXX")"
+        trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
     fi
-    SOURCE_DIR="$REPO_DIR"
-fi
-
-# Build the Zig Binary
-echo -e "${BLUE}Building Vide from source...${NC}"
-cd "$SOURCE_DIR"
-zig build -Doptimize=ReleaseFast
-
-#  Link configurations and binary
-echo -e "${BLUE}Linking configuration files...${NC}"
-ln -sfn "$SOURCE_DIR/config/vide-nvim" "$XDG_CONFIG_HOME/vide-nvim"
-
-ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$HOME/.local/bin/vide"
-chmod +x "$SOURCE_DIR/zig-out/bin/vide"
-
-#  Check and install JetBrainsMono Nerd Font
-if command -v fc-list &>/dev/null && ! fc-list : family | grep -iq "JetBrainsMono"; then
-    echo -e "${BLUE}JetBrainsMono Nerd Font not found. Downloading font...${NC}"
-    FONT_DIR="$HOME/.local/share/fonts/vide"
-    mkdir -p "$FONT_DIR"
-    FONT_ZIP="$FONT_DIR/JetBrainsMono.zip"
-    curl -fLo "$FONT_ZIP" https://github.com/ryanoasis/nerd-fonts/releases/download/v3.1.1/JetBrainsMono.zip
-    if command -v unzip &>/dev/null; then
-        unzip -oqd "$FONT_DIR" "$FONT_ZIP"
+    run curl -fL --retry 3 -o "$DOWNLOAD_DIR/$RELEASE_ASSET" "$RELEASE_BASE/$RELEASE_ASSET"
+    run curl -fL --retry 3 -o "$DOWNLOAD_DIR/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS"
+    if ! $DRY_RUN; then
+        expected="$(awk -v asset="$RELEASE_ASSET" '$2 == asset || $2 == "./" asset { print $1; exit }' "$DOWNLOAD_DIR/SHA256SUMS")"
+        [ -n "$expected" ] || { echo "Release checksum is missing for $RELEASE_ASSET." >&2; exit 1; }
+        actual="$(hash_file "$DOWNLOAD_DIR/$RELEASE_ASSET")"
+        [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $RELEASE_ASSET." >&2; exit 1; }
+        chmod 755 "$DOWNLOAD_DIR/$RELEASE_ASSET"
+        mv "$DOWNLOAD_DIR/$RELEASE_ASSET" "$BIN_DIR/vide.new"
+        mv -f "$BIN_DIR/vide.new" "$BIN_DIR/vide"
     else
-        echo -e "${YELLOW}unzip not found — skipping font extraction. Install unzip and re-run to get Nerd Font icons.${NC}"
+        echo "+ verify SHA256SUMS for $RELEASE_ASSET"
+        echo "+ atomically install $RELEASE_ASSET as $BIN_DIR/vide"
     fi
-    rm -f "$FONT_ZIP"
-    fc-cache -f "$FONT_DIR"
-    echo -e "${GREEN}Font installed and cached successfully!${NC}"
 else
-    echo -e "${GREEN}JetBrainsMono Nerd Font is already installed.${NC}"
-fi
-
-#Add ~/.local/bin to PATH in shell profile if missing
-SHELL_PROFILES=("$HOME/.bashrc" "$HOME/.zshrc")
-for profile in "${SHELL_PROFILES[@]}"; do
-    if [ -f "$profile" ]; then
-        if ! grep -q '\.local/bin' "$profile"; then
-            echo -e "${BLUE}Adding ~/.local/bin to PATH in $profile...${NC}"
-            echo -e '\n# Add local binaries to PATH\nexport PATH="$HOME/.local/bin:$PATH"' >> "$profile"
+    if [ ! -f "$SOURCE_DIR/build.zig" ]; then
+        SOURCE_DIR="$DATA_HOME/repo"
+        if [ -d "$SOURCE_DIR/.git" ]; then
+            run git -C "$SOURCE_DIR" pull --ff-only
+        else
+            run git clone --depth 1 "https://github.com/$REPO.git" "$SOURCE_DIR"
         fi
     fi
-done
-
-# Bootstrap Neovim plugins headlessly
-if command -v nvim &>/dev/null; then
-    echo -e "${BLUE}Pre-installing Neovim plugins and themes...${NC}"
-    NVIM_APPNAME="vide-nvim" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" nvim --headless -c "Lazy! sync" -c "qa"
+    if ! $DRY_RUN; then
+        [ "$(zig version)" = "$ZIG_VERSION" ] || {
+            echo "Source builds require Zig $ZIG_VERSION exactly; found $(zig version)." >&2
+            exit 1
+        }
+    fi
+    run zig build --build-file "$SOURCE_DIR/build.zig" -Doptimize=ReleaseFast --prefix "$SOURCE_DIR/zig-out"
+    run ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$BIN_DIR/vide"
 fi
 
-echo -e "\n${GREEN}✔ Vide installation completed successfully!${NC}"
-echo -e "To start, reopen your terminal and run: ${BLUE}vide${NC}\n"
+if ! $NO_PLUGINS; then
+    INIT_PATH="$SOURCE_DIR/src/nvim/vide_init.lua"
+    if [ -f "$INIT_PATH" ]; then
+        echo "Bootstrapping optional Neovim plugins..."
+        if ! $DRY_RUN; then
+            NVIM_APPNAME=vide VIDE_INIT_PATH="$INIT_PATH" nvim --clean --headless \
+                -c "execute 'luafile ' .. fnameescape(\$VIDE_INIT_PATH)" -c "Lazy! sync" -c qa
+        fi
+    else
+        echo "Plugin bootstrap deferred until first launch (release install has no source checkout)."
+    fi
+fi
+
+$IS_WSL && echo "WSL detected; clipboard and terminal behavior depend on Windows Terminal and WSL integration."
+if $DRY_RUN; then
+    echo "Dry run complete; no files or packages were changed."
+else
+    echo "Vide installed at $BIN_DIR/vide"
+fi
+[[ ":$PATH:" = *":$BIN_DIR:"* ]] || echo "Add $BIN_DIR to PATH."

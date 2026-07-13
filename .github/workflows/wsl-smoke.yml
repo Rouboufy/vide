@@ -1,0 +1,30 @@
+name: WSL terminal smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wsl-smoke:
+    # A self-hosted label prevents a Windows simulation from being recorded as
+    # WSL evidence. The runner must provide WSL 2 with Zig 0.16, Neovim, and
+    # Python 3 installed inside its default distribution.
+    runs-on: [self-hosted, windows, wsl]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test inside WSL
+        shell: pwsh
+        run: |
+          $repo = (wsl wslpath -a "$env:GITHUB_WORKSPACE").Trim()
+          $log = Join-Path $env:RUNNER_TEMP "wsl-smoke.log"
+          wsl --cd $repo bash -lc "set -o pipefail; zig version; nvim --version | head -1; zig build test; zig build; tests/ide_mode.sh; tests/onboarding.sh; tests/terminal_compat.sh host" 2>&1 |
+            Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload WSL smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsl-terminal-smoke
+          path: ${{ runner.temp }}/wsl-smoke.log

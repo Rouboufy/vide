@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig src/main.zig src/nvim/ui_protocol.zig src/tui/renderer.zig
+      - name: Run tests
+        run: zig build test
+      - name: Install stable Neovim for PTY tests
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/nvim.tar.gz" \
+            https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.tar.gz
+          tar -xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Run pseudo-terminal integration tests
+        run: |
+          zig build
+          python3 tests/pty_integration.py
+      - name: Check shell scripts
+        run: shellcheck setup.sh update.sh uninstall.sh build_appimage.sh scripts/plugin_smoke.sh scripts/capture_media.sh tests/setup_plans.sh tests/ide_mode.sh tests/onboarding.sh tests/appimage_smoke.sh tests/media_assets.sh tests/terminal_compat.sh
+      - name: Validate generated media
+        run: tests/media_assets.sh
+      - name: Validate static website
+        run: python3 tests/site.py
+      - name: Validate recorded performance profile
+        run: python3 tests/performance_profile.py
+      - name: Test installer package-manager plans
+        run: bash tests/setup_plans.sh
+
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-musl
+          - aarch64-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
+      - name: Build ${{ matrix.target }}
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+
+  macos-smoke:
+    # macOS end-to-end behavior is still tracked as deferred in TODO.md. Keep
+    # collecting the full smoke log without blocking Linux release readiness.
+    continue-on-error: true
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
+      - name: Install Neovim
+        run: brew list neovim >/dev/null 2>&1 || brew install neovim
+      - name: Build and test IDE mode on macOS
+        run: |
+          set -o pipefail
+          zig build test 2>&1 | tee "$RUNNER_TEMP/macos-smoke.log"
+          zig build 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+          tests/ide_mode.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+          tests/onboarding.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+          tests/terminal_compat.sh host 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+      - name: Upload macOS smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-terminal-smoke
+          path: ${{ runner.temp }}/macos-smoke.log
+
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --exclude-path TODO.md "**/*.md"
+          fail: true

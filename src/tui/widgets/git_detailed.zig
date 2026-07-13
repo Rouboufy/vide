@@ -2,6 +2,7 @@ const std = @import("std");
 const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const input = @import("../input.zig");
+const primitives = @import("primitives.zig");
 const git_utils = @import("git_utils.zig");
 
 pub const CommitInfo = struct {
@@ -130,27 +131,19 @@ pub const GitDetailedWidget = struct {
     pub fn draw(self: *const GitDetailedWidget, ren: *renderer.Renderer, screen_w: u16, screen_h: u16, theme: anytype) void {
         if (!self.is_open) return;
 
-        const w: u16 = @min(110, screen_w -| 4);
-        const h: u16 = @min(34, screen_h -| 4);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 110, 34, 2);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const w = modal.rect.w;
+        const h = modal.rect.h;
 
-        ren.drawRect(.{ .x = x + 1, .y = y + 1, .w = w, .h = h }, " ", theme.bg_editor, theme.bg_editor);
-        ren.drawRect(.{ .x = x, .y = y, .w = w, .h = h }, " ", theme.fg_primary, theme.bg_sidebar);
+        if (!primitives.usable(modal, 60, 12)) {
+            primitives.drawSizeWarning(ren, "Git Details", theme.fg_primary, theme.bg_sidebar);
+            return;
+        }
 
-        for (x..x + w) |bx| {
-            ren.drawText(@intCast(bx), y, "─", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(@intCast(bx), y + h - 1, "─", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(@intCast(bx), y + 2, "─", theme.border_color, theme.bg_sidebar, false, false);
-        }
-        for (y..y + h) |by| {
-            ren.drawText(x, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
-            ren.drawText(x + w - 1, @intCast(by), "│", theme.border_color, theme.bg_sidebar, false, false);
-        }
-        ren.drawText(x, y, "┌", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y, "┐", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x, y + h - 1, "└", theme.border_color, theme.bg_sidebar, false, false);
-        ren.drawText(x + w - 1, y + h - 1, "┘", theme.border_color, theme.bg_sidebar, false, false);
+        primitives.drawModalFrame(ren, modal, .square, theme.fg_primary, theme.bg_sidebar, theme.border_color, theme.bg_editor);
+        for (x..x + w) |bx| ren.drawText(@intCast(bx), y + 2, "─", theme.border_color, theme.bg_sidebar, false, false);
         ren.drawText(x, y + 2, "├", theme.border_color, theme.bg_sidebar, false, false);
         ren.drawText(x + w - 1, y + 2, "┤", theme.border_color, theme.bg_sidebar, false, false);
 
@@ -187,11 +180,11 @@ pub const GitDetailedWidget = struct {
                     continue;
                 }
                 if (rendered_count >= visible_items) break;
-                
+
                 const py = list_y + @as(u16, @intCast(rendered_count));
                 const is_selected = (i == self.selected_idx);
                 const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
-                
+
                 if (is_selected) {
                     for (x + 1..x + w - 1) |bx| {
                         ren.drawText(@intCast(bx), py, " ", theme.fg_primary, bg, false, false);
@@ -205,7 +198,7 @@ pub const GitDetailedWidget = struct {
                 drawTextClipped(ren, x + 13, py, commit.author, 16, .{ .rgb = .{ .r = 80, .g = 200, .b = 255 } }, bg, false, false);
                 drawTextClipped(ren, x + 31, py, commit.time, 14, theme.fg_comment, bg, false, false);
                 drawTextClipped(ren, x + 47, py, commit.msg, w - 50, if (is_selected) theme.fg_accent else theme.fg_primary, bg, false, false);
-                
+
                 rendered_count += 1;
             }
         } else if (self.selected_tab == .branches) {
@@ -217,11 +210,11 @@ pub const GitDetailedWidget = struct {
                     continue;
                 }
                 if (rendered_count >= visible_items) break;
-                
+
                 const py = list_y + @as(u16, @intCast(rendered_count));
                 const is_selected = (i == self.selected_idx);
                 const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
-                
+
                 if (is_selected) {
                     for (x + 1..x + w - 1) |bx| {
                         ren.drawText(@intCast(bx), py, " ", theme.fg_primary, bg, false, false);
@@ -234,9 +227,14 @@ pub const GitDetailedWidget = struct {
 
                 ren.drawText(x + 1, py, prefix, theme.fg_accent, bg, true, false);
                 drawTextClipped(ren, x + 3, py, branch, w - 6, fg, bg, is_current, false);
-                
+
                 rendered_count += 1;
             }
+        }
+
+        if (rendered_count == 0) {
+            const message = if (self.selected_tab == .history) "No commit history is available for this repository." else "No branches were found. Refresh Git status and try again.";
+            ren.drawTextClipped(x + 3, list_y + 1, w -| 6, message, theme.fg_secondary, theme.bg_sidebar, false, false);
         }
 
         const footer_y = y + h - 2;
@@ -250,26 +248,33 @@ pub const GitDetailedWidget = struct {
     pub fn handleMouse(self: *GitDetailedWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16) bool {
         if (!self.is_open) return false;
 
-        const w: u16 = @min(110, screen_w -| 4);
-        const h: u16 = @min(34, screen_h -| 4);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 110, 34, 2);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const h = modal.rect.h;
 
-        if (m.col >= x and m.col < x + w and m.row >= y and m.row < y + h) {
-            if (m.action == .press and m.row == y and m.col == x + w - 2) {
+        if (!primitives.usable(modal, 60, 12)) {
+            if (m.action == .press) self.is_open = false;
+            return true;
+        }
+
+        if (modal.contains(m.col, m.row)) {
+            if (m.action == .press and primitives.containsRect(modal.closeButton(), m.col, m.row)) {
                 self.is_open = false;
                 return true;
             }
 
             if (m.button == .wheel_up) {
-                if (self.scroll_offset > 0) self.scroll_offset -= 1;
+                const len = if (self.selected_tab == .history) self.commits.items.len else self.branches.items.len;
+                var list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = y + 3, .w = modal.rect.w -| 2, .h = h -| 5 }, .item_count = len, .offset = self.scroll_offset };
+                list.scroll(-1);
+                self.scroll_offset = list.offset;
                 return true;
             } else if (m.button == .wheel_down) {
-                const visible_items = h - 5;
                 const len = if (self.selected_tab == .history) self.commits.items.len else self.branches.items.len;
-                if (len > visible_items and self.scroll_offset < len - visible_items) {
-                    self.scroll_offset += 1;
-                }
+                var list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = y + 3, .w = modal.rect.w -| 2, .h = h -| 5 }, .item_count = len, .offset = self.scroll_offset };
+                list.scroll(1);
+                self.scroll_offset = list.offset;
                 return true;
             }
 
@@ -290,14 +295,9 @@ pub const GitDetailedWidget = struct {
 
                 const list_y = y + 3;
                 const visible_items = h - 5;
-                if (m.row >= list_y and m.row < list_y + visible_items) {
-                    const click_row = m.row - list_y;
-                    const idx = self.scroll_offset + click_row;
-                    const len = if (self.selected_tab == .history) self.commits.items.len else self.branches.items.len;
-                    if (idx < len) {
-                        self.selected_idx = idx;
-                    }
-                }
+                const len = if (self.selected_tab == .history) self.commits.items.len else self.branches.items.len;
+                const list = primitives.ListViewport{ .rect = .{ .x = x + 1, .y = list_y, .w = modal.rect.w -| 2, .h = visible_items }, .item_count = len, .offset = self.scroll_offset };
+                if (list.rowAt(m.col, m.row)) |idx| self.selected_idx = idx;
             }
             return true;
         }
@@ -362,7 +362,7 @@ pub const GitDetailedWidget = struct {
             self.selected_idx = 0;
             return true;
         }
-        return true; 
+        return true;
     }
 
     fn ensureVisible(self: *GitDetailedWidget) void {

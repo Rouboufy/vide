@@ -1,0 +1,36 @@
+    │ EXPLORER             +F +D  │  [No Name]    x   demo.lua    x  +                                        |     -
+▋ E │   .luarc.json               │  1   ---@type string
+    │   demo.lua                  │W   1 local message = 42
+    │                             │    2 print(message)
+  S │                             │~
+    │                             │~
+    │                             │~
+  G │                             │~
+    │                             │~
+    │                             │~
+  A │                             │~
+    │                             │~
+    │                             │~
+  X │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+  * │                             │/tmp/vide-capture.7b9mFA/diagnostics-project/demo.lua          W:1 1,1            All
+    │                             │
+  NORMAL     * main  demo.lua                                                                  Focus: Editor   [?] Help

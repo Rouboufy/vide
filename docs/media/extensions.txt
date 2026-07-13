@@ -1,0 +1,36 @@
+    │  EXTENSION SHOP             │  [No Name]    x  +                                                        |     -
+  E │                             │                         Warning: Plugins are disabled for this recovery session.
+    │ Select category:            │                         VIDE
+    │                             │
+  S │▋ All Plugins                │              Terminal-native editor and IDE
+    │                             │
+    │  Themes & Colo╭─ Explore: All Plugins ──────────────────────────────────────────────────── ✖ ╮
+  G │               │                                                                              │
+    │  LSP Configura│ 🔍 Search in category..._________________________________________________    │
+    │               │ [/] to type, <Esc> to list/close, <Enter> to toggle install                  │
+  A │  Git Integrati│──────────────────────────────────────────────────────────────────────────────│
+    │               │▋ YouCompleteMe *25906                                                        │
+    │  AI & LLM Assi│  A code-completion engine for Vim                                            │
+▋ X │               │  ──────────────────────────────────────────────────────────────────────────  │
+    │  Treesitter Pa│  coc.nvim *25167                                                             │
+    │               │  Nodejs extension host for vim & neovim, load extensions like VSCode and ho  │
+    │  Telescope Ext│  ──────────────────────────────────────────────────────────────────────────  │
+    │               │  vim-fugitive *21716                                                         │
+    │  Installed Plu│  fugitive.vim: A Git wrapper so awesome, it should be illegal                │
+    │               │  ──────────────────────────────────────────────────────────────────────────  │
+    │               │  nerdtree *20083                                                             │
+    │               │  A tree explorer plugin for vim.                                             │
+    │               │  ──────────────────────────────────────────────────────────────────────────  │
+    │               │  telescope.nvim *19623                                                       │
+    │               │  Find, Filter, Preview, Pick. All lua, all the time.                         │
+    │               │  ──────────────────────────────────────────────────────────────────────────  │
+    │               │  avante.nvim *18033                                                          │
+    │               │  Use your Neovim like using Cursor AI IDE!                                   │
+    │               │  ──────────────────────────────────────────────────────────────────────────  │
+    │               ╰──────────────────────────────────────────────────────────────────────────────╯
+    │
+    │                             │~
+    │                             │~
+  * │                             │[Scratch] [-]                                                      1,0-1          All
+    │                             │
+  NORMAL     * main  [No Name]                                                                Focus: Sidebar   [?] Help
