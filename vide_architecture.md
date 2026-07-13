@@ -137,7 +137,7 @@ terminal events are translated to Neovim input APIs.
 
 Runtime code uses Zig's POSIX and `std.Io` abstractions rather than direct Linux
 syscalls. Linux x86-64 and ARM64 musl builds are cross-compiled in CI. macOS
-and WSL remain explicit end-to-end verification work in `TODO.md`; sharing a
-POSIX implementation does not by itself establish platform support. Terminal
+and WSL still require broader end-to-end verification; sharing a POSIX
+implementation does not by itself establish platform support. Terminal
 capabilities still vary, so Nerd Font symbols are opt-in and responsive layouts
 avoid relying on a fixed viewport.

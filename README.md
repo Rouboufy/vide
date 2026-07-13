@@ -395,9 +395,9 @@ These directories are separate from the user's standard Neovim locations.
 
 ## Contributing
 
-Contributions are welcome. The prioritized roadmap and completion criteria are
-tracked in [TODO.md](TODO.md). Component responsibilities, process boundaries,
-and storage ownership are described in
+Contributions are welcome. Planned work and bug reports are tracked through
+[GitHub Issues](https://github.com/Rouboufy/vide/issues). Component responsibilities,
+process boundaries, and storage ownership are described in
 [vide_architecture.md](vide_architecture.md).
 
 ### Build and Test
