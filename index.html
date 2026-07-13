@@ -33,7 +33,7 @@
         <p class="eyebrow">Terminal-native. Neovim-powered. No Electron.</p>
         <h1>The IDE that hides a terminal.<br>The terminal that wears an IDE.</h1>
         <p class="lede">Vide combines a native Zig interface, an isolated Neovim editor, mouse-driven tools, and three editing experiences in one lightweight terminal application.</p>
-        <div class="actions"><a class="button primary" href="#install">Install Vide</a><a class="button" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.0">Download v0.2.0</a></div>
+        <div class="actions"><a class="button primary" href="#install">Install Vide</a><a class="button" href="#download-options">Download v0.2.0</a></div>
         <ul class="hero-facts" aria-label="Vide highlights"><li>Zig-native UI</li><li>Isolated Neovim</li><li>Linux &amp; macOS builds</li></ul>
       </div>
       <figure class="terminal-frame"><div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>vide — normal</span></div><img class="hero-shot" src="docs/screenshots/normal.webp" alt="Vide Normal mode showing the editor dashboard and activity bar" width="1920" height="1153"></figure>
@@ -74,11 +74,14 @@
     <section id="install">
       <p class="eyebrow">Installation</p><h2>Release binaries first, source builds when needed</h2>
       <div class="install-box"><div><span>Recommended installer</span><small>Detects your platform and verifies release checksums</small></div><code>curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash</code></div>
-      <div class="cards compact">
-        <article><span class="install-tag">Linux + macOS</span><h3>Native releases</h3><p>Checksum-verified x86-64 and ARM64 binaries. Requires Neovim 0.10+ on the host.</p><a href="https://github.com/Rouboufy/vide/releases/tag/v0.2.0">View release assets →</a></article>
-        <article><span class="install-tag">Linux x86-64</span><h3>Portable AppImage</h3><p>Bundles Neovim 0.11.6, desktop metadata, and its own checksum.</p><a href="https://github.com/Rouboufy/vide/releases/latest/download/Vide-0.2.0-x86_64.AppImage">Download AppImage →</a></article>
-        <article><span class="install-tag">Developers</span><h3>Build from source</h3><p>Use <code>setup.sh --source</code> with the pinned Zig 0.16.0 toolchain.</p><a href="https://github.com/Rouboufy/vide#build-from-source">Read build instructions →</a></article>
-      </div>
+      <details class="download-menu" id="download-options">
+        <summary><span><strong>Choose a download</strong><small>Native releases, AppImage, or source</small></span></summary>
+        <div class="download-options">
+          <a href="https://github.com/Rouboufy/vide/releases/tag/v0.2.0"><span class="install-tag">Linux + macOS</span><strong>Native releases</strong><small>Checksum-verified x86-64 and ARM64 binaries. Requires Neovim 0.10+.</small></a>
+          <a href="https://github.com/Rouboufy/vide/releases/latest/download/Vide-0.2.0-x86_64.AppImage"><span class="install-tag">Linux x86-64</span><strong>Portable AppImage</strong><small>Bundles Neovim 0.11.6, desktop metadata, and its own checksum.</small></a>
+          <a href="https://github.com/Rouboufy/vide#build-from-source"><span class="install-tag">Developers</span><strong>Build from source</strong><small>Use <code>setup.sh --source</code> with the pinned Zig 0.16.0 toolchain.</small></a>
+        </div>
+      </details>
     </section>
 
     <section id="support">

@@ -56,4 +56,6 @@ for ref in parser.refs:
 html = (ROOT / "index.html").read_text(encoding="utf-8")
 for phrase in ("Normal", "IDE", "Zen", "Installation", "Platform status", "limitations"):
     assert phrase.lower() in html.lower(), f"missing site content: {phrase}"
+assert '<details class="download-menu" id="download-options">' in html
+assert html.count('class="install-tag"') == 3
 print("Static site validated")

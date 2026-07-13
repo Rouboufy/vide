@@ -118,11 +118,23 @@ kbd { padding: .12rem .38rem; border: 1px solid #4a525c; border-bottom-width: 2p
 .install-box span { color: #fff; font-weight: 800; }
 .install-box small { color: var(--muted); }
 .install-box code { padding: .55rem .75rem; border: 1px solid #263b4a; border-radius: 6px; background: #0c171e; color: #b8e1ff; white-space: nowrap; }
-.compact article { display: flex; flex-direction: column; align-items: flex-start; }
-.compact p { flex: 1; }
-.compact code { color: #e3e3c1; }
-.compact a { font-weight: 750; text-decoration: none; }
 .install-tag { display: inline-block; margin-bottom: .75rem; padding: .2rem .5rem; border: 1px solid #3b4c3b; border-radius: 999px; color: #a6d48a; font-size: .72rem; font-weight: 800; }
+.download-menu { position: relative; max-width: 44rem; }
+.download-menu summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 4.5rem; padding: .85rem 1.1rem; border: 1px solid var(--line-bright); border-radius: 10px; background: linear-gradient(145deg, rgb(27 31 36 / 96%), rgb(17 20 23 / 96%)); cursor: pointer; list-style: none; }
+.download-menu summary::-webkit-details-marker { display: none; }
+.download-menu summary::after { content: "⌄"; color: var(--blue); font-size: 1.45rem; line-height: 1; transition: transform .18s ease; }
+.download-menu[open] summary { border-color: var(--blue); border-radius: 10px 10px 0 0; }
+.download-menu[open] summary::after { transform: rotate(180deg); }
+.download-menu summary span { display: grid; }
+.download-menu summary strong { color: #fff; }
+.download-menu summary small, .download-options small { color: var(--muted); }
+.download-options { position: absolute; z-index: 3; right: 0; left: 0; overflow: hidden; border: 1px solid var(--blue); border-top: 0; border-radius: 0 0 10px 10px; background: #101317; box-shadow: 0 20px 45px #0009; }
+.download-options a { display: grid; padding: 1rem 1.1rem; color: var(--text); text-decoration: none; }
+.download-options a + a { border-top: 1px solid var(--line); }
+.download-options a:hover, .download-options a:focus-visible { background: #17232c; color: #fff; }
+.download-options strong { margin-bottom: .15rem; }
+.download-options .install-tag { justify-self: start; margin-bottom: .45rem; }
+.download-options code { color: #e3e3c1; }
 .support-grid { grid-template-columns: 1fr 1fr; }
 .support-grid > div { padding: 1.4rem; }
 .support-grid li + li { margin-top: .5rem; }
@@ -158,5 +170,5 @@ footer p { margin: .55rem 0 0; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .button, .gallery figure { transition: none; }
+  .button, .gallery figure, .download-menu summary::after { transition: none; }
 }
