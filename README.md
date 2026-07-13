@@ -279,7 +279,12 @@ These shipped mappings apply primarily in Normal mode (`Leader = Space`). IDE mo
 | **Find files (Telescope)** | `Space f f` or `Ctrl + F` |
 | **Live grep (Telescope)** | `Space f g` |
 | **Toggle Neo-tree** | `Space e` |
-| **Toggle Neovim terminal split** | `Space o t` |
+| **Toggle bottom terminal split** | `Space o t` |
+| **Toggle vertical terminal split** | `Space o Shift+T` |
+| **Create horizontal editor split** | `Ctrl + W`, then `S` |
+| **Create vertical editor split** | `Ctrl + W`, then `V` |
+| **Move between editor splits** | `Ctrl + W`, then `H`, `J`, `K`, or `L` |
+| **Close current editor split** | `Ctrl + W`, then `Q` |
 | **Open editor settings** | `Space t h` |
 | **Delete without yanking** | `Space d` |
 | **Substitute word everywhere** | `Space s` |

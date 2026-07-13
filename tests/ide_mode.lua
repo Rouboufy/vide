@@ -1,6 +1,20 @@
 assert(type(_G.vide_enable_ide_mode) == 'function')
 assert(type(_G.vide_disable_ide_mode) == 'function')
 assert(type(_G.vide_ide_action) == 'function')
+assert(vim.fn.maparg(' ot', 'n') ~= '', 'missing bottom terminal split mapping: <Space> o t')
+assert(vim.fn.maparg(' oT', 'n') ~= '', 'missing vertical terminal split mapping: <Space> o T')
+
+_G.open_help_menu()
+vim.api.nvim_feedkeys('2', 'x', false)
+local help_text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n')
+for _, expected in ipairs({
+  '<Space> o t            Toggle Bottom Terminal Split',
+  '<Space> o T            Toggle Vertical Terminal Split',
+  '<C-w> s / <C-w> v      Horizontal / Vertical Editor Split',
+}) do
+  assert(help_text:find(expected, 1, true), 'missing help text: ' .. expected)
+end
+vim.api.nvim_win_close(0, true)
 
 vim.cmd('enew!')
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'alpha beta', 'gamma' })
