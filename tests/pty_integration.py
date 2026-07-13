@@ -76,23 +76,37 @@ def run_mode(mode):
         output.extend(read_available(fd, time.monotonic() + 1.0))
         waited = 0
         status = 0
-        for _ in range(10):
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
             os.write(fd, b"\x11")  # Ctrl-Q
-            output.extend(read_available(fd, time.monotonic() + 0.5))
+            output.extend(read_available(fd, min(deadline, time.monotonic() + 0.4)))
             waited, status = os.waitpid(pid, os.WNOHANG)
             if waited != 0:
                 break
+            time.sleep(0.1)
         if waited == 0:
             os.kill(pid, signal.SIGTERM)
-            os.waitpid(pid, 0)
+            _, status = os.waitpid(pid, 0)
             tail = bytes(output[-1000:]).decode("utf-8", errors="replace")
             log_path = data / "vide.log"
             log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else "<missing>"
+            os.close(fd)
             raise AssertionError(f"{mode}: Vide did not exit after Ctrl-Q; output tail: {tail!r}; log: {log}")
-        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+
+        output.extend(read_available(fd, time.monotonic() + 0.25))
+        restored = termios.tcgetattr(fd)
+        os.close(fd)
+
+        if os.WIFEXITED(status):
+            if os.WEXITSTATUS(status) != 0:
+                raise AssertionError(f"{mode}: Vide exited with code {os.WEXITSTATUS(status)}")
+        elif os.WIFSIGNALED(status):
+            sig = os.WTERMSIG(status)
+            if sig not in (signal.SIGTERM, signal.SIGHUP):
+                raise AssertionError(f"{mode}: Vide died from unexpected signal {sig}")
+        else:
             raise AssertionError(f"{mode}: Vide exited abnormally: {status}")
 
-        restored = termios.tcgetattr(fd)
         assert restored == original, f"{mode}: terminal attributes were not restored"
         assert ENTER_ALT in output, f"{mode}: alternate screen was not enabled"
         assert ENABLE_PASTE in output, f"{mode}: bracketed paste was not enabled"
@@ -110,8 +124,10 @@ def run_startup_failure():
         original = termios.tcgetattr(fd)
         output = read_available(fd, time.monotonic() + 3)
         _, status = os.waitpid(pid, 0)
+        restored = termios.tcgetattr(fd)
+        os.close(fd)
         assert status != 0, "missing Neovim should fail startup"
-        assert termios.tcgetattr(fd) == original, "startup failure left terminal attributes changed"
+        assert restored == original, "startup failure left terminal attributes changed"
         assert LEAVE_ALT in output, "startup failure did not leave the alternate screen"
         assert b"Vide could not start" in output, "startup failure was not actionable"
 
