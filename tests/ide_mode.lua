@@ -42,6 +42,7 @@ _G.vide_ide_action('redo')
 
 vim.cmd('stopinsert')
 vim.fn.setreg('"', { 'pasted from IDE' }, 'l')
+pcall(vim.fn.setreg, '+', { 'pasted from IDE' }, 'l')
 _G.vide_ide_action('paste')
 assert(vim.api.nvim_get_current_line() == 'pasted from IDE')
 
