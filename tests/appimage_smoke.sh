@@ -9,7 +9,7 @@ appdir=${1:-Vide.AppDir}
 [[ -f "$appdir/vide.desktop" ]]
 [[ -f "$appdir/vide.svg" ]]
 [[ -f "$appdir/usr/share/applications/vide.desktop" ]]
-[[ -f "$appdir/usr/share/metainfo/vide.appdata.xml" ]]
+[[ -f "$appdir/usr/share/metainfo/io.github.rouboufy.vide.metainfo.xml" ]]
 [[ -f "$appdir/VERSION.txt" ]]
 grep -Fq 'Bundled Neovim:' "$appdir/VERSION.txt"
 grep -Fq 'Icon=vide' "$appdir/vide.desktop"

@@ -39,7 +39,7 @@ cp "$ROOT/packaging/vide.desktop" "$APP_DIR/vide.desktop"
 cp "$ROOT/packaging/vide.desktop" "$APP_DIR/usr/share/applications/vide.desktop"
 cp "$ROOT/packaging/vide.svg" "$APP_DIR/vide.svg"
 cp "$ROOT/packaging/vide.svg" "$APP_DIR/usr/share/icons/hicolor/scalable/apps/vide.svg"
-cp "$ROOT/packaging/vide.appdata.xml" "$APP_DIR/usr/share/metainfo/vide.appdata.xml"
+cp "$ROOT/packaging/vide.appdata.xml" "$APP_DIR/usr/share/metainfo/io.github.rouboufy.vide.metainfo.xml"
 chmod 755 "$APP_DIR/AppRun" "$APP_DIR/usr/bin/vide" "$APP_DIR/usr/bin/nvim"
 
 cat >"$APP_DIR/VERSION.txt" <<EOF
