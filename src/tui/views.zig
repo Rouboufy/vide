@@ -17,17 +17,6 @@ fn drawText(ren: *Renderer, x: u16, y: u16, text: []const u8, fg: Color, bg: Col
     ren.drawText(x, y, text, fg, bg, bold, italic);
 }
 
-fn getHorizontalSeparator(vert: []const u8) []const u8 {
-    if (std.mem.eql(u8, vert, "│")) return "─";
-    if (std.mem.eql(u8, vert, "▏")) return "▔";
-    if (std.mem.eql(u8, vert, "▍")) return "▀";
-    if (std.mem.eql(u8, vert, "")) return "━";
-    if (std.mem.eql(u8, vert, "┃")) return "━";
-    if (std.mem.eql(u8, vert, "║")) return "═";
-    if (std.mem.eql(u8, vert, "┊")) return "┄";
-    return " ";
-}
-
 pub fn drawWorkspace(a: *App, layout: Layout) void {
     const t = &a.active_theme;
     drawRect(a.ren, layout.total, " ", t.fg_primary, t.bg_editor);
@@ -45,12 +34,12 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 if (sx_i < 0 or sx_i >= @as(i32, @intCast(layout.editor.x + layout.editor.w))) continue;
                 const sx = @as(u16, @intCast(sx_i));
                 var cell = a.ui_state.grid.cells[@as(usize, gy) * @as(usize, a.ui_state.grid.width) + gx];
-                
+
                 // Only draw if there's actual content or different background
                 if (cell.char[0] == ' ' and cell.char[1] == 0 and std.meta.activeTag(cell.bg) == .none) {
                     continue;
                 }
-                
+
                 if (std.meta.eql(cell.bg, a.ui_state.default_bg) or std.meta.activeTag(cell.bg) == .none) {
                     cell.bg = t.bg_editor;
                 }
@@ -104,132 +93,106 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 }
             }
         }
-
-        // After rendering regular windows (pass 0), draw split separators in between them
-        if (pass == 0 and a.editor_wins.items.len > 1) {
-            var sep_char = a.settings_widget.config.split_separator;
-            if (std.mem.eql(u8, sep_char, "│") and a.settings_widget.config.nerd_fonts) {
-                sep_char = "";
-            }
-            const horiz_sep_char = getHorizontalSeparator(sep_char);
-            
-            for (a.editor_wins.items) |win| {
-                // Check for vertical separator to the right of this window
-                var has_vsplit = false;
-                for (a.editor_wins.items) |other| {
-                    if (other.col == win.col + win.width + 1) {
-                        has_vsplit = true;
-                        break;
-                    }
-                }
-                
-                if (has_vsplit) {
-                    const sx = layout.editor.x + win.col + win.width;
-                    if (sx < layout.editor.x + layout.editor.w) {
-                        var gy: u16 = 0;
-                        const end_gy = @min(win.row + win.height + 1, layout.editor.h);
-                        while (win.row + gy < end_gy) : (gy += 1) {
-                            const sy = layout.editor.y + win.row + gy;
-                            if (sy < layout.editor.y + layout.editor.h) {
-                                var cell = Cell{ .fg = t.border_color, .bg = t.bg_editor };
-                                cell.setChar(sep_char);
-                                a.ren.setCell(sx, sy, cell);
-                            }
-                        }
-                    }
-                }
-                
-                // Check for horizontal separator below this window
-                var has_hsplit = false;
-                for (a.editor_wins.items) |other| {
-                    if (other.row == win.row + win.height + 1) {
-                        has_hsplit = true;
-                        break;
-                    }
-                }
-                
-                if (has_hsplit) {
-                    const sy = layout.editor.y + win.row + win.height;
-                    if (sy < layout.editor.y + layout.editor.h) {
-                        var gx: u16 = 0;
-                        const end_gx = @min(win.col + win.width + 1, layout.editor.w);
-                        while (win.col + gx < end_gx) : (gx += 1) {
-                            const sx = layout.editor.x + win.col + gx;
-                            if (sx < layout.editor.x + layout.editor.w) {
-                                var cell = Cell{ .fg = t.border_color, .bg = t.bg_editor };
-                                cell.setChar(horiz_sep_char);
-                                a.ren.setCell(sx, sy, cell);
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     if (a.mode != .zen) {
         a.activity_bar.draw(a.ren, layout.activity_bar, .{
-            .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
             .nerd_fonts = a.settings_widget.config.nerd_fonts,
         });
         if (a.show_file_tree) {
             if (a.activity_bar.active_idx == 0) {
                 a.explorer.draw(a.ren, layout.file_tree, .{
-                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
-                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .bg_sidebar = t.bg_sidebar,
+                    .bg_editor = t.bg_editor,
+                    .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary,
+                    .fg_secondary = t.fg_secondary,
+                    .border_color = t.border_color,
+                    .fg_accent = t.fg_accent,
                     .nerd_fonts = a.settings_widget.config.nerd_fonts,
                 });
             } else if (a.activity_bar.active_idx == 1) {
                 a.search_panel.draw(a.ren, layout.file_tree, .{
-                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
-                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .bg_sidebar = t.bg_sidebar,
+                    .bg_editor = t.bg_editor,
+                    .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary,
+                    .fg_secondary = t.fg_secondary,
+                    .border_color = t.border_color,
+                    .fg_accent = t.fg_accent,
                     .nerd_fonts = a.settings_widget.config.nerd_fonts,
                 });
             } else if (a.activity_bar.active_idx == 2) {
                 a.git_panel.draw(a.ren, layout.file_tree, .{
-                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
-                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .bg_sidebar = t.bg_sidebar,
+                    .bg_editor = t.bg_editor,
+                    .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary,
+                    .fg_secondary = t.fg_secondary,
+                    .border_color = t.border_color,
+                    .fg_accent = t.fg_accent,
                 });
             } else if (a.activity_bar.active_idx == 3) {
                 a.ai_panel.draw(a.ren, layout.file_tree, .{
-                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
-                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .bg_sidebar = t.bg_sidebar,
+                    .bg_editor = t.bg_editor,
+                    .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary,
+                    .fg_secondary = t.fg_secondary,
+                    .border_color = t.border_color,
+                    .fg_accent = t.fg_accent,
                     .nerd_fonts = a.settings_widget.config.nerd_fonts,
                 });
             } else if (a.activity_bar.active_idx == 4) {
                 a.extension_shop.draw(a.ren, layout.file_tree, .{
-                    .bg_sidebar = t.bg_sidebar, .bg_editor = t.bg_editor, .bg_accent = t.bg_accent,
-                    .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+                    .bg_sidebar = t.bg_sidebar,
+                    .bg_editor = t.bg_editor,
+                    .bg_accent = t.bg_accent,
+                    .fg_primary = t.fg_primary,
+                    .fg_secondary = t.fg_secondary,
+                    .border_color = t.border_color,
+                    .fg_accent = t.fg_accent,
                     .nerd_fonts = a.settings_widget.config.nerd_fonts,
                 });
             } else {
                 drawRect(a.ren, layout.file_tree, " ", t.fg_primary, t.bg_sidebar);
             }
-            var y: u16 = 0;
-            while (y < layout.file_tree.h) : (y += 1) {
-                var cell = Cell{ .fg = t.border_color, .bg = t.bg_sidebar };
-                cell.setChar("│");
-                a.ren.setCell(layout.file_tree.x + layout.file_tree.w - 1, layout.file_tree.y + y, cell);
+            if (layout.file_tree.w > 0) {
+                const sidebar_border = if (a.sidebar_focus) t.bg_accent else t.border_color;
+                var y: u16 = 0;
+                while (y < layout.file_tree.h) : (y += 1) {
+                    var cell = Cell{ .fg = sidebar_border, .bg = t.bg_sidebar };
+                    cell.setChar("│");
+                    a.ren.setCell(layout.file_tree.x + layout.file_tree.w - 1, layout.file_tree.y + y, cell);
+                }
             }
         }
         drawRect(a.ren, layout.tab_bar, " ", t.fg_secondary, t.bg_sidebar);
         var tx: u16 = layout.tab_bar.x;
+        const tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
         for (a.tabs.items, 0..) |tab, i| {
+            if (tx >= tab_end) break;
             const is_active = (i == a.active_tab);
-            const tab_w: u16 = @as(u16, @intCast(tab.name.len)) + 8;
+            const desired_w: u16 = @intCast(@min(tab.name.len + 8, std.math.maxInt(u16)));
+            const tab_w = @min(desired_w, tab_end - tx);
+            if (tab_w < 4) break;
             const bg = if (is_active) t.bg_tab_active else t.bg_tab_inactive;
             const fg = if (is_active) t.fg_primary else t.fg_secondary;
-            
+
             drawRect(a.ren, Rect{ .x = tx, .y = layout.tab_bar.y, .w = tab_w, .h = 1 }, " ", fg, bg);
-            drawText(a.ren, tx + 2, layout.tab_bar.y, tab.name, fg, bg, is_active, false);
+            a.ren.drawTextClipped(tx + 2, layout.tab_bar.y, tab_w - 4, tab.name, fg, bg, is_active, false);
             const close_color = if (is_active) Color{ .rgb = .{ .r = 235, .g = 100, .b = 100 } } else t.fg_secondary;
             const tab_close_icon = if (a.settings_widget.config.nerd_fonts) "󰅖" else "x";
-            drawText(a.ren, tx + tab_w - 3, layout.tab_bar.y, tab_close_icon, close_color, bg, false, false);
+            drawText(a.ren, tx + tab_w - 2, layout.tab_bar.y, tab_close_icon, close_color, bg, false, false);
             tx += tab_w;
         }
         // Draw + button for new tab
-        drawText(a.ren, tx + 1, layout.tab_bar.y, "+", t.fg_secondary, t.bg_sidebar, true, false);
+        if (tx + 1 < tab_end) drawText(a.ren, tx + 1, layout.tab_bar.y, "+", t.fg_secondary, t.bg_sidebar, true, false);
 
         // Draw split buttons at the top right of the editor (in tab bar)
         if (layout.tab_bar.w > 15) {
@@ -238,15 +201,15 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             // Draw Split Vertically (Right) pill: "  |  " on editor bg
             drawText(a.ren, right_edge - 13, btn_y, " ", t.fg_primary, t.bg_sidebar, false, false);
             drawText(a.ren, right_edge - 12, btn_y, "  |  ", t.fg_primary, t.bg_editor, false, false);
-            
+
             // Draw Split Horizontally (Down) pill: "  -  " on editor bg
             drawText(a.ren, right_edge - 7, btn_y, " ", t.fg_primary, t.bg_sidebar, false, false);
             drawText(a.ren, right_edge - 6, btn_y, "  -  ", t.fg_primary, t.bg_editor, false, false);
         }
-        
+
         // Draw Status Bar background
         drawRect(a.ren, layout.status_bar, " ", t.fg_primary, t.bg_statusbar);
-        
+
         // Draw mode indicator
         const mode_str = switch (a.mode) {
             .ide => if (a.settings_widget.config.nerd_fonts) " 󰚌  IDE " else " IDE ",
@@ -254,7 +217,19 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             .zen => if (a.settings_widget.config.nerd_fonts) " 󰚌  ZEN " else " ZEN ",
         };
         drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
-        
+
+        // IDE actions stay visible and mouse-accessible without taking editor rows.
+        if (a.mode == .ide and layout.status_bar.w >= 48) {
+            const menu_labels = [_][]const u8{ " File ", " Edit ", " Selection ", " Buffer " };
+            const menu_xs = [_]u16{ 7, 13, 19, 30 };
+            for (menu_labels, 0..) |label, i| {
+                const selected = a.ide_menu != null and a.ide_menu.? == @as(u8, @intCast(i));
+                drawText(a.ren, layout.status_bar.x + menu_xs[i], layout.status_bar.y, label,
+                    if (selected) t.fg_primary else t.fg_statusbar,
+                    if (selected) t.bg_accent else t.bg_statusbar, selected, false);
+            }
+        }
+
         // Draw Branch in Status Bar
         const branch_name = a.git_panel.current_branch orelse "main";
         var status_buf: [128]u8 = undefined;
@@ -262,8 +237,9 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             std.fmt.bufPrint(&status_buf, "  {s} ", .{branch_name}) catch "  main "
         else
             std.fmt.bufPrint(&status_buf, " * {s} ", .{branch_name}) catch " * main ";
-        drawText(a.ren, layout.status_bar.x + 12, layout.status_bar.y, branch_display, t.fg_statusbar, t.bg_statusbar, true, false);
-        
+        if (a.mode != .ide and layout.status_bar.w > 30)
+            drawText(a.ren, layout.status_bar.x + 12, layout.status_bar.y, branch_display, t.fg_statusbar, t.bg_statusbar, true, false);
+
         // Draw File in Status Bar
         const file_x = 12 + @as(u16, @intCast(branch_display.len)) + 1;
         var file_name_buf: [128]u8 = undefined;
@@ -272,32 +248,63 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             std.fmt.bufPrint(&file_name_buf, "󰌆  {s}", .{active_file_name}) catch active_file_name
         else
             active_file_name;
-        drawText(a.ren, layout.status_bar.x + file_x, layout.status_bar.y, file_str, t.fg_statusbar, t.bg_statusbar, false, false);
+        if (a.mode != .ide and layout.status_bar.w > file_x + 20) {
+            const reserved_right: u16 = if (layout.status_bar.w > 55) 32 else 10;
+            const available = layout.status_bar.w -| file_x -| reserved_right;
+            a.ren.drawTextClipped(layout.status_bar.x + file_x, layout.status_bar.y, available, file_str, t.fg_statusbar, t.bg_statusbar, false, false);
+        }
 
         // Draw Help Button in Status Bar (Right aligned)
         const help_btn = if (a.settings_widget.config.nerd_fonts) " 󰋖 Help " else " [?] Help ";
-        const help_x = layout.status_bar.w - @as(u16, @intCast(help_btn.len));
-        drawText(a.ren, layout.status_bar.x + help_x, layout.status_bar.y, help_btn, t.fg_statusbar, t.bg_statusbar, true, false);
+        const help_w: u16 = @intCast(help_btn.len);
+        if (layout.status_bar.w >= help_w) {
+            const help_x = layout.status_bar.w - help_w;
+            drawText(a.ren, layout.status_bar.x + help_x, layout.status_bar.y, help_btn, t.fg_statusbar, t.bg_statusbar, true, false);
+
+            const focus_label = if (a.terminal_focus)
+                "Focus: Terminal"
+            else if (a.sidebar_focus)
+                "Focus: Sidebar"
+            else
+                "Focus: Editor";
+            const focus_w: u16 = @intCast(focus_label.len);
+            if (help_x > focus_w + 2 and layout.status_bar.w > 55) {
+                drawText(a.ren, layout.status_bar.x + help_x - focus_w - 2, layout.status_bar.y, focus_label, t.fg_statusbar, t.bg_statusbar, false, false);
+            }
+        }
 
         if (layout.panel) |panel| {
             // Draw terminal panel background
             drawRect(a.ren, panel, " ", t.fg_primary, t.bg_terminal);
-            
+
             var px: u16 = 0;
             while (px < panel.w) : (px += 1) {
                 var cell = Cell{ .fg = t.bg_accent, .bg = t.bg_sidebar };
                 cell.setChar("━");
                 a.ren.setCell(panel.x + px, panel.y, cell);
             }
-            
+
             // Draw terminal header
             const term_header_fg = if (a.active_terminal_panel_idx == 0) t.bg_accent else t.fg_secondary;
             const debug_header_fg = if (a.active_terminal_panel_idx == 1) t.bg_accent else t.fg_secondary;
             const output_header_fg = if (a.active_terminal_panel_idx == 2) t.bg_accent else t.fg_secondary;
-            
-            drawText(a.ren, panel.x + 2, panel.y, " TERMINAL ", term_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 0, false);
-            drawText(a.ren, panel.x + 13, panel.y, " DEBUG CONSOLE ", debug_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 1, false);
-            drawText(a.ren, panel.x + 30, panel.y, " OUTPUT ", output_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 2, false);
+
+            if (panel.w >= 40) {
+                drawText(a.ren, panel.x + 2, panel.y, " TERMINAL ", term_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 0, false);
+                drawText(a.ren, panel.x + 13, panel.y, " DEBUG CONSOLE ", debug_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 1, false);
+                drawText(a.ren, panel.x + 30, panel.y, " OUTPUT ", output_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 2, false);
+            } else if (panel.w >= 23) {
+                drawText(a.ren, panel.x + 1, panel.y, " TERM ", term_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 0, false);
+                drawText(a.ren, panel.x + 8, panel.y, " DEBUG ", debug_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 1, false);
+                drawText(a.ren, panel.x + 17, panel.y, " OUT ", output_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 2, false);
+            } else {
+                const compact_title = switch (a.active_terminal_panel_idx) {
+                    1 => " DEBUG ",
+                    2 => " OUTPUT ",
+                    else => " TERMINAL ",
+                };
+                drawText(a.ren, panel.x + 1, panel.y, compact_title, t.bg_accent, t.bg_terminal, true, false);
+            }
 
             if (panel.h > 1) {
                 var py: u16 = 0;
@@ -330,14 +337,16 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                             // Delay rendering slightly, it will be done below
                         } else {
                             a.ren.setCell(panel.x + px, panel.y + 1 + py, Cell{
-                                .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1,
-                                .fg = t.fg_primary, .bg = t.bg_terminal,
+                                .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                                .len = 1,
+                                .fg = t.fg_primary,
+                                .bg = t.bg_terminal,
                             });
                         }
                     }
                 }
             }
-            
+
             if (a.active_terminal_panel_idx == 1) {
                 const content_rect = Rect{ .x = panel.x, .y = panel.y + 1, .w = panel.w, .h = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
                 a.debug_console.draw(a.ren, content_rect, .{ .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .fg_accent = t.fg_accent, .bg_terminal = t.bg_terminal });
@@ -368,7 +377,7 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                     const shadow_y = wy + sy;
                     const shadow_x1 = wx + rect.w + 2;
                     const shadow_x2 = wx + rect.w + 3;
-                    
+
                     if (!has_other or !(shadow_x1 >= ox1 and shadow_x1 <= ox2 and shadow_y >= oy1 and shadow_y <= oy2)) {
                         a.ren.drawText(shadow_x1, shadow_y, " ", t.fg_primary, shadow_color, false, false);
                     }
@@ -410,43 +419,73 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                     // Top bar text
                     a.ren.drawText(wx + 5, wy, " Preview ", t.fg_primary, t.border_color, true, false);
                 }
-                
+
                 // Red cross (Top Right) on both
                 a.ren.drawText(wx + rect.w - 2, wy, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, t.border_color, true, false);
             }
         }
     }
+    if (a.mode == .zen and layout.status_bar.h > 0) {
+        drawRect(a.ren, layout.status_bar, " ", t.fg_statusbar, t.bg_statusbar);
+        const mode_str = if (a.settings_widget.config.nerd_fonts) " 󰚌  ZEN " else " ZEN ";
+        drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
+    }
     if (a.settings_widget.is_open) {
         a.settings_widget.draw(a.ren, a.ren.width, a.ren.height, .{
-            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
         });
     }
     if (a.mason_widget.is_open) {
         a.mason_widget.draw(a.ren, a.ren.width, a.ren.height, .{
-            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
             .fg_comment = t.fg_secondary,
         });
     }
     if (a.lazy_widget.is_open) {
         a.lazy_widget.draw(a.ren, a.ren.width, a.ren.height, .{
-            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
             .fg_comment = t.fg_secondary,
         });
     }
     if (a.git_detailed_widget.is_open) {
         a.git_detailed_widget.draw(a.ren, a.ren.width, a.ren.height, .{
-            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
             .fg_comment = t.fg_secondary,
         });
     }
     if (a.extension_shop.is_popup_open) {
         a.extension_shop.drawPopup(a.ren, a.ren.width, a.ren.height, .{
-            .bg_editor = t.bg_editor, .bg_sidebar = t.bg_sidebar, .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary, .fg_secondary = t.fg_secondary, .border_color = t.border_color, .fg_accent = t.fg_accent,
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
             .nerd_fonts = a.settings_widget.config.nerd_fonts,
         });
     }
@@ -457,19 +496,21 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         const my = a.split_menu_y;
         const mw: u16 = 24;
         const mh: u16 = 6;
-        
+
         // Draw background shadow / fill
         var sy: u16 = 0;
         while (sy < mh) : (sy += 1) {
             var sx: u16 = 0;
             while (sx < mw) : (sx += 1) {
                 a.ren.setCell(mx + sx, my + sy, Cell{
-                    .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1,
-                    .fg = t.fg_primary, .bg = t.bg_sidebar,
+                    .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                    .len = 1,
+                    .fg = t.fg_primary,
+                    .bg = t.bg_sidebar,
                 });
             }
         }
-        
+
         // Draw borders
         var bx: u16 = 1;
         while (bx < mw - 1) : (bx += 1) {
@@ -489,12 +530,20 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             right_c.setChar("│");
             a.ren.setCell(mx + mw - 1, my + by, right_c);
         }
-        
-        var tl = Cell{ .fg = t.border_color, .bg = t.bg_sidebar }; tl.setChar("┌"); a.ren.setCell(mx, my, tl);
-        var tr = Cell{ .fg = t.border_color, .bg = t.bg_sidebar }; tr.setChar("┐"); a.ren.setCell(mx + mw - 1, my, tr);
-        var bl = Cell{ .fg = t.border_color, .bg = t.bg_sidebar }; bl.setChar("└"); a.ren.setCell(mx, my + mh - 1, bl);
-        var br = Cell{ .fg = t.border_color, .bg = t.bg_sidebar }; br.setChar("┘"); a.ren.setCell(mx + mw - 1, my + mh - 1, br);
-        
+
+        var tl = Cell{ .fg = t.border_color, .bg = t.bg_sidebar };
+        tl.setChar("┌");
+        a.ren.setCell(mx, my, tl);
+        var tr = Cell{ .fg = t.border_color, .bg = t.bg_sidebar };
+        tr.setChar("┐");
+        a.ren.setCell(mx + mw - 1, my, tr);
+        var bl = Cell{ .fg = t.border_color, .bg = t.bg_sidebar };
+        bl.setChar("└");
+        a.ren.setCell(mx, my + mh - 1, bl);
+        var br = Cell{ .fg = t.border_color, .bg = t.bg_sidebar };
+        br.setChar("┘");
+        a.ren.setCell(mx + mw - 1, my + mh - 1, br);
+
         // Draw menu items based on split menu direction
         if (a.split_menu_dir == .right) {
             drawText(a.ren, mx + 2, my + 1, "  Terminal (Right)", t.fg_primary, t.bg_sidebar, false, false);
@@ -509,42 +558,25 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         }
     }
 
-    // Draw filename title bars and close buttons on each split window if there are multiple splits
-    if (a.editor_wins.items.len > 1) {
-        for (a.editor_wins.items) |win| {
-            if (win.width > 4 and win.height > 1) {
-                const win_sx = layout.editor.x + win.col;
-                const win_sy = layout.editor.y + win.row;
-
-                // Draw filename title bar across the top of this pane
-                if (win_sy < a.ren.height) {
-                    const title_bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive;
-                    const title_fg = if (win.active) t.fg_primary else t.fg_secondary;
-                    // Fill the title row background
-                    drawRect(a.ren, Rect{ .x = win_sx, .y = win_sy, .w = win.width, .h = 1 }, " ", title_fg, title_bg);
-                    // Draw the filename centered in the title bar
-                    const name = if (win.name.len > 0) win.name else "[No Name]";
-                    const name_len = @as(u16, @intCast(@min(name.len, win.width -| 4)));
-                    const padding = (win.width -| name_len) / 2;
-                    const title_x = win_sx + padding;
-                    if (title_x < win_sx + win.width) {
-                        drawText(a.ren, title_x, win_sy, name[0..name_len], title_fg, title_bg, win.active, false);
-                    }
-                }
-
-                // Draw close button (top-right corner of pane, over the title bar)
-                const w_gx = win.col + win.width - 2;
-                const w_gy = win.row;
-                const cell = Cell{
-                    .char = [_]u8{ 226, 156, 150, 0 }, .len = 3, // '✖'
-                    .fg = if (win.active) Color{ .rgb = .{ .r = 255, .g = 80, .b = 80 } } else t.fg_secondary,
-                    .bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive,
-                };
-                if (layout.editor.x + w_gx < a.ren.width and layout.editor.y + w_gy < a.ren.height) {
-                    a.ren.setCell(layout.editor.x + w_gx, layout.editor.y + w_gy, cell);
-                }
-            }
-        }
+    if (a.ide_menu) |menu| {
+        const labels: []const []const u8 = switch (menu) {
+            0 => &[_][]const u8{ "New buffer", "Save", "Close buffer" },
+            1 => &[_][]const u8{ "Undo", "Redo", "Cut", "Copy", "Paste", "Find", "Replace" },
+            2 => &[_][]const u8{ "Select all", "Select line" },
+            else => &[_][]const u8{ "Previous buffer", "Next buffer", "Close buffer" },
+        };
+        const widths = [_]u16{ 18, 12, 16, 19 };
+        const status_xs = [_]u16{ 7, 13, 19, 30 };
+        const mw = widths[menu];
+        const mh: u16 = @intCast(labels.len + 2);
+        const mx = @min(layout.status_bar.x + status_xs[menu], a.ren.width -| mw);
+        const my = layout.status_bar.y -| mh;
+        drawRect(a.ren, .{ .x = mx, .y = my, .w = mw, .h = mh }, " ", t.fg_primary, t.bg_sidebar);
+        drawText(a.ren, mx, my, "┌", t.border_color, t.bg_sidebar, false, false);
+        drawText(a.ren, mx + mw - 1, my, "┐", t.border_color, t.bg_sidebar, false, false);
+        for (labels, 0..) |label, i| drawText(a.ren, mx + 2, my + 1 + @as(u16, @intCast(i)), label, t.fg_primary, t.bg_sidebar, false, false);
+        drawText(a.ren, mx, my + mh - 1, "└", t.border_color, t.bg_sidebar, false, false);
+        drawText(a.ren, mx + mw - 1, my + mh - 1, "┘", t.border_color, t.bg_sidebar, false, false);
     }
 
     if (layout.panel != null and a.terminal_wins.items.len > 1) {
@@ -553,7 +585,8 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 const w_gx = win.col + win.width - 2;
                 const w_gy = win.row;
                 var cell = Cell{
-                    .char = [_]u8{ 226, 156, 150, 0 }, .len = 3,
+                    .char = [_]u8{ 226, 156, 150, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                    .len = 3,
                     .fg = if (win.active) Color{ .rgb = .{ .r = 255, .g = 80, .b = 80 } } else t.fg_secondary,
                     .bg = t.bg_terminal,
                 };
@@ -566,6 +599,30 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                 if (layout.panel.?.x + w_gx < a.ren.width and layout.panel.?.y + 1 + w_gy < a.ren.height) {
                     a.ren.setCell(layout.panel.?.x + w_gx, layout.panel.?.y + 1 + w_gy, cell);
                 }
+            }
+        }
+    }
+
+    if (a.mode != .zen) {
+        if (a.activeNotice()) |message| {
+            const prefix = switch (a.notice_level) {
+                .info => "Info: ",
+                .warning => "Warning: ",
+                .failure => "Error: ",
+            };
+            const max_w: u16 = @min(60, a.ren.width -| 2);
+            if (max_w >= 12 and a.ren.height > 2) {
+                const x = a.ren.width - max_w - 1;
+                const bg = switch (a.notice_level) {
+                    .info => t.bg_accent,
+                    .warning => Color{ .rgb = .{ .r = 145, .g = 105, .b = 20 } },
+                    .failure => Color{ .rgb = .{ .r = 140, .g = 45, .b = 50 } },
+                };
+                drawRect(a.ren, Rect{ .x = x, .y = 1, .w = max_w, .h = 1 }, " ", t.fg_primary, bg);
+                a.ren.drawTextClipped(x + 1, 1, max_w - 2, prefix, t.fg_primary, bg, true, false);
+                const prefix_w: u16 = @intCast(prefix.len);
+                if (max_w > prefix_w + 2)
+                    a.ren.drawTextClipped(x + 1 + prefix_w, 1, max_w - prefix_w - 2, message, t.fg_primary, bg, false, false);
             }
         }
     }

@@ -7,6 +7,36 @@ const Value = @import("../nvim/msgpack.zig").Value;
 const Layout = @import("layout.zig").Layout;
 const settings = @import("widgets/settings.zig");
 
+fn ideMenuAt(relative_x: u16) ?u8 {
+    const ranges = [_][2]u16{ .{ 7, 12 }, .{ 13, 18 }, .{ 19, 29 }, .{ 30, 38 } };
+    for (ranges, 0..) |range, i| {
+        if (relative_x >= range[0] and relative_x < range[1]) return @intCast(i);
+    }
+    return null;
+}
+
+fn ideMenuAction(menu: u8, row: u16) ?[]const u8 {
+    const actions: []const []const u8 = switch (menu) {
+        0 => &[_][]const u8{ "new", "save", "close" },
+        1 => &[_][]const u8{ "undo", "redo", "cut", "copy", "paste", "find", "replace" },
+        2 => &[_][]const u8{ "select_all", "select_line" },
+        3 => &[_][]const u8{ "previous_buffer", "next_buffer", "close" },
+        else => return null,
+    };
+    return if (row < actions.len) actions[row] else null;
+}
+
+test "IDE menu hit targets and actions stay aligned" {
+    try std.testing.expectEqual(@as(?u8, 0), ideMenuAt(7));
+    try std.testing.expectEqual(@as(?u8, 1), ideMenuAt(15));
+    try std.testing.expectEqual(@as(?u8, 2), ideMenuAt(28));
+    try std.testing.expectEqual(@as(?u8, 3), ideMenuAt(37));
+    try std.testing.expect(ideMenuAt(12) == null);
+    try std.testing.expectEqualStrings("replace", ideMenuAction(1, 6).?);
+    try std.testing.expectEqualStrings("select_line", ideMenuAction(2, 1).?);
+    try std.testing.expect(ideMenuAction(2, 2) == null);
+}
+
 fn writeHandoffInit(path: []const u8, content: []const u8) void {
     const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600) catch return;
     defer _ = std.posix.system.close(fd);
@@ -21,6 +51,16 @@ fn writeHandoffInit(path: []const u8, content: []const u8) void {
             else => return,
         }
     }
+}
+
+fn ensureTerminalStarted(a: *App) !void {
+    if (a.terminal_started) return;
+    const commands = [_][]const u8{ "terminal", "startinsert" };
+    for (commands) |command| {
+        const params = [_]Value{.{ .string = command }};
+        try a.rpc_term.notify("nvim_command", &params);
+    }
+    a.terminal_started = true;
 }
 
 pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
@@ -174,6 +214,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1b[5~")) break :get_key "<PageUp>";
         if (std.mem.eql(u8, k.raw, "\x1b[6~")) break :get_key "<PageDown>";
         if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
+        if (std.mem.eql(u8, k.raw, "\x1b[23~")) break :get_key "<F11>";
         if (std.mem.eql(u8, k.raw, "\x1b[Z")) break :get_key "<S-Tab>";
         if (std.mem.eql(u8, k.raw, "\x09")) break :get_key "<Tab>";
         if (k.raw.len == 2 and k.raw[0] == 0x1b) {
@@ -347,39 +388,41 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             const vide_init_lua = @embedFile("../nvim/vide_init.lua");
             const handoff_buf = try a.allocator.alloc(u8, vide_init_lua.len + session_path.len + 512);
             defer a.allocator.free(handoff_buf);
-            const handoff_script = std.fmt.bufPrint(handoff_buf,
-                "-- vide handoff\n{s}\nvim.schedule(function()\n" ++
+            const handoff_script = std.fmt.bufPrint(handoff_buf, "-- vide handoff\n{s}\nvim.schedule(function()\n" ++
                 "  local function back() vim.cmd('silent! wa') vim.cmd('mksession! {s}') vim.cmd('qa') end\n" ++
-                "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true, desc='Return to vide'}})\nend)\n",
-                .{ vide_init_lua, session_path, zen_key }) catch vide_init_lua;
+                "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true, desc='Return to vide'}})\nend)\n", .{ vide_init_lua, session_path, zen_key }) catch vide_init_lua;
 
             writeHandoffInit(handoff_path, handoff_script);
 
             return error.ZenModeHandoff;
         } else {
             if (a.mode != .zen) {
+                a.prev_mode = a.mode;
                 a.mode = .zen;
-                a.prev_mode = .zen;
                 a.settings_widget.config.zen = true;
                 a.settings_widget.config.ide = false;
+                const new_mode = try a.settings_widget.allocator.dupe(u8, "zen");
                 a.settings_widget.allocator.free(a.settings_widget.config.mode);
-                a.settings_widget.config.mode = a.settings_widget.allocator.dupe(u8, "zen") catch a.settings_widget.config.mode;
+                a.settings_widget.config.mode = new_mode;
 
                 var cmd_p = [_]Value{.{ .string = "set laststatus=3" }};
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
                 cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
             } else {
-                a.mode = .normal;
-                a.prev_mode = .normal;
+                a.mode = a.prev_mode;
                 a.settings_widget.config.zen = false;
-                a.settings_widget.config.ide = false;
+                a.settings_widget.config.ide = a.mode == .ide;
+                const new_mode = try a.settings_widget.allocator.dupe(u8, @tagName(a.mode));
                 a.settings_widget.allocator.free(a.settings_widget.config.mode);
-                a.settings_widget.config.mode = a.settings_widget.allocator.dupe(u8, "normal") catch a.settings_widget.config.mode;
+                a.settings_widget.config.mode = new_mode;
 
                 var cmd_p = [_]Value{.{ .string = "set laststatus=3" }};
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
-                cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
+                cmd_p[0] = .{ .string = if (a.mode == .ide)
+                    "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = true; _G.vide_enable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)"
+                else
+                    "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
             }
             a.needs_resize = true;
@@ -398,6 +441,13 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     } else if (toggle_terminal_panel) {
         a.show_terminal_panel = !a.show_terminal_panel;
         if (a.show_terminal_panel) {
+            ensureTerminalStarted(a) catch |err| {
+                a.show_terminal_panel = false;
+                a.terminal_focus = false;
+                a.notify(.failure, "Unable to start terminal: {}", .{err});
+                a.updateLayoutTree();
+                return true;
+            };
             a.terminal_focus = true;
             a.sidebar_focus = false;
         } else {
@@ -407,23 +457,14 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         a.needs_resize = true;
         return true;
     } else if (new_file) {
-        var buf: [32]u8 = undefined;
-        const new_name = std.fmt.bufPrint(&buf, "File {d}", .{a.tabs.items.len + 1}) catch "File";
-        a.tabs.append(.{
-            .name = a.allocator.dupe(u8, new_name) catch "error",
-            .path = null,
-        }) catch {};
-        a.active_tab = if (a.tabs.items.len > 0) a.tabs.items.len - 1 else 0;
-        a.needs_resize = true;
-
-        const cmd_p = [1]Value{ .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('enew')" } };
+        const cmd_p = [1]Value{.{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('enew')" }};
         const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
         if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
         }
         return true;
     } else if (find_file) {
-        const cmd_p = [1]Value{ .{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('Telescope find_files')" } };
+        const cmd_p = [1]Value{.{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('Telescope find_files')" }};
         const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
         if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
@@ -431,14 +472,10 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         return true;
     } else if (quit) {
         a.quit_requested = true;
-        const cmd_p = [1]Value{ .{ .string = "vim.cmd('qa!')" } };
+        const cmd_p = [1]Value{.{ .string = "vim.cmd('qa!')" }};
         const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
-        if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-        }
-        if (a.rpc_term.call("nvim_exec_lua", &params) catch null) |res| {
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-        }
+        a.rpc.notify("nvim_exec_lua", &params) catch {};
+        a.rpc_term.notify("nvim_exec_lua", &params) catch {};
         return true;
     }
 
@@ -461,19 +498,10 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 return true;
             }
             if (std.mem.eql(u8, nk, "<C-s>")) {
-                const old_cfg = a.settings_widget.config;
+                var old_cfg = a.settings_widget.config;
                 if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
                     a.settings_widget.config = new_cfg;
-                    a.settings_widget.allocator.free(old_cfg.theme);
-                    a.settings_widget.allocator.free(old_cfg.line_numbers);
-                    a.settings_widget.allocator.free(old_cfg.split_separator);
-                    a.settings_widget.allocator.free(old_cfg.mode);
-                    a.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
-                    a.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
-                    a.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
-                    a.settings_widget.allocator.free(old_cfg.keybindings.new_file);
-                    a.settings_widget.allocator.free(old_cfg.keybindings.find_file);
-                    a.settings_widget.allocator.free(old_cfg.keybindings.quit);
+                    old_cfg.deinit(a.settings_widget.allocator);
                 } else |_| {}
                 a.settings_widget.refreshThemes(a.rpc);
                 a.settings_widget.refreshPlugins();
@@ -488,7 +516,11 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             }
             if (a.show_file_tree and a.activity_bar.active_idx == 0) {
                 const was_dir = if (a.explorer.selected_idx) |idx| (idx < a.explorer.items.items.len and a.explorer.items.items[idx].is_dir) else false;
-                if (a.explorer.handleKey(nk, a.rpc) catch false) {
+                const handled = a.explorer.handleKey(nk, a.rpc) catch |err| blk: {
+                    a.notify(.failure, "File operation failed: {}", .{err});
+                    break :blk false;
+                };
+                if (handled) {
                     if ((std.mem.eql(u8, nk, "<Enter>") or std.mem.eql(u8, nk, "o")) and !was_dir) {
                         a.sidebar_focus = false;
                     }
@@ -511,7 +543,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     return true;
                 }
             } else if (a.show_file_tree and a.activity_bar.active_idx == 2) {
-                if (a.git_panel.handleKey(nk) catch false) {
+                const handled = a.git_panel.handleKey(nk) catch |err| blk: {
+                    a.notify(.failure, "Git action failed: {}", .{err});
+                    std.log.err("Git panel key action failed: {}", .{err});
+                    break :blk false;
+                };
+                if (handled) {
                     a.needs_resize = true;
                     return true;
                 }
@@ -544,7 +581,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 }
             }
             if (a.show_file_tree and a.activity_bar.active_idx == 2 and a.git_panel.is_focus_commit) {
-                if (a.git_panel.handleKey(nk) catch false) {
+                const handled = a.git_panel.handleKey(nk) catch |err| blk: {
+                    a.notify(.failure, "Git action failed: {}", .{err});
+                    std.log.err("Git commit action failed: {}", .{err});
+                    break :blk false;
+                };
+                if (handled) {
                     a.needs_resize = true;
                     return true;
                 }
@@ -563,6 +605,42 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
 pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     a.last_click_x = m.col;
     a.last_click_y = m.row;
+
+    // IDE status-bar menus expose familiar actions to mouse-only users.
+    if (a.ide_menu) |menu| {
+        if (m.action == .press) {
+            const counts = [_]u16{ 3, 7, 2, 3 };
+            const widths = [_]u16{ 18, 12, 16, 19 };
+            const status_xs = [_]u16{ 7, 13, 19, 30 };
+            const mh = counts[menu] + 2;
+            const mx = @min(layout.status_bar.x + status_xs[menu], a.ren.width -| widths[menu]);
+            const my = layout.status_bar.y -| mh;
+            if (m.col >= mx and m.col < mx + widths[menu] and m.row > my and m.row < my + mh - 1) {
+                const row = m.row - my - 1;
+                const action = ideMenuAction(menu, row) orelse return;
+                const code = try std.fmt.allocPrint(a.allocator, "_G.vide_ide_action('{s}')", .{action});
+                defer a.allocator.free(code);
+                const params = [_]Value{ .{ .string = code }, .{ .array = &[_]Value{} } };
+                a.rpc.notify("nvim_exec_lua", &params) catch |err| {
+                    a.notify(.failure, "IDE action failed: {}", .{err});
+                };
+                a.ide_menu = null;
+                a.needs_resize = true;
+                return;
+            }
+            a.ide_menu = null;
+            a.needs_resize = true;
+        }
+    }
+
+    if (a.mode == .ide and m.action == .press and m.row == layout.status_bar.y and layout.status_bar.w >= 48) {
+        const relative_x = m.col -| layout.status_bar.x;
+        if (ideMenuAt(relative_x)) |menu| {
+            a.ide_menu = menu;
+            a.needs_resize = true;
+            return;
+        }
+    }
 
     // Handle split menu click if open
     if (a.show_split_menu and m.action == .press) {
@@ -676,24 +754,6 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     }
                 }
             }
-        } else {
-            if (a.editor_wins.items.len > 1) {
-                for (a.editor_wins.items) |win| {
-                    if (win.width > 4 and win.height > 1) {
-                        const bx = layout.editor.x + win.col + win.width - 2;
-                        const by = layout.editor.y + win.row;
-                        if (m.col >= bx - 1 and m.col <= bx + 1 and m.row == by) {
-                            var params = try a.allocator.alloc(Value, 2);
-                            defer a.allocator.free(params);
-                            params[0] = .{ .integer = win.id };
-                            params[1] = .{ .bool = true };
-                            const res = try a.rpc.call("nvim_win_close", params);
-                            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-                            return;
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -778,6 +838,11 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         if (m.action == .press) {
             if (a.settings_widget.handleMouse(m.col, m.row, a.ren.width, a.ren.height)) {
                 a.needs_resize = true;
+                if (a.settings_widget.save_failed) {
+                    a.settings_widget.save_failed = false;
+                    a.notify(.failure, "Settings could not be saved; check path permissions and the Vide log.", .{});
+                    std.log.err("Unable to save settings at {s}", .{a.settings_widget.settings_path});
+                }
                 if (a.settings_widget.open_mason) {
                     a.settings_widget.open_mason = false;
                     a.settings_widget.is_open = false;
@@ -804,6 +869,25 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         return;
     }
 
+    if (a.mode == .zen and m.action == .press and layout.status_bar.h > 0 and
+        m.row == layout.status_bar.y and m.col < layout.status_bar.x + @min(layout.status_bar.w, 12))
+    {
+        var old_cfg = a.settings_widget.config;
+        if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
+            a.settings_widget.config = new_cfg;
+            old_cfg.deinit(a.settings_widget.allocator);
+        } else |_| {}
+        a.settings_widget.refreshThemes(a.rpc);
+        a.settings_widget.refreshPlugins();
+        a.settings_widget.active_tab = 0;
+        a.settings_widget.active_dropdown = .mode;
+        a.settings_widget.hover_dropdown_idx = 2;
+        a.settings_widget.dropdown_scroll_offset = 0;
+        a.settings_widget.is_open = true;
+        a.needs_resize = true;
+        return;
+    }
+
     if (a.mode != .zen) {
         if (m.action == .press) {
             if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 0 and m.button == .wheel_up) {
@@ -827,7 +911,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.needs_resize = true;
                 }
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 4 and m.button == .wheel_down) {
-                if (a.extension_shop.selected_idx < a.extension_shop.plugins.items.len - 1) {
+                if (a.extension_shop.plugins.items.len > 0 and a.extension_shop.selected_idx + 1 < a.extension_shop.plugins.items.len) {
                     a.extension_shop.selected_idx += 1;
                     if (a.extension_shop.selected_idx >= a.extension_shop.scroll_offset + 5) {
                         a.extension_shop.scroll_offset = a.extension_shop.selected_idx - 4;
@@ -875,27 +959,15 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
 
                         a.needs_resize = true;
                     } else if (m.button == .left) {
-                        if (a.explorer.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
-                            nvim_helpers.openFile(a.rpc, a.allocator, path) catch {};
+                        const selected_path = a.explorer.handleMouse(m.col, m.row, layout.file_tree) catch |err| blk: {
+                            a.notify(.failure, "Explorer action failed: {}", .{err});
+                            break :blk null;
+                        };
+                        if (selected_path) |path| {
+                            nvim_helpers.openFile(a.rpc, a.allocator, path) catch |err| {
+                                a.notify(.failure, "Unable to open file: {}", .{err});
+                            };
                             a.sidebar_focus = false;
-                            if (a.tabs.items.len == 0) {
-                                const basename = std.fs.path.basename(path);
-                                a.tabs.append(.{
-                                    .name = a.allocator.dupe(u8, basename) catch "error",
-                                    .path = a.allocator.dupe(u8, path) catch null,
-                                }) catch {};
-                                a.active_tab = 0;
-                            } else if (a.active_tab < a.tabs.items.len) {
-                                const basename = std.fs.path.basename(path);
-                                if (a.allocator.dupe(u8, basename) catch null) |new_name| {
-                                    a.allocator.free(a.tabs.items[a.active_tab].name);
-                                    a.tabs.items[a.active_tab].name = new_name;
-                                }
-                                if (a.allocator.dupe(u8, path) catch null) |new_path| {
-                                    if (a.tabs.items[a.active_tab].path) |p| a.allocator.free(p);
-                                    a.tabs.items[a.active_tab].path = new_path;
-                                }
-                            }
                         }
                     }
                     a.needs_resize = true;
@@ -912,32 +984,21 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     }
                     a.needs_resize = true;
                 } else if (a.activity_bar.active_idx == 2) {
-                    if (a.git_panel.handleMouse(m.col, m.row, layout.file_tree) catch null) |path| {
+                    const git_path = a.git_panel.handleMouse(m.col, m.row, layout.file_tree) catch |err| blk: {
+                        a.notify(.failure, "Git action failed: {}", .{err});
+                        std.log.err("Git panel mouse action failed: {}", .{err});
+                        break :blk null;
+                    };
+                    if (git_path) |path| {
                         if (std.mem.startsWith(u8, path, "__CMD__:GitWidget")) {
                             a.git_detailed_widget.is_open = true;
                             a.git_detailed_widget.refresh();
                             a.needs_resize = true;
                         } else {
-                            nvim_helpers.openFile(a.rpc, a.allocator, path) catch {};
+                            nvim_helpers.openFile(a.rpc, a.allocator, path) catch |err| {
+                                a.notify(.failure, "Unable to open file: {}", .{err});
+                            };
                             a.sidebar_focus = false;
-                            if (a.tabs.items.len == 0) {
-                                const basename = std.fs.path.basename(path);
-                                a.tabs.append(.{
-                                    .name = a.allocator.dupe(u8, basename) catch "error",
-                                    .path = a.allocator.dupe(u8, path) catch null,
-                                }) catch {};
-                                a.active_tab = 0;
-                            } else if (a.active_tab < a.tabs.items.len) {
-                                const basename = std.fs.path.basename(path);
-                                if (a.allocator.dupe(u8, basename) catch null) |new_name| {
-                                    a.allocator.free(a.tabs.items[a.active_tab].name);
-                                    a.tabs.items[a.active_tab].name = new_name;
-                                }
-                                if (a.allocator.dupe(u8, path) catch null) |new_path| {
-                                    if (a.tabs.items[a.active_tab].path) |p| a.allocator.free(p);
-                                    a.tabs.items[a.active_tab].path = new_path;
-                                }
-                            }
                         }
                     }
                     a.needs_resize = true;
@@ -960,14 +1021,18 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 }
             } else if (layout.panel != null and m.row == layout.panel.?.y) {
                 const px = m.col - layout.panel.?.x;
-                if (px >= 2 and px <= 12) {
+                const panel_w = layout.panel.?.w;
+                const terminal_clicked = if (panel_w >= 40) px >= 2 and px <= 12 else if (panel_w >= 23) px >= 1 and px <= 6 else px < panel_w / 3;
+                const debug_clicked = if (panel_w >= 40) px >= 13 and px <= 28 else if (panel_w >= 23) px >= 8 and px <= 14 else px >= panel_w / 3 and px < (panel_w * 2) / 3;
+                const output_clicked = if (panel_w >= 40) px >= 30 and px <= 38 else if (panel_w >= 23) px >= 17 and px <= 22 else px >= (panel_w * 2) / 3;
+                if (terminal_clicked) {
                     a.active_terminal_panel_idx = 0;
                     a.terminal_focus = true;
-                } else if (px >= 13 and px <= 28) {
+                } else if (debug_clicked) {
                     a.active_terminal_panel_idx = 1;
                     a.terminal_focus = false;
                     a.debug_console.refresh(a.rpc);
-                } else if (px >= 30 and px <= 38) {
+                } else if (output_clicked) {
                     a.active_terminal_panel_idx = 2;
                     a.terminal_focus = false;
                     a.output_panel.refresh(a.rpc);
@@ -990,19 +1055,10 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     }
                     if (prev_idx != new_idx) a.needs_resize = true;
                     if (new_idx == 99) {
-                        const old_cfg = a.settings_widget.config;
+                        var old_cfg = a.settings_widget.config;
                         if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
                             a.settings_widget.config = new_cfg;
-                            a.settings_widget.allocator.free(old_cfg.theme);
-                            a.settings_widget.allocator.free(old_cfg.line_numbers);
-                            a.settings_widget.allocator.free(old_cfg.split_separator);
-                            a.settings_widget.allocator.free(old_cfg.mode);
-                            a.settings_widget.allocator.free(old_cfg.keybindings.toggle_terminal);
-                            a.settings_widget.allocator.free(old_cfg.keybindings.toggle_explorer);
-                            a.settings_widget.allocator.free(old_cfg.keybindings.toggle_zen);
-                            a.settings_widget.allocator.free(old_cfg.keybindings.new_file);
-                            a.settings_widget.allocator.free(old_cfg.keybindings.find_file);
-                            a.settings_widget.allocator.free(old_cfg.keybindings.quit);
+                            old_cfg.deinit(a.settings_widget.allocator);
                         } else |_| {}
                         a.settings_widget.refreshThemes(a.rpc);
                         a.settings_widget.refreshPlugins();
@@ -1019,9 +1075,31 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 }
 
                 // Handle status bar clicks
-                if (m.row == layout.status_bar.y) {
+                if (layout.status_bar.w > 0 and m.row == layout.status_bar.y) {
+                    const mode_end = layout.status_bar.x + @min(layout.status_bar.w, 12);
+                    if (m.col >= layout.status_bar.x and m.col < mode_end) {
+                        var old_cfg = a.settings_widget.config;
+                        if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
+                            a.settings_widget.config = new_cfg;
+                            old_cfg.deinit(a.settings_widget.allocator);
+                        } else |_| {}
+                        a.settings_widget.refreshThemes(a.rpc);
+                        a.settings_widget.refreshPlugins();
+                        a.settings_widget.active_tab = 0;
+                        a.settings_widget.active_dropdown = .mode;
+                        a.settings_widget.hover_dropdown_idx = switch (a.mode) {
+                            .normal => 0,
+                            .ide => 1,
+                            .zen => 2,
+                        };
+                        a.settings_widget.dropdown_scroll_offset = 0;
+                        a.settings_widget.is_open = true;
+                        a.needs_resize = true;
+                        return;
+                    }
                     const help_btn_len: u16 = if (a.settings_widget.config.nerd_fonts) 8 else 10;
-                    if (m.col >= layout.status_bar.x + layout.status_bar.w - help_btn_len) {
+                    const help_start = layout.status_bar.x + layout.status_bar.w -| help_btn_len;
+                    if (m.col >= help_start and m.col < layout.status_bar.x + layout.status_bar.w) {
                         var cmd_p = try a.allocator.alloc(Value, 1);
                         cmd_p[0] = .{ .string = "HelpMenu" };
                         a.rpc.notify("nvim_command", cmd_p) catch {};
@@ -1034,59 +1112,34 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 if (m.row == layout.tab_bar.y) {
                     var tx: u16 = layout.tab_bar.x;
                     var clicked_tab = false;
-                    for (a.tabs.items, 0..) |tab, i| {
-                        const tab_w: u16 = @as(u16, @intCast(tab.name.len)) + 8;
+                    const tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
+                    for (a.tabs.items) |tab| {
+                        if (tx >= tab_end) break;
+                        const desired_w: u16 = @intCast(@min(tab.name.len + 8, std.math.maxInt(u16)));
+                        const tab_w = @min(desired_w, tab_end - tx);
+                        if (tab_w < 4) break;
                         if (m.col >= tx and m.col < tx + tab_w) {
-                            if (m.col >= tx + tab_w - 3 and m.col < tx + tab_w) {
-                                // Close tab
-                                if (a.tabs.items.len > 0) {
-                                    const removed = a.tabs.orderedRemove(i);
-                                    a.allocator.free(removed.name);
-                                    if (removed.path) |p| a.allocator.free(p);
-
-                                    // Actually close the buffer in Neovim
-                                    var cmd_p = try a.allocator.alloc(Value, 1);
-                                    cmd_p[0] = .{ .string = "bdelete" };
-                                    a.rpc.notify("nvim_command", cmd_p) catch {};
-                                    a.allocator.free(cmd_p);
-
-                                    if (a.tabs.items.len == 0) {
-                                        a.active_tab = 0;
-                                        var alpha_p = try a.allocator.alloc(Value, 1);
-                                        alpha_p[0] = .{ .string = "lua _G.vide_alpha_start()" };
-                                        a.rpc.notify("nvim_command", alpha_p) catch {};
-                                        a.allocator.free(alpha_p);
-                                    } else if (a.active_tab >= a.tabs.items.len) {
-                                        a.active_tab = a.tabs.items.len - 1;
-                                    }
-                                    a.needs_resize = true;
-                                }
+                            if (m.col >= tx + tab_w - 2 and m.col < tx + tab_w) {
+                                const delete_params = [_]Value{
+                                    .{ .integer = tab.bufnr },
+                                    .{ .map = &[_]Value.KV{} },
+                                };
+                                // Neovim owns buffer lifecycle and will reject
+                                // deletion of unsaved buffers. The subsequent
+                                // vide_buffers notification updates the tab UI.
+                                a.rpc.notify("nvim_buf_delete", &delete_params) catch {};
                             } else {
-                                a.active_tab = i;
-                                a.needs_resize = true; // force redraw
-                                if (a.tabs.items[i].path) |p| {
-                                    nvim_helpers.openFile(a.rpc, a.allocator, p) catch {};
-                                }
+                                const select_params = [_]Value{.{ .integer = tab.bufnr }};
+                                a.rpc.notify("nvim_set_current_buf", &select_params) catch {};
                             }
                             clicked_tab = true;
                             break;
                         }
                         tx += tab_w;
                     }
-                    if (!clicked_tab and m.col == tx + 1) {
-                        // New tab
-                        var buf: [32]u8 = undefined;
-                        const new_name = try std.fmt.bufPrint(&buf, "File {d}", .{a.tabs.items.len + 1});
-                        try a.tabs.append(.{
-                            .name = try a.allocator.dupe(u8, new_name),
-                            .path = null,
-                        });
-                        a.active_tab = a.tabs.items.len - 1;
-                        a.needs_resize = true;
-                        var cmd_p = try a.allocator.alloc(Value, 1);
-                        cmd_p[0] = .{ .string = "enew" };
-                        a.rpc.notify("nvim_command", cmd_p) catch {};
-                        a.allocator.free(cmd_p);
+                    if (!clicked_tab and tx + 1 < tab_end and m.col == tx + 1) {
+                        const cmd_p = [_]Value{.{ .string = "enew" }};
+                        a.rpc.notify("nvim_command", &cmd_p) catch {};
                     }
                 }
             }

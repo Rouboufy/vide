@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
+      - name: Run tests
+        run: |
+          mkdir -p .zig-cache/global .zig-cache/local
+          ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-cache/global \
+          ZIG_LOCAL_CACHE_DIR=$PWD/.zig-cache/local \
+          zig build test
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
+      - name: Build native release binaries
+        run: |
+          mkdir -p dist
+          mkdir -p .zig-cache/global .zig-cache/local
+          build_asset() {
+            target=$1
+            asset=$2
+            prefix="$RUNNER_TEMP/$asset"
+            ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-cache/global \
+            ZIG_LOCAL_CACHE_DIR=$PWD/.zig-cache/local \
+              zig build -Dtarget="$target" -Doptimize=ReleaseFast \
+                -Dversion="${GITHUB_REF_NAME#v}" --prefix "$prefix"
+            cp "$prefix/bin/vide" "dist/$asset"
+            tar -C "$prefix/bin" -czf "dist/$asset.tar.gz" vide
+          }
+          build_asset x86_64-linux-musl vide-linux-x86_64
+          build_asset aarch64-linux-musl vide-linux-aarch64
+          build_asset x86_64-macos vide-macos-x86_64
+          build_asset aarch64-macos vide-macos-aarch64
+      - name: Build AppImage
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" COMMIT_SHA="$GITHUB_SHA" bash build_appimage.sh
+          tests/appimage_smoke.sh Vide.AppDir
+          if ls Vide-*.AppImage >/dev/null 2>&1; then
+            mv Vide-*.AppImage Vide-*.AppImage.sha256 dist/
+          fi
+      - name: Generate checksums
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+          generate_release_notes: true

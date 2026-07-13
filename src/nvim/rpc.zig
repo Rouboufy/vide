@@ -18,8 +18,12 @@ pub const RpcClient = struct {
             .process = process,
             .allocator = allocator,
             .io = io,
-            .reader = .{ .fd = process.stdout.handle },
+            .reader = FdReader.init(process.stdout.handle, allocator),
         };
+    }
+
+    pub fn deinit(self: *RpcClient) void {
+        self.reader.deinit();
     }
 
     pub fn nextId(self: *RpcClient) u32 {
@@ -40,8 +44,11 @@ pub const RpcClient = struct {
             };
             const rc_poll = posix.poll(&fds, -1) catch 0;
             if (rc_poll > 0) {
+                // Drain exactly one complete inbound frame to prevent a full
+                // stdout pipe from deadlocking Neovim while we write. Do not
+                // drain-until-empty here: callbacks may enqueue more traffic.
                 if ((fds[1].revents & (posix.POLL.IN | posix.POLL.ERR | posix.POLL.HUP)) != 0) {
-                    _ = self.processNotifications() catch {};
+                    if (!try self.processOneMessage()) return error.Closed;
                 }
                 if ((fds[0].revents & posix.POLL.OUT) != 0) {
                     const rc = posix.system.write(self.process.stdin.handle, data[total_written..].ptr, data.len - total_written);
@@ -110,7 +117,9 @@ pub const RpcClient = struct {
             if (rc_poll == 0) break; // timeout, give up
             const rc = posix.system.write(self.process.stdin.handle, data[written..].ptr, data.len - written);
             switch (posix.errno(rc)) {
-                .SUCCESS => { if (rc > 0) written += @as(usize, @intCast(rc)) else break; },
+                .SUCCESS => {
+                    if (rc > 0) written += @as(usize, @intCast(rc)) else break;
+                },
                 .INTR => continue,
                 .AGAIN => continue,
                 else => break,
@@ -123,7 +132,9 @@ pub const RpcClient = struct {
         const max_retries = 100;
         while (true) {
             // Read with retry on WouldBlock (non-blocking stdout fd)
+            const checkpoint = self.reader.head;
             const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
+                self.reader.head = checkpoint;
                 if (err == error.WouldBlock) {
                     if (retries >= max_retries) {
                         return error.Timeout;
@@ -136,6 +147,8 @@ pub const RpcClient = struct {
                 }
                 return err;
             };
+            self.reader.discardConsumed();
+            retries = 0;
             errdefer msgpack.freeValue(msg, self.allocator);
             if (msg != .array or msg.array.len < 3) {
                 return error.InvalidRpcMessage;
@@ -159,7 +172,9 @@ pub const RpcClient = struct {
                         return error.NvimRpcError;
                     }
                     const result = msg.array[3];
-                    for (msg.array, 0..) |item, idx| { if (idx != 3) msgpack.freeValue(item, self.allocator); }
+                    for (msg.array, 0..) |item, idx| {
+                        if (idx != 3) msgpack.freeValue(item, self.allocator);
+                    }
                     self.allocator.free(msg.array);
                     return result;
                 } else {
@@ -172,40 +187,43 @@ pub const RpcClient = struct {
                     try cb(self.on_notification_ctx, method, params);
                 }
                 msgpack.freeValue(msg, self.allocator);
-            } else { msgpack.freeValue(msg, self.allocator); }
+            } else {
+                msgpack.freeValue(msg, self.allocator);
+            }
         }
     }
 
     pub fn processNotifications(self: *RpcClient) !bool {
         var msg_count: usize = 0;
         while (self.hasData() and msg_count < 250) : (msg_count += 1) {
-            const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
-                if (err == error.EndOfStream) return false;
-                // WouldBlock: partial message in buffer; will complete next cycle
-                if (err == error.WouldBlock) break;
-                return err;
-            };
-            defer msgpack.freeValue(msg, self.allocator);
-            if (msg == .array and msg.array.len >= 3) {
-                const msg_type = msg.array[0].integer;
-                if (msg_type == 0 and msg.array.len >= 4) {
-                    // nvim sent a request to us — reply with an error to unblock it
-                    const req_id = msg.array[1].integer;
-                    self.replyError(req_id);
-                } else if (msg_type == 2) {
-                    if (self.on_notification) |cb| {
-                        const method = msg.array[1].string;
-                        const params = msg.array[2];
-                        try cb(self.on_notification_ctx, method, params);
-                    }
-                }
+            if (!try self.processOneMessage()) return false;
+        }
+        return true;
+    }
+
+    fn processOneMessage(self: *RpcClient) !bool {
+        const checkpoint = self.reader.head;
+        const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
+            self.reader.head = checkpoint;
+            if (err == error.EndOfStream) return false;
+            return err;
+        };
+        self.reader.discardConsumed();
+        defer msgpack.freeValue(msg, self.allocator);
+        if (msg != .array or msg.array.len < 3 or msg.array[0] != .integer) return true;
+        const msg_type = msg.array[0].integer;
+        if (msg_type == 0 and msg.array.len >= 4 and msg.array[1] == .integer) {
+            self.replyError(msg.array[1].integer);
+        } else if (msg_type == 2 and msg.array[1] == .string) {
+            if (self.on_notification) |cb| {
+                try cb(self.on_notification_ctx, msg.array[1].string, msg.array[2]);
             }
         }
         return true;
     }
 
     pub fn hasData(self: *RpcClient) bool {
-        if (self.reader.head < self.reader.tail) return true;
+        if (self.reader.head < self.reader.buf.items.len) return true;
         var fds = [1]posix.pollfd{.{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 }};
         const rc = posix.poll(&fds, 0) catch return false;
         return rc > 0 and (fds[0].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR)) != 0;
@@ -214,21 +232,39 @@ pub const RpcClient = struct {
 
 pub const FdReader = struct {
     fd: posix.fd_t,
-    buf: [8192]u8 = undefined,
+    buf: std.array_list.Managed(u8),
     head: usize = 0,
-    tail: usize = 0,
+
+    pub fn init(fd: posix.fd_t, allocator: std.mem.Allocator) FdReader {
+        return .{ .fd = fd, .buf = std.array_list.Managed(u8).init(allocator) };
+    }
+
+    pub fn deinit(self: *FdReader) void {
+        self.buf.deinit();
+    }
+
+    pub fn discardConsumed(self: *FdReader) void {
+        if (self.head == 0) return;
+        if (self.head >= self.buf.items.len) {
+            self.buf.clearRetainingCapacity();
+            self.head = 0;
+            return;
+        }
+        const remaining = self.buf.items.len - self.head;
+        std.mem.copyForwards(u8, self.buf.items[0..remaining], self.buf.items[self.head..]);
+        self.buf.shrinkRetainingCapacity(remaining);
+        self.head = 0;
+    }
 
     fn fill(self: *FdReader) !void {
-        if (self.head < self.tail) return;
-        self.head = 0;
-        self.tail = 0;
+        var temp: [8192]u8 = undefined;
         while (true) {
-            const rc = posix.system.read(self.fd, &self.buf, self.buf.len);
+            const rc = posix.system.read(self.fd, &temp, temp.len);
             const err = posix.errno(rc);
             switch (err) {
                 .SUCCESS => {
                     if (rc == 0) return error.EndOfStream;
-                    self.tail = @as(usize, @intCast(rc));
+                    try self.buf.appendSlice(temp[0..@as(usize, @intCast(rc))]);
                     return;
                 },
                 .INTR => continue,
@@ -247,26 +283,26 @@ pub const FdReader = struct {
     }
 
     pub fn takeByte(self: *FdReader) !u8 {
-        if (self.head >= self.tail) try self.fill();
-        const b = self.buf[self.head];
+        if (self.head >= self.buf.items.len) try self.fill();
+        const b = self.buf.items[self.head];
         self.head += 1;
         return b;
     }
-    
+
     pub fn takeInt(self: *FdReader, comptime T: type, endian: std.builtin.Endian) !T {
         var buf_int: [@sizeOf(T)]u8 = undefined;
         try self.readSliceAll(&buf_int);
         return std.mem.readInt(T, &buf_int, endian);
     }
-    
+
     pub fn readSliceAll(self: *FdReader, dest: []u8) !void {
         var total_read: usize = 0;
         while (total_read < dest.len) {
-            if (self.head >= self.tail) try self.fill();
-            const available = self.tail - self.head;
+            if (self.head >= self.buf.items.len) try self.fill();
+            const available = self.buf.items.len - self.head;
             const needed = dest.len - total_read;
             const to_copy = @min(available, needed);
-            @memcpy(dest[total_read .. total_read + to_copy], self.buf[self.head .. self.head + to_copy]);
+            @memcpy(dest[total_read .. total_read + to_copy], self.buf.items[self.head .. self.head + to_copy]);
             self.head += to_copy;
             total_read += to_copy;
         }

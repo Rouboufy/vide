@@ -1,0 +1,36 @@
+    │ SOURCE CONTROL     [ More ] │  [No Name]    x  +                                                        |     -
+  E │  unknown                   │                         Warning: Plugins are disabled for this recovery session.
+    │  Message (Enter to commit)  │                         VIDE
+    │─────────────────────────────│
+  S │                             │              Terminal-native editor and IDE
+    │                             │
+    │                             │              Ctrl+N   New file
+▋ G │                             │              Ctrl+F   Find files
+    │                             │              Ctrl+E   Toggle explorer
+    │                             │              Ctrl+T   Toggle terminal
+  A │                             │              F11      Zen / previous mode
+    │                             │
+    │                             │              Plugins are offline for this session.
+  X │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+  * │                             │[Scratch] [-]                                                      1,0-1          All
+    │                             │
+  NORMAL     * main  [No Name]                                                                Focus: Sidebar   [?] Help

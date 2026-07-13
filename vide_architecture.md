@@ -1,105 +1,143 @@
-# Vide: Deep-Dive Architecture & Internal Documentation
+# VIDE architecture
 
-This document provides a rigorous, code-level explanation of how **Vide** operates. Vide is a custom Neovim frontend written in **Zig**, which constructs a VSCode-like Terminal User Interface (TUI) inside a standard terminal emulator while seamlessly proxying edits to headless Neovim instances.
+This document describes the current implementation. Product behavior and
+platform goals are defined in `PROJECT.md`.
 
----
+## Process model
 
-## 1. Core Philosophy & Design
+`src/main.zig` initializes the real terminal, renderer, isolated environment,
+and a self-pipe for resize signals. A session creates an editor Neovim process
+and a lightweight terminal frontend process. Both are embedded through
+stdin/stdout pipes and receive `NVIM_APPNAME=vide` plus `--clean`. The terminal
+frontend loads only `terminal_init.lua`; its shell buffer is created lazily on
+first panel activation.
 
-Vide is completely detached from `ncurses` or standard TUI frameworks. It manages the terminal directly via ANSI escape codes and raw `ioctl` syscalls.
+The main loop polls terminal input, both RPC streams, and the resize pipe. It
+then applies Neovim notifications to application state, calculates layout,
+draws a frame, and flushes changed cells.
 
-To create the illusion of a split-pane IDE without interfering with the user's primary Neovim buffer list (avoiding the mess of tracking `:terminal` buffers inside the editor), Vide spawns **two distinct Neovim processes**:
-1. **Editor Instance**: Handles the actual code, LSP, Telescope, and syntax highlighting.
-2. **Terminal Instance**: Runs solely to provide an embedded shell (like the bottom panel in VSCode).
+## Component boundaries
 
-Vide acts as a visual multiplexer: it reads the UI grids from both Neovim instances via Msgpack-RPC, composites them with its own native Zig UI widgets (Sidebars, Tab bars), and flushes the combined frame to the screen.
+### Zig frontend
 
----
+The Zig executable owns process lifecycle, the outer terminal, input decoding,
+layout, native widgets, and final rendering. `src/main.zig` wires the
+subsystems together; `src/tui/app.zig` holds runtime UI state;
+`src/tui/events.zig` routes actions; and `src/tui/views.zig` performs
+composition. Widgets may request editor operations through the RPC clients,
+but they do not read or mutate Neovim's internal state directly.
 
-## 2. Directory Structure & Modular Breakdown
+### Neovim processes and MessagePack-RPC
 
-Following the recent architectural refactoring, the codebase is cleanly separated by domain:
+`src/nvim/process.zig` is the child-process boundary. The two Neovim children
+communicate only through their embedded stdin/stdout channels. The editor
+process loads `vide_init.lua` and owns editing and plugin behavior. The
+integrated-terminal process loads `terminal_init.lua`; it intentionally avoids
+the editor plugin stack. `msgpack.zig`, `rpc.zig`, and `ui_protocol.zig` form
+the protocol boundary between those children and the Zig application.
 
-### `src/main.zig`
-The orchestration core (now ~470 lines).
-- Sets up non-blocking pipes, initializes the `App` state, spawns the Neovim child processes, and enters the `poll()` event loop.
-- Delegates to the event router when terminal input arrives and to the view router when the screen needs repainting.
+### Lua editor runtime
 
-### `src/tui/app.zig`
-The centralized global state manager.
-- Contains the `App` struct which holds pointers to the `Renderer`, the `RpcClient` instances, and all instantiated widgets (`Explorer`, `SettingsWidget`, `GitPanel`, etc.).
-- Maintains critical UI tracking variables such as `mode` (`.ide` vs `.zen`), `terminal_panel_height`, `file_tree_width`, and the currently active tab.
-- Contains the `UiState` struct, which is the internal representation of the Neovim grid.
+The Lua files under `src/nvim/` are embedded into the executable at build time.
+They configure Neovim options, mappings, IDE-mode behavior, plugins, and the
+dashboard. Lua may notify Zig through RPC commands, but native layout and
+terminal rendering remain Zig responsibilities. User plugins execute inside
+the isolated editor Neovim process, not inside the Zig frontend.
 
-### `src/tui/renderer.zig`
-The low-level drawing engine.
-- Maintains two massive arrays of `Cell` structs: a `back_buffer` (what is currently on the physical screen) and a `front_buffer` (what we want to draw this frame).
-- Exposes `drawRect`, `drawText`, and `setCell`.
-- In `flush()`, it iterates over every cell. If a cell in the front buffer differs from the back buffer, it outputs the exact ANSI escape sequence to move the cursor (`\x1b[{y};{x}H`) and paint the new character and colors (`\x1b[38;2;R;G;Bm`). This double-buffering ensures zero screen tearing.
+### Python extension-shop helper
 
-### `src/tui/events.zig`
-The input router.
-- `handleKey`: Checks if an open modal widget (like `SettingsWidget`) consumes the key. If not, it checks global hotkeys (like toggling Zen mode). If unhandled, it forwards the key via RPC to the focused Neovim instance.
-- `handleMouse`: Maps raw `(x, y)` terminal coordinates to layout blocks. Determines if the user is dragging the sidebar border, clicking a file in the tree, closing a tab, or scrolling a terminal buffer.
+`src/nvim/store_search.py` is the only Python runtime component. Zig extracts
+the embedded script into the Vide data directory and invokes it as a child
+process for extension search, installation, removal, and downloads. It is not
+part of rendering or editor RPC. Its stdout is a data interface consumed by
+the extension-shop widget; failures must be reported as extension-shop errors
+rather than terminating the render loop.
 
-### `src/tui/views.zig`
-The layout compositor.
-- `drawWorkspace()`: Computes the screen real estate (`Layout.compute`). It loops over the Editor grid and copies it to the top-right. It loops over the Terminal grid and copies it to the bottom panel. Finally, it overlays the native Zig widgets (Activity Bar, Status Bar) on top.
+## RPC and rendering
 
-### `src/nvim/`
-The Neovim abstraction layer.
-- `process.zig`: Handles `std.process.Child` to spawn `vim --embed`.
-- `msgpack.zig`: A custom Msgpack parser that decodes Neovim's binary RPC protocol into Zig `Value` unions.
-- `rpc.zig`: The asynchronous client that reads msgpack packets, tracks request IDs, and fires the `on_notification` callback.
-- `ui_protocol.zig`: The state machine that interprets Neovim's UI events (like `grid_line`, `grid_scroll`, `grid_cursor_goto`) and applies them to the local `Grid` object.
-- `helpers.zig`: Utility wrappers for common RPC calls (e.g., `openFile` sends `vim.cmd('edit ...')`).
+`src/nvim/msgpack.zig` encodes and decodes the MessagePack types used by
+Neovim. `src/nvim/rpc.zig` implements requests, responses, and notifications.
+RPC stdout remains blocking after readiness polling so a decoder always
+finishes one complete frame; collection and payload sizes are bounded.
 
----
+`src/nvim/ui_protocol.zig` consumes `ext_linegrid`, `ext_multigrid`, and
+highlight events. `src/tui/views.zig` composites those grids with native VIDE
+widgets. `src/tui/renderer.zig` stores current and previous cell buffers and
+emits changed cells using VT escape sequences.
 
-## 3. The Lifecycle of a Keystroke
+Native modal widgets derive their drawing and mouse geometry from
+`src/tui/widgets/primitives.zig`. That module owns centered modal rectangles,
+content and close-button hit targets, border/background/shadow rendering, and
+scroll clamping. Widgets should extend these primitives instead of introducing
+new independent geometry calculations.
 
-To understand how Vide operates, consider what happens when the user presses `a` to enter Insert Mode:
+## State ownership
 
-1. **Input Parsing (`input.zig`)**: The host terminal receives the raw byte `0x61`. `input.zig` parses this and returns an `Event{ .key = { .raw = "a" } }`.
-2. **Event Routing (`events.zig`)**: The `poll()` loop passes the event to `handleKey()`. No widget claims the key, and it's not a Vide-specific shortcut.
-3. **RPC Transmission (`helpers.zig`)**: Vide constructs a Msgpack array `["nvim_input", ["a"]]` and writes it to the standard input pipe of the Editor Neovim instance.
-4. **Neovim Processing**: Headless Neovim receives the input, switches to Insert Mode, and realizes the UI grid has changed.
-5. **RPC Reception (`ui_protocol.zig`)**: Neovim sends a `redraw` notification over standard output. Vide's `rpc.zig` parses the msgpack and triggers `handleRedraw()`. 
-6. **Grid Mutation**: Vide processes the `grid_line` events, updating the `Cell` data in its local `UiState.grid`. It also receives a `mode_info_set` event to change the cursor shape.
-7. **View Render (`views.zig`)**: Because the state changed, Vide triggers `views.drawWorkspace()`, which copies the updated grid to the `Renderer` front buffer.
-8. **Flush (`renderer.zig`)**: `renderer.flush()` diffs the buffers and sends the minimal ANSI string (e.g., `\x1b[10;5H\x1b[38;2;...ma`) to the host terminal to render the letter 'a' at the cursor position.
+Neovim is authoritative for buffers, windows, cursor position, text, undo,
+diagnostics, and plugins. It sends buffer-list notifications to VIDE, which
+uses them to render and interact with the native tab strip.
 
----
+Zig is authoritative for interface mode, widget visibility, focus, panel
+dimensions, native settings dialogs, and mouse hit testing.
 
-## 4. The Native Widget Ecosystem
+Settings are persisted under VIDE's application data directory. Legacy boolean
+mode fields remain readable, but `mode` (`normal`, `ide`, or `zen`) is the
+canonical value.
 
-Vide includes several native Zig widgets that overlay the Neovim editor.
+## Storage ownership
 
-- **Activity Bar (`activity_bar.zig`)**: The vertical icon strip on the far left. Clicking icons switches the `active_idx`, which determines which panel populates the File Tree area.
-- **Explorer (`explorer.zig`)**: A recursive directory parser. It uses `std.fs.IterableDir` to build a visual tree of the current working directory. Clicking a file triggers `nvim_helpers.openFile()`.
-- **Git Panel (`git_panel.zig`)**: Spawns asynchronous `git status` commands via `std.process.Child` to parse unstaged/staged files, providing a visual git diff tree.
-- **Search Panel (`search_panel.zig`)**: Acts as a bridge. When invoked, it triggers Telescope inside Neovim (`__CMD__:Telescope live_grep`).
-- **Settings (`settings.zig`)**: A graphical JSON editor. When the user modifies options (like `theme` or `line_numbers`) and hits `[ Save ]`, the struct is serialized to `~/.local/share/vide/settings.json`, and immediate `nvim_command` RPC calls are fired to hot-reload the settings in the running Neovim instances.
+Vide derives its directories from the XDG environment and never intentionally
+uses the user's standard Neovim application name:
 
----
+- Config (`$XDG_CONFIG_HOME/vide`, normally `~/.config/vide`) is reserved for
+  user-facing configuration.
+- Data (`$XDG_DATA_HOME/vide`, normally `~/.local/share/vide`) contains
+  `settings.json`, the extracted extension helper, plugin data, session handoff
+  files, and `vide.log` in the current implementation.
+- State (`$XDG_STATE_HOME/vide`, normally `~/.local/state/vide`) is available
+  to Neovim for state that follows its `NVIM_APPNAME=vide` paths.
+- Cache (`$XDG_CACHE_HOME/vide`, normally `~/.cache/vide`) contains disposable
+  Neovim and frontend caches.
 
-## 5. Theme & Color Synchronization
+The lifecycle scripts preserve all four locations during normal updates. The
+uninstaller treats the binary, settings, plugins/data, logs, sessions, and
+cache as separate removal choices.
 
-Vide aims to make the native Zig UI components (like the Explorer sidebar) visually blend with the Neovim colorscheme.
+## Failure boundaries
 
-1. **`src/nvim/vide_init.lua`**: This script is automatically sourced into Neovim on boot. It registers an `autocmd` hooked to the `ColorScheme` event.
-2. **Color Extraction**: When the user types `:colorscheme tokyonight`, the lua script extracts the active RGB hex values from core highlight groups (like `Normal`, `WinSeparator`, `StatusLine`).
-3. **RPC Notification**: Lua executes `vim.rpcnotify(ui_chan, "vide_theme_changed", { bg_editor = "#1a1b26", ... })`.
-4. **Theme Ingestion (`theme.zig`)**: Vide intercepts this custom notification, parses the hex codes, and injects them into the `App.active_theme` struct. The next frame drawn by `views.zig` will automatically use these new colors for all sidebars, borders, and tabs.
+Terminal initialization and Neovim startup are session-critical failures and
+must restore terminal state before returning an error. Malformed RPC payloads
+must not escape their size limits. Widget refreshes, optional plugins, Git
+commands, and extension-helper operations are recoverable boundaries: they
+should retain diagnostics and expose an actionable UI message while allowing
+the main render loop to continue.
 
----
+## Mode transitions
 
-## 6. Edge Cases, Protections, and Robustness
+- Normal and IDE use the same native layout.
+- IDE installs modeless keymaps and an autocmd that returns editable buffers to
+  Insert mode.
+- Leaving IDE removes those mappings and autocmds.
+- Zen assigns the renderer viewport to Neovim except for one persistent mode
+  row and suppresses every other native widget.
+- Leaving Zen restores the preceding Normal or IDE mode.
 
-Vide has specific logic to handle complex terminal edge-cases safely:
+An optional native handoff remains available for experimentation, but embedded
+Zen is the default and supported path.
 
-- **Saturating Arithmetic for Layouts**: When resizing terminal panels (`terminal_panel_height +|= 1`), Vide uses Zig's saturating addition. This prevents `u16` wrapping if a user holds down a resize shortcut.
-- **Underflow Defenses**: The code explicitly checks `if (layout.panel.?.y > 0)` before evaluating `m.row == layout.panel.?.y - 1` during mouse clicks, preventing crashes on extreme terminal window sizes.
-- **Bracketed Paste Throttling (`input.zig`)**: If the user pastes a massive log file into the terminal, Vide reads the `\x1b[200~` escape sequence. It enforces a strict `2 * 1024 * 1024` (2MB) memory limit on the incoming buffer string to prevent OOM panics before wrapping it in an `nvim_paste` RPC payload.
-- **Background Mode Enforcement**: Some Neovim themes rely heavily on `vim.o.background` (light vs dark). Vide explicitly detects themes like `catppuccin-latte` and injects `set background=light` before applying the colorscheme to prevent inverted rendering issues.
-- **Msgpack Bounds Validation**: During `grid_scroll` parsing in `ui_protocol.zig`, Vide asserts that the scrolling `top`, `bot`, `left`, and `right` parameters strictly adhere to the internal grid dimensions to prevent segfaults from corrupted RPC streams.
+## Terminal input
+
+The terminal layer enables raw mode, alternate-screen rendering, bracketed
+paste, and SGR mouse reporting. The input parser distinguishes control keys,
+CSI/SS3 sequences, UTF-8 input, paste payloads, mouse actions, and resize
+events. Native widgets receive events first when focused; remaining editor and
+terminal events are translated to Neovim input APIs.
+
+## Portability
+
+Runtime code uses Zig's POSIX and `std.Io` abstractions rather than direct Linux
+syscalls. Linux x86-64 and ARM64 musl builds are cross-compiled in CI. macOS
+and WSL remain explicit end-to-end verification work in `TODO.md`; sharing a
+POSIX implementation does not by itself establish platform support. Terminal
+capabilities still vary, so Nerd Font symbols are opt-in and responsive layouts
+avoid relying on a fixed viewport.

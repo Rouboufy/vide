@@ -72,12 +72,12 @@ fn readByteTimeout(fd: posix.fd_t, timeout: i32) !?u8 {
         .events = posix.POLL.IN,
         .revents = 0,
     }};
-    
+
     const rc = posix.poll(&fds, timeout) catch |err| switch (err) {
         error.SystemResources, error.Unexpected => return err,
         else => return null,
     };
-    
+
     if (rc > 0 and (fds[0].revents & posix.POLL.IN) != 0) {
         const read_bytes = try posix.read(fd, &buf);
         if (read_bytes > 0) return buf[0];
@@ -87,44 +87,63 @@ fn readByteTimeout(fd: posix.fd_t, timeout: i32) !?u8 {
 
 fn parseSgrMouse(seq: []const u8) ?MouseEvent {
     if (!std.mem.startsWith(u8, seq, "\x1b[<")) return null;
-    
+
     const last_char = seq[seq.len - 1];
     if (last_char != 'M' and last_char != 'm') return null;
-    
+
     const params_str = seq[3 .. seq.len - 1];
     var iter = std.mem.splitScalar(u8, params_str, ';');
-    
+
     const b_str = iter.next() orelse return null;
     const c_str = iter.next() orelse return null;
     const r_str = iter.next() orelse return null;
-    
+
     const b = std.fmt.parseInt(u8, b_str, 10) catch return null;
     const col = std.fmt.parseInt(u16, c_str, 10) catch return null;
     const row = std.fmt.parseInt(u16, r_str, 10) catch return null;
-    
+
     // std.debug.print("\r\n[SGR] b={d} col={d} row={d} last={c}\r\n", .{b, col, row, last_char});
-        
+
     const action: MouseAction = if (last_char == 'M')
         (if ((b & 32) != 0) .move else .press)
     else
         .release;
-        
-    const button: MouseButton = if ((b & 64) != 0) (
-        if ((b & 3) == 0) .wheel_up else .wheel_down
-    ) else switch (b & 3) {
+
+    const button: MouseButton = if ((b & 64) != 0) (if ((b & 3) == 0) .wheel_up else .wheel_down) else switch (b & 3) {
         0 => .left,
         1 => .middle,
         2 => .right,
         3 => .none,
         else => .none,
     };
-    
+
     return MouseEvent{
         .col = if (col > 0) col - 1 else 0,
         .row = if (row > 0) row - 1 else 0,
         .button = button,
         .action = action,
     };
+}
+
+test "SGR mouse press uses zero-based coordinates" {
+    const event = parseSgrMouse("\x1b[<0;12;7M") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(MouseButton.left, event.button);
+    try std.testing.expectEqual(MouseAction.press, event.action);
+    try std.testing.expectEqual(@as(u16, 11), event.col);
+    try std.testing.expectEqual(@as(u16, 6), event.row);
+}
+
+test "SGR mouse handles wheel and release events" {
+    const wheel = parseSgrMouse("\x1b[<65;1;1M") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(MouseButton.wheel_down, wheel.button);
+    const released = parseSgrMouse("\x1b[<0;2;3m") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(MouseAction.release, released.action);
+}
+
+test "SGR mouse rejects malformed and overflowing input" {
+    try std.testing.expect(parseSgrMouse("\x1b[<0;12M") == null);
+    try std.testing.expect(parseSgrMouse("\x1b[<0;999999;1M") == null);
+    try std.testing.expect(parseSgrMouse("not-mouse") == null);
 }
 
 pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !Event {
@@ -240,7 +259,7 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
     // Normal printable key (or unparsed char)
     seq_buf[0] = first_byte;
     var len: usize = 1;
-    
+
     // Batch more characters if available!
     while (len < seq_buf.len) {
         if (tryReadByte(fd) catch null) |b| {

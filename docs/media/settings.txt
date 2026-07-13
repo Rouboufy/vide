@@ -1,0 +1,36 @@
+    │ EXPLORER             +F +D  │  [No Name]    x  +                                                        |     -
+▋ E │ > cache                     │                         Warning: Plugins are disabled for this recovery session.
+    │ > config                    │                         VIDE
+    │ > data                      │
+  S │ > state                     │              Terminal-native editor and IDE
+    │                             │
+    │               ╭─ Vide Settings v0.2.0-dev ──────────────────────────────────────────────── x ╮
+  G │               │                   │                                                          │
+    │               │▋┃ General         │ General Settings                                         │
+    │               │                   │                                                          │
+  A │               │   Appearance      │ [x] System Clipboard                                     │
+    │               │                   │                                                          │
+    │               │   Editor          │ Mode:  [ normal v ]                                      │
+  X │               │                   │                                                          │
+    │               │   Plugins         │ [x] Autocomplete                                         │
+    │               │                   │                                                          │
+    │               │   Keybindings     │ [x] Autoindent                                           │
+    │               │                   │                                                          │
+    │               │   About           │                                                          │
+    │               │                   │ Normal: full Vim-style editing and modes                 │
+    │               │                   │ IDE: familiar modeless text editing                      │
+    │               │                   │ Zen: fullscreen editor; F11 returns here                 │
+    │               │                   │                                                          │
+    │               │                   │                                                          │
+    │               │                   │                                                          │
+    │               │                   │                                                          │
+    │               │                   │                                                          │
+    │               │                   │                                                          │
+    │               │                   │                                          Save & Close    │
+    │               ╰──────────────────────────────────────────────────────────────────────────────╯
+    │
+    │                             │~
+    │                             │~
+  * │                             │[Scratch] [-]                                                      1,0-1          All
+    │                             │
+  NORMAL     * main  [No Name]                                                                 Focus: Editor   [?] Help

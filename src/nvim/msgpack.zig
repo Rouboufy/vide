@@ -129,7 +129,11 @@ pub const DecodeError = error{
     InvalidMarker,
     OutOfMemory,
     WouldBlock,
+    MessageTooLarge,
 };
+
+const max_container_len = 1_000_000;
+const max_blob_len = 64 * 1024 * 1024;
 
 pub fn decode(reader: anytype, allocator: std.mem.Allocator) DecodeError!Value {
     const byte = try reader.takeByte();
@@ -229,6 +233,7 @@ pub fn decode(reader: anytype, allocator: std.mem.Allocator) DecodeError!Value {
 }
 
 fn decodeStr(reader: anytype, allocator: std.mem.Allocator, len: usize) DecodeError!Value {
+    if (len > max_blob_len) return error.MessageTooLarge;
     const buf = try allocator.alloc(u8, len);
     errdefer allocator.free(buf);
     try reader.readSliceAll(buf);
@@ -236,6 +241,7 @@ fn decodeStr(reader: anytype, allocator: std.mem.Allocator, len: usize) DecodeEr
 }
 
 fn decodeArray(reader: anytype, allocator: std.mem.Allocator, len: usize) DecodeError!Value {
+    if (len > max_container_len) return error.MessageTooLarge;
     const arr = try allocator.alloc(Value, len);
     errdefer allocator.free(arr);
     var i: usize = 0;
@@ -251,6 +257,7 @@ fn decodeArray(reader: anytype, allocator: std.mem.Allocator, len: usize) Decode
 }
 
 fn decodeMap(reader: anytype, allocator: std.mem.Allocator, len: usize) DecodeError!Value {
+    if (len > max_container_len) return error.MessageTooLarge;
     const map = try allocator.alloc(Value.KV, len);
     errdefer allocator.free(map);
     var i: usize = 0;
@@ -270,6 +277,7 @@ fn decodeMap(reader: anytype, allocator: std.mem.Allocator, len: usize) DecodeEr
 }
 
 fn decodeExt(reader: anytype, allocator: std.mem.Allocator, len: usize) DecodeError!Value {
+    if (len > max_blob_len) return error.MessageTooLarge;
     const type_byte = try reader.takeByte();
     const data = try allocator.alloc(u8, len);
     errdefer allocator.free(data);
@@ -334,3 +342,21 @@ test "msgpack roundtrip" {
     try std.testing.expect(decoded.array[3] == .nil);
 }
 
+test "msgpack rejects unreasonable declared payload sizes" {
+    // str32 with a length one byte larger than the decoder's safety limit.
+    const encoded = [_]u8{ 0xdb, 0x04, 0x00, 0x00, 0x01 };
+    var reader = std.Io.Reader.fixed(&encoded);
+    try std.testing.expectError(error.MessageTooLarge, decode(&reader, std.testing.allocator));
+}
+
+test "msgpack signed integer boundaries roundtrip" {
+    const values = [_]i64{ -33, -128, -129, -32768, -32769, std.math.minInt(i32), std.math.minInt(i64), 127, 128, 65536 };
+    for (values) |expected| {
+        var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer buf.deinit();
+        try encode(&buf.writer, .{ .integer = expected });
+        var reader = std.Io.Reader.fixed(buf.written());
+        const decoded = try decode(&reader, std.testing.allocator);
+        try std.testing.expectEqual(expected, decoded.integer);
+    }
+}

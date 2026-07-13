@@ -48,3 +48,31 @@ pub const Theme = struct {
         }
     }
 };
+
+fn linearChannel(value: u8) f32 {
+    const channel = @as(f32, @floatFromInt(value)) / 255.0;
+    return if (channel <= 0.04045) channel / 12.92 else std.math.pow(f32, (channel + 0.055) / 1.055, 2.4);
+}
+
+fn luminance(color: Color) f32 {
+    return switch (color) {
+        .rgb => |rgb| 0.2126 * linearChannel(rgb.r) + 0.7152 * linearChannel(rgb.g) + 0.0722 * linearChannel(rgb.b),
+        else => 0,
+    };
+}
+
+fn contrastRatio(a: Color, b: Color) f32 {
+    const a_lum = luminance(a);
+    const b_lum = luminance(b);
+    const lighter = @max(a_lum, b_lum);
+    const darker = @min(a_lum, b_lum);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
+test "default theme keeps text and focus contrast readable" {
+    const t = Theme{};
+    try std.testing.expect(contrastRatio(t.fg_primary, t.bg_editor) >= 7.0);
+    try std.testing.expect(contrastRatio(t.fg_secondary, t.bg_sidebar) >= 4.0);
+    try std.testing.expect(contrastRatio(t.fg_statusbar, t.bg_statusbar) >= 4.0);
+    try std.testing.expect(contrastRatio(t.fg_accent, t.bg_accent) >= 7.0);
+}

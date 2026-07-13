@@ -4,3 +4,6 @@ tmp/
 .env
 .env.*
 *.AppImage
+*.log
+__pycache__/
+*.py[cod]

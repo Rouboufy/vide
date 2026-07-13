@@ -1,0 +1,36 @@
+
+                         VIDE
+
+              Terminal-native editor and IDE
+
+              Ctrl+N   New file
+              Ctrl+F   Find files
+              Ctrl+E   Toggle explorer
+              Ctrl+T   Toggle terminal
+              F11      Zen / previous mode
+
+              Plugins are offline for this session.
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+~
+[Scratch] [-]                                                                                         1,0-1          All
+
+  ZEN

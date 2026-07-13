@@ -1,0 +1,36 @@
+    │  EXTENSION SHOP             │  [No Name]    x  +                                                        |     -
+  E │                             │                         Warning: Plugins are disabled for this recovery session.
+    │ Select category:            │                         VIDE
+    │                             │
+  S │▋ All Plugins                │              Terminal-native editor and IDE
+    │                             │
+    │  Themes & Colors            │              Ctrl+N   New file
+  G │                             │              Ctrl+F   Find files
+    │  LSP Configuration          │              Ctrl+E   Toggle explorer
+    │                             │              Ctrl+T   Toggle terminal
+  A │  Git Integrations           │              F11      Zen / previous mode
+    │                             │
+    │  AI & LLM Assistants        │              Plugins are offline for this session.
+▋ X │                             │~
+    │  Treesitter Parsers         │~
+    │                             │~
+    │  Telescope Extensions       │~
+    │                             │~
+    │  Installed Plugins          │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+  * │                             │[Scratch] [-]                                                      1,0-1          All
+    │                             │
+  NORMAL     * main  [No Name]                                                                Focus: Sidebar   [?] Help

@@ -3,6 +3,7 @@ const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const Rect = @import("../layout.zig").Rect;
 const input = @import("../input.zig");
+const primitives = @import("primitives.zig");
 
 pub const StorePlugin = struct {
     name: []const u8,
@@ -65,7 +66,7 @@ pub const Category = enum(u8) {
 pub const ExtensionShop = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
-    home: []const u8,
+    data_dir: []const u8,
     plugins: std.array_list.Managed(StorePlugin),
     search_query: std.array_list.Managed(u8),
     selected_idx: usize = 0,
@@ -82,11 +83,11 @@ pub const ExtensionShop = struct {
     detail_plugin_idx: usize = 0,
     edit_config_path: ?[]const u8 = null,
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, home: []const u8) ExtensionShop {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, data_dir: []const u8) ExtensionShop {
         return .{
             .allocator = allocator,
             .io = io,
-            .home = home,
+            .data_dir = data_dir,
             .plugins = std.array_list.Managed(StorePlugin).init(allocator),
             .search_query = std.array_list.Managed(u8).init(allocator),
             .selected_category = .all,
@@ -127,8 +128,8 @@ pub const ExtensionShop = struct {
 
     pub fn triggerSearch(self: *ExtensionShop) !void {
         self.clearPlugins();
-        
-        const script_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.home, ".local", "share", "vide", "store_search.py" });
+
+        const script_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "store_search.py" });
         defer self.allocator.free(script_path);
 
         const query = self.search_query.items;
@@ -236,46 +237,23 @@ pub const ExtensionShop = struct {
     }
 
     pub fn drawPopup(self: *ExtensionShop, rend: *renderer.Renderer, screen_w: u16, screen_h: u16, colors: anytype) void {
-        const w: u16 = @min(80, screen_w -| 10);
-        const h: u16 = @min(24, screen_h -| 10);
-        const x: u16 = (screen_w -| w) / 2;
-        const y: u16 = (screen_h -| h) / 2;
-
-        // Drop shadow
-        for (y + 1..y + h + 1) |by| {
-            for (x + 2..x + w + 2) |bx| {
-                if (bx >= screen_w or by >= screen_h) continue;
-                rend.drawText(@intCast(bx), @intCast(by), " ", colors.bg_editor, colors.bg_editor, false, false);
-            }
+        const modal = primitives.Modal.centered(screen_w, screen_h, 80, 24, 5);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const w = modal.rect.w;
+        const h = modal.rect.h;
+        if (!primitives.usable(modal, 45, 15)) {
+            primitives.drawSizeWarning(rend, "Extension Shop", colors.fg_primary, colors.bg_sidebar);
+            return;
         }
-
-        // Background
-        for (y..y + h) |by| {
-            for (x..x + w) |bx| {
-                rend.drawText(@intCast(bx), @intCast(by), " ", colors.fg_primary, colors.bg_sidebar, false, false);
-            }
-        }
-
-        // Border
-        for (x..x + w) |bx| {
-            rend.drawText(@intCast(bx), y, "─", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(@intCast(bx), y + h - 1, "─", colors.border_color, colors.bg_sidebar, false, false);
-        }
-        for (y..y + h) |by| {
-            rend.drawText(x, @intCast(by), "│", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(x + w - 1, @intCast(by), "│", colors.border_color, colors.bg_sidebar, false, false);
-        }
-        rend.drawText(x, y, "╭", colors.border_color, colors.bg_sidebar, false, false);
-        rend.drawText(x + w - 1, y, "╮", colors.border_color, colors.bg_sidebar, false, false);
-        rend.drawText(x, y + h - 1, "╰", colors.border_color, colors.bg_sidebar, false, false);
-        rend.drawText(x + w - 1, y + h - 1, "╯", colors.border_color, colors.bg_sidebar, false, false);
+        primitives.drawModalFrame(rend, modal, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
 
         // Draw close cross (Top Right)
         rend.drawText(x + w - 4, y, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
 
         // Title
         var title_buf: [128]u8 = undefined;
-        const title = std.fmt.bufPrint(&title_buf, " Explore: {s} ", .{ self.selected_category.label() }) catch " Explore Plugins ";
+        const title = std.fmt.bufPrint(&title_buf, " Explore: {s} ", .{self.selected_category.label()}) catch " Explore Plugins ";
         rend.drawText(x + 2, y, title, colors.fg_accent, colors.bg_sidebar, true, false);
 
         // Check for active message
@@ -291,7 +269,7 @@ pub const ExtensionShop = struct {
         // Search Input Box inside popup
         const input_y = y + 2;
         rend.drawText(x + 2, input_y, "🔍", colors.fg_secondary, colors.bg_sidebar, false, false);
-        
+
         var sx = x + 5;
         const box_w = if (w > 10) w - 10 else 10;
         while (sx < x + 5 + box_w) : (sx += 1) {
@@ -300,7 +278,7 @@ pub const ExtensionShop = struct {
 
         if (self.search_query.items.len > 0) {
             const display_query = self.search_query.items;
-            const truncated = if (display_query.len > box_w) display_query[display_query.len - box_w..] else display_query;
+            const truncated = if (display_query.len > box_w) display_query[display_query.len - box_w ..] else display_query;
             rend.drawText(x + 5, input_y, truncated, colors.fg_primary, colors.bg_sidebar, false, false);
         } else if (!self.is_searching) {
             rend.drawText(x + 5, input_y, "Search in category...", colors.fg_secondary, colors.bg_sidebar, false, false);
@@ -323,7 +301,8 @@ pub const ExtensionShop = struct {
 
         const list_start_y = y + 5;
         if (self.plugins.items.len == 0) {
-            rend.drawText(x + 2, list_start_y, "No plugins found.", colors.fg_secondary, colors.bg_sidebar, false, false);
+            const message = if (self.search_query.items.len > 0) "No extensions match this search." else "Extension catalog unavailable. Retry search or check the Vide log.";
+            rend.drawTextClipped(x + 2, list_start_y, w -| 4, message, colors.fg_secondary, colors.bg_sidebar, false, false);
             return;
         }
 
@@ -372,36 +351,12 @@ pub const ExtensionShop = struct {
         }
 
         if (self.is_detail_open) {
-            const dw: u16 = @min(60, screen_w -| 14);
-            const dh: u16 = @min(14, screen_h -| 14);
-            const dx: u16 = (screen_w -| dw) / 2;
-            const dy: u16 = (screen_h -| dh) / 2;
-
-            // Drop shadow
-            for (dy + 1..dy + dh + 1) |by| {
-                for (dx + 2..dx + dw + 2) |bx| {
-                    if (bx >= screen_w or by >= screen_h) continue;
-                    rend.drawText(@intCast(bx), @intCast(by), " ", colors.bg_editor, colors.bg_editor, false, false);
-                }
-            }
-
-            // Background & Border
-            for (dy..dy + dh) |by| {
-                for (dx..dx + dw) |bx| {
-                    if (bx >= screen_w or by >= screen_h) continue;
-                    if (by == dy or by == dy + dh - 1) {
-                        rend.drawText(@intCast(bx), @intCast(by), "─", colors.border_color, colors.bg_sidebar, false, false);
-                    } else if (bx == dx or bx == dx + dw - 1) {
-                        rend.drawText(@intCast(bx), @intCast(by), "│", colors.border_color, colors.bg_sidebar, false, false);
-                    } else {
-                        rend.drawText(@intCast(bx), @intCast(by), " ", colors.fg_primary, colors.bg_sidebar, false, false);
-                    }
-                }
-            }
-            rend.drawText(dx, dy, "╭", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(dx + dw - 1, dy, "╮", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(dx, dy + dh - 1, "╰", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(dx + dw - 1, dy + dh - 1, "╯", colors.border_color, colors.bg_sidebar, false, false);
+            const detail = primitives.Modal.centered(screen_w, screen_h, 60, 14, 7);
+            const dx = detail.rect.x;
+            const dy = detail.rect.y;
+            const dw = detail.rect.w;
+            const dh = detail.rect.h;
+            primitives.drawModalFrame(rend, detail, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
 
             // Red cross (Top Right)
             rend.drawText(dx + dw - 4, dy, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
@@ -410,7 +365,7 @@ pub const ExtensionShop = struct {
 
             // Title (Plugin Name)
             var title_buf_det: [128]u8 = undefined;
-            const title_det = std.fmt.bufPrint(&title_buf_det, " {s} ", .{ p.name }) catch " Plugin Details ";
+            const title_det = std.fmt.bufPrint(&title_buf_det, " {s} ", .{p.name}) catch " Plugin Details ";
             rend.drawText(dx + 2, dy, title_det, colors.fg_accent, colors.bg_sidebar, true, false);
 
             // Full Name / Repo
@@ -481,46 +436,18 @@ pub const ExtensionShop = struct {
         }
 
         if (self.show_reload_confirm) {
-            const pw: u16 = 36;
-            const ph: u16 = 7;
-            const px: u16 = (screen_w -| pw) / 2;
-            const py: u16 = (screen_h -| ph) / 2;
-
-            // Draw drop shadow
-            for (py + 1..py + ph + 1) |by| {
-                for (px + 2..px + pw + 2) |bx| {
-                    if (bx >= screen_w or by >= screen_h) continue;
-                    rend.drawText(@intCast(bx), @intCast(by), " ", colors.bg_editor, colors.bg_editor, false, false);
-                }
-            }
-
-            // Background & Border
-            for (py..py + ph) |by| {
-                for (px..px + pw) |bx| {
-                    if (bx >= screen_w or by >= screen_h) continue;
-                    if (by == py or by == py + ph - 1) {
-                        rend.drawText(@intCast(bx), @intCast(by), "─", colors.border_color, colors.bg_sidebar, false, false);
-                    } else if (bx == px or bx == px + pw - 1) {
-                        rend.drawText(@intCast(bx), @intCast(by), "│", colors.border_color, colors.bg_sidebar, false, false);
-                    } else {
-                        rend.drawText(@intCast(bx), @intCast(by), " ", colors.fg_primary, colors.bg_sidebar, false, false);
-                    }
-                }
-            }
-            rend.drawText(px, py, "╭", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(px + pw - 1, py, "╮", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(px, py + ph - 1, "╰", colors.border_color, colors.bg_sidebar, false, false);
-            rend.drawText(px + pw - 1, py + ph - 1, "╯", colors.border_color, colors.bg_sidebar, false, false);
+            const confirm = primitives.Modal.centered(screen_w, screen_h, 36, 7, 0);
+            const px = confirm.rect.x;
+            const py = confirm.rect.y;
+            primitives.drawModalFrame(rend, confirm, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
 
             rend.drawText(px + 2, py + 1, " Reload Required ", colors.fg_accent, colors.bg_sidebar, true, false);
             rend.drawText(px + 4, py + 3, "Reload Vide to apply changes?", colors.fg_primary, colors.bg_sidebar, false, false);
 
             // Yes / No buttons
-            const yes_fg = if (self.reload_confirm_yes) colors.fg_accent else colors.fg_secondary;
-            const no_fg = if (!self.reload_confirm_yes) colors.fg_accent else colors.fg_secondary;
-
-            rend.drawText(px + 8, py + 5, "[ Yes ]", yes_fg, colors.bg_sidebar, self.reload_confirm_yes, false);
-            rend.drawText(px + 20, py + 5, "[ No ]", no_fg, colors.bg_sidebar, !self.reload_confirm_yes, false);
+            const palette = primitives.Palette{ .fg = colors.fg_secondary, .bg = colors.bg_sidebar, .accent_fg = colors.fg_primary, .accent_bg = colors.bg_accent, .muted_fg = colors.fg_secondary };
+            (primitives.Button{ .rect = .{ .x = px + 7, .y = py + 5, .w = 8, .h = 1 }, .state = if (self.reload_confirm_yes) .focused else .normal }).draw(rend, "Yes", palette);
+            (primitives.Button{ .rect = .{ .x = px + 19, .y = py + 5, .w = 8, .h = 1 }, .state = if (!self.reload_confirm_yes) .focused else .normal }).draw(rend, "No", palette);
         }
     }
 
@@ -675,21 +602,20 @@ pub const ExtensionShop = struct {
         if (!self.is_popup_open) return false;
 
         if (self.show_reload_confirm) {
-            const pw: u16 = 36;
-            const ph: u16 = 7;
-            const px: u16 = (screen_w -| pw) / 2;
-            const py: u16 = (screen_h -| ph) / 2;
+            const confirm = primitives.Modal.centered(screen_w, screen_h, 36, 7, 0);
+            const px = confirm.rect.x;
+            const py = confirm.rect.y;
 
             if (m.row == py + 5) {
-                if (m.col >= px + 8 and m.col < px + 15) {
+                if ((primitives.Button{ .rect = .{ .x = px + 7, .y = py + 5, .w = 8, .h = 1 } }).hit(m.col, m.row)) {
                     self.show_reload_confirm = false;
                     return error.ReloadApplication;
-                } else if (m.col >= px + 20 and m.col < px + 26) {
+                } else if ((primitives.Button{ .rect = .{ .x = px + 19, .y = py + 5, .w = 8, .h = 1 } }).hit(m.col, m.row)) {
                     self.show_reload_confirm = false;
                     return true;
                 }
             }
-            if (m.col < px or m.col >= px + pw or m.row < py or m.row >= py + ph) {
+            if (!confirm.contains(m.col, m.row)) {
                 self.show_reload_confirm = false;
                 return true;
             }
@@ -697,12 +623,13 @@ pub const ExtensionShop = struct {
         }
 
         if (self.is_detail_open) {
-            const dw = @min(60, screen_w -| 14);
-            const dh = @min(14, screen_h -| 14);
-            const dx = (screen_w -| dw) / 2;
-            const dy = (screen_h -| dh) / 2;
+            const detail = primitives.Modal.centered(screen_w, screen_h, 60, 14, 7);
+            const dx = detail.rect.x;
+            const dy = detail.rect.y;
+            const dw = detail.rect.w;
+            const dh = detail.rect.h;
 
-            if (m.row == dy and m.col >= dx + dw - 4 and m.col < dx + dw - 1) {
+            if (primitives.containsRect(detail.closeButton(), m.col, m.row)) {
                 self.is_detail_open = false;
                 return true;
             }
@@ -733,7 +660,7 @@ pub const ExtensionShop = struct {
                 }
             }
 
-            if (m.col < dx or m.col >= dx + dw or m.row < dy or m.row >= dy + dh) {
+            if (!detail.contains(m.col, m.row)) {
                 self.is_detail_open = false;
                 return true;
             }
@@ -741,17 +668,23 @@ pub const ExtensionShop = struct {
             return true;
         }
 
-        const w = @min(80, screen_w -| 10);
-        const h = @min(24, screen_h -| 10);
-        const x = (screen_w -| w) / 2;
-        const y = (screen_h -| h) / 2;
+        const modal = primitives.Modal.centered(screen_w, screen_h, 80, 24, 5);
+        const x = modal.rect.x;
+        const y = modal.rect.y;
+        const w = modal.rect.w;
+        const h = modal.rect.h;
 
-        if (m.col < x or m.col >= x + w or m.row < y or m.row >= y + h) {
+        if (!primitives.usable(modal, 45, 15)) {
+            if (m.action == .press) self.is_popup_open = false;
+            return true;
+        }
+
+        if (!modal.contains(m.col, m.row)) {
             return false; // outside bounds -> will close popup
         }
 
         // Check if clicked the red cross
-        if (m.row == y and m.col >= x + w - 4 and m.col < x + w - 1) {
+        if (primitives.containsRect(modal.closeButton(), m.col, m.row)) {
             self.is_popup_open = false;
             return true;
         }
@@ -807,7 +740,7 @@ pub const ExtensionShop = struct {
     pub fn toggleInstall(self: *ExtensionShop, idx: usize) !void {
         if (self.plugins.items.len == 0 or idx >= self.plugins.items.len) return;
         const p = &self.plugins.items[idx];
-        const script_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.home, ".local", "share", "vide", "store_search.py" });
+        const script_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "store_search.py" });
         defer self.allocator.free(script_path);
 
         const action = if (p.installed) "remove" else "add";
@@ -834,7 +767,7 @@ pub const ExtensionShop = struct {
     }
 
     fn editConfig(self: *ExtensionShop, p: StorePlugin) !void {
-        const configs_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.home, ".local", "share", "vide", "plugin_configs" });
+        const configs_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "plugin_configs" });
         defer self.allocator.free(configs_dir);
 
         const file_name = try self.allocator.dupe(u8, p.full_name);
@@ -854,30 +787,24 @@ pub const ExtensionShop = struct {
 
         std.Io.Dir.cwd().createDir(self.io, configs_dir, .default_dir) catch {};
 
-        const file_z = try self.allocator.dupeSentinel(u8, config_file_path, 0);
-        defer self.allocator.free(file_z);
-
-        const fd = std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| blk: {
-            if (err == error.FileNotFound) {
-                const write_fd = try std.posix.openatZ(std.posix.AT.FDCWD, file_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-                defer _ = std.os.linux.close(write_fd);
-
+        if (std.Io.Dir.openFileAbsolute(self.io, config_file_path, .{})) |file_value| {
+            var file = file_value;
+            file.close(self.io);
+        } else |err| switch (err) {
+            error.FileNotFound => {
                 var template_buf: [512]u8 = undefined;
-                const template = std.fmt.bufPrint(&template_buf,
+                const template = try std.fmt.bufPrint(
+                    &template_buf,
                     "-- Configuration for {s}\n" ++
-                    "-- This file is loaded automatically by lazy.nvim\n\n" ++
-                    "return {{\n" ++
-                    "  -- Add your custom plugin configuration here\n" ++
-                    "}}\n",
-                    .{p.name}
-                ) catch "";
-
-                _ = std.os.linux.write(write_fd, template.ptr, template.len);
-            }
-            break :blk -1;
-        };
-        if (fd >= 0) {
-            _ = std.os.linux.close(fd);
+                        "-- This file is loaded automatically by lazy.nvim\n\n" ++
+                        "return {{\n" ++
+                        "  -- Add your custom plugin configuration here\n" ++
+                        "}}\n",
+                    .{p.name},
+                );
+                try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = config_file_path, .data = template });
+            },
+            else => return err,
         }
 
         self.edit_config_path = config_file_path;

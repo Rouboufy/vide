@@ -1,0 +1,47 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - assets/site.css
+      - packaging/vide.svg
+      - docs/**
+      - README.md
+      - TODO.md
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Stage static site
+        run: |
+          mkdir -p _site/assets _site/packaging _site/docs
+          cp index.html _site/
+          cp assets/site.css _site/assets/
+          cp packaging/vide.svg _site/packaging/
+          cp README.md TODO.md _site/
+          cp -R docs/. _site/docs/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

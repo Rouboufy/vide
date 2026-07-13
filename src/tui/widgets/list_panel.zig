@@ -36,7 +36,7 @@ pub fn ListPanel(comptime items: []const Item, comptime header_text: []const u8)
 
             var y: u16 = 2;
             for (items, 0..) |item, idx| {
-                if (rect.y + y >= rect.y + rect.h) break;
+                if (rect.y + y >= rect.y + rect.h -| 1) break;
 
                 const is_sep = std.mem.eql(u8, item.cmd, "");
                 const is_hover = (!is_sep and self.hover_idx != null and self.hover_idx.? == idx);
@@ -59,6 +59,10 @@ pub fn ListPanel(comptime items: []const Item, comptime header_text: []const u8)
                 }
 
                 y += 1;
+            }
+
+            if (rect.h >= 4 and rect.w > 4) {
+                rend.drawTextClipped(rect.x + 2, rect.y + rect.h - 1, rect.w -| 4, "↑↓ navigate · Enter open", colors.fg_secondary, colors.bg_sidebar, false, false);
             }
 
             // Draw right border

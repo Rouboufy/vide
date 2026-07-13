@@ -1,0 +1,36 @@
+    │ EXPLORER             +F +D  │  [No Name]    x  +                                                        |     -
+▋ E │ > cache                     │                         Warning: Plugins are disabled for this recovery session.
+    │ > config                    │                         VIDE
+    │ > data                      │
+  S │ > state                     │              Terminal-native editor and IDE
+    │                             │
+    │                             │              Ctrl+N   New file
+  G │                             │              Ctrl+F   Find files
+    │                             │              Ctrl+E   Toggle explorer
+    │                             │              Ctrl+T   Toggle terminal
+  A │                             │              F11      Zen / previous mode
+    │                             │
+    │                             │              Plugins are offline for this session.
+  X │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │[Scratch] [-]                                                      1,0-1          All
+    │                             │
+    │                             │━━ TERMINAL ━ DEBUG CONSOLE ━━ OUTPUT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │                             │[roubs@arch ~]$
+    │                             │
+    │                             │
+    │                             │
+    │                             │
+  * │                             │
+    │                             │                                                                   1,17          All
+  NORMAL     * main  [No Name]                                                               Focus: Terminal   [?] Help

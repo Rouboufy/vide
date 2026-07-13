@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Vide is a terminal-native editor and IDE with Normal, IDE, and Zen modes, powered by an isolated Neovim runtime.">
+  <title>Vide — a terminal-native editor and IDE</title>
+  <link rel="icon" href="packaging/vide.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="nav">
+    <a class="brand" href="#top"><img src="packaging/vide.svg" alt="" width="36" height="36">Vide</a>
+    <nav aria-label="Primary">
+      <a href="#modes">Modes</a><a href="#features">Features</a><a href="#install">Install</a><a href="#support">Support</a>
+      <a href="https://github.com/Rouboufy/vide">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div>
+        <p class="eyebrow">Terminal-native. Neovim-powered. No Electron.</p>
+        <h1>The IDE that hides a terminal.<br>The terminal that wears an IDE.</h1>
+        <p class="lede">Vide combines a native Zig interface, an isolated Neovim editor, mouse-driven tools, and three editing experiences in one lightweight terminal application.</p>
+        <div class="actions"><a class="button primary" href="#install">Install Vide</a><a class="button" href="https://github.com/Rouboufy/vide/releases">Releases</a></div>
+      </div>
+      <img class="hero-shot" src="docs/media/normal.svg" alt="Vide Normal mode with file explorer and editor dashboard">
+    </section>
+
+    <section id="modes">
+      <p class="eyebrow">One application, three workflows</p><h2>Choose the editing model that fits the moment</h2>
+      <div class="cards modes">
+        <article><img src="docs/media/normal.svg" alt="Vide Normal mode"><h3>Normal</h3><p>Full Vim-style modal editing surrounded by Vide’s explorer, Git, terminal, settings, and tooling panels.</p></article>
+        <article><img src="docs/media/ide.svg" alt="Vide IDE mode editing text"><h3>IDE</h3><p>Predictable modeless editing with desktop selection, clipboard, navigation, find, replace, and mouse-accessible menus.</p></article>
+        <article><img src="docs/media/zen.svg" alt="Vide Zen mode"><h3>Zen</h3><p>A distraction-free Neovim viewport. Leave Zen to return to the exact Normal or IDE mode used before it.</p></article>
+      </div>
+    </section>
+
+    <section id="features">
+      <p class="eyebrow">Shipped today</p><h2>Native workspace tools around a real editor</h2>
+      <div class="feature-grid">
+        <article><h3>Workspace navigation</h3><p>Keyboard and mouse file explorer, visual buffers, split controls, search actions, and project-aware language recommendations.</p></article>
+        <article><h3>Integrated terminal and Git</h3><p>Resizable terminal, debug and output panels, Git status, staging, commits, branch history, and detailed repository actions.</p></article>
+        <article><h3>Language tooling</h3><p>Bundled completion, Treesitter, LSP integration, Mason package management, diagnostics, formatting, and health reporting.</p></article>
+        <article><h3>Isolated by design</h3><p>Vide never loads or rewrites the user’s unrelated system-Neovim configuration. Settings, plugins, logs, and sessions have separate XDG paths.</p></article>
+      </div>
+      <div class="gallery">
+        <figure><img src="docs/media/settings.svg" alt="Vide native Settings panel"><figcaption>Native settings</figcaption></figure>
+        <figure><img src="docs/media/git.svg" alt="Vide source-control panel"><figcaption>Source control</figcaption></figure>
+        <figure><img src="docs/media/terminal.svg" alt="Vide integrated terminal panel"><figcaption>Integrated terminal</figcaption></figure>
+        <figure><img src="docs/media/extensions.svg" alt="Vide Extension Shop catalog"><figcaption>Extension Shop</figcaption></figure>
+        <figure><img src="docs/media/diagnostics.svg" alt="Vide editor showing a language-server diagnostic"><figcaption>Live diagnostics</figcaption></figure>
+        <figure><img src="docs/media/completion.svg" alt="Vide editor showing completion suggestions"><figcaption>Completion</figcaption></figure>
+      </div>
+      <p class="demo"><a href="docs/media/normal.cast">Play or download the short asciinema-compatible terminal recording</a></p>
+    </section>
+
+    <section id="install">
+      <p class="eyebrow">Installation</p><h2>Release binaries first, source builds when needed</h2>
+      <div class="install-box"><code>curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash</code></div>
+      <div class="cards compact">
+        <article><h3>Native releases</h3><p>Checksum-verified Linux x86-64/ARM64 and macOS Intel/Apple Silicon binaries. Requires Neovim 0.10+ on the host.</p></article>
+        <article><h3>Linux AppImage</h3><p>Bundles pinned Neovim 0.11.6, desktop metadata, and its own checksum. Runs without FUSE through extraction mode.</p></article>
+        <article><h3>Source</h3><p>Use <code>setup.sh --source</code> with the pinned Zig 0.16.0 toolchain for development or unsupported targets.</p></article>
+      </div>
+    </section>
+
+    <section id="support">
+      <p class="eyebrow">Platform status and limitations</p><h2>Clear about what has been verified</h2>
+      <div class="support-grid">
+        <div><h3>Observed</h3><ul><li>Arch Linux, Ubuntu 24.04, and Debian 12 AppImage startup</li><li>Alacritty, tmux 3.7b, and real OpenSSH PTY paths</li><li>Unicode, mouse, paste, resize, and terminal restoration regression suites</li></ul></div>
+        <div><h3>Still being verified</h3><ul><li>macOS and WSL end-to-end workflows</li><li>Additional GUI terminal observations</li><li>Some terminals cannot distinguish every Cmd, Ctrl, Alt, and Shift sequence</li></ul></div>
+      </div>
+      <p>Plugins that need ownership of the outer terminal UI may be incompatible. See <a href="docs/plugin-compatibility.md">plugin compatibility</a>, <a href="docs/terminal-compatibility.md">terminal compatibility</a>, the <a href="README.md">complete documentation</a>, and the <a href="TODO.md">public roadmap</a>.</p>
+    </section>
+  </main>
+
+  <footer><p>Vide is open source. Built with Zig and Neovim.</p><p><a href="https://github.com/Rouboufy/vide/issues">Report an issue</a> · <a href="https://github.com/Rouboufy/vide/releases">Release notes</a></p></footer>
+</body>
+</html>

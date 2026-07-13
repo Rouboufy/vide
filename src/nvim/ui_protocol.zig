@@ -4,6 +4,19 @@ const Value = msgpack.Value;
 const Color = @import("../tui/renderer.zig").Color;
 const Cell = @import("../tui/renderer.zig").Cell;
 
+fn gridCellRepeat(has_repeat: bool, repeat_value: i64) usize {
+    if (!has_repeat) return 1;
+    return if (repeat_value > 0) @as(usize, @intCast(repeat_value)) else 0;
+}
+
+fn values(items: []const Value) []Value {
+    return @constCast(items);
+}
+
+fn kvs(items: []const Value.KV) []Value.KV {
+    return @constCast(items);
+}
+
 pub const Highlight = struct {
     fg: Color = .none,
     bg: Color = .none,
@@ -34,7 +47,7 @@ pub const GridData = struct {
     pub fn resize(self: *GridData, new_w: u16, new_h: u16) !void {
         const size = @as(usize, new_w) * @as(usize, new_h);
         const new_cells = try self.allocator.alloc(Cell, size);
-        @memset(new_cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
+        @memset(new_cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
         const min_h = @min(self.height, new_h);
         const min_w = @min(self.width, new_w);
         for (0..min_h) |y| {
@@ -49,7 +62,7 @@ pub const GridData = struct {
     }
 
     pub fn clear(self: *GridData) void {
-        @memset(self.cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
+        @memset(self.cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
     }
 };
 
@@ -73,8 +86,6 @@ pub const UiState = struct {
     /// Which grid currently has the cursor
     cursor_grid: i64 = 1,
     allocator: std.mem.Allocator,
-    current_buf_path: ?[]const u8 = null,
-    buf_path_changed: bool = false,
     telescope_rects: [2]?@import("../tui/layout.zig").Rect = .{ null, null },
     widget_title: [32]u8 = undefined,
     widget_title_len: usize = 0,
@@ -98,7 +109,6 @@ pub const UiState = struct {
         for (self.secondary_grids.items) |*e| e.data.deinit();
         self.secondary_grids.deinit(self.allocator);
         self.highlights.deinit();
-        if (self.current_buf_path) |p| self.allocator.free(p);
     }
 
     fn getOrCreate(self: *UiState, id: i64) !*GridData {
@@ -393,8 +403,12 @@ pub const UiState = struct {
                 if (c != .array or c.array.len < 1) continue;
                 const text = if (c.array[0] == .string) c.array[0].string else " ";
                 if (c.array.len >= 2) current_hl_id = c.array[1].integer;
-                const repeat_i = if (c.array.len >= 3) c.array[2].integer else 1;
-                const repeat: usize = if (repeat_i > 0) @as(usize, @intCast(repeat_i)) else 1;
+                // An omitted repeat means one cell. An explicitly supplied
+                // zero means zero cells; Neovim uses this in incremental
+                // updates, and treating it as one erases the following cell.
+                const has_repeat = c.array.len >= 3;
+                const repeat_i = if (has_repeat) c.array[2].integer else 1;
+                const repeat = gridCellRepeat(has_repeat, repeat_i);
                 const hl = self.highlights.get(current_hl_id) orelse Highlight{ .fg = .none, .bg = .none };
                 var rep: usize = 0;
                 while (rep < repeat) : (rep += 1) {
@@ -445,3 +459,155 @@ pub const UiState = struct {
         }
     }
 };
+
+test "grid cell repeat distinguishes omitted and explicit zero" {
+    try std.testing.expectEqual(@as(usize, 1), gridCellRepeat(false, 0));
+    try std.testing.expectEqual(@as(usize, 0), gridCellRepeat(true, 0));
+    try std.testing.expectEqual(@as(usize, 3), gridCellRepeat(true, 3));
+}
+
+test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const resize_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 4 }, .{ .integer = 3 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 4 }, .{ .integer = 2 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 3 }, .{ .integer = 4 }, .{ .integer = 2 } }) },
+        }) },
+    };
+    try state.handleRedraw(&resize_events);
+
+    const hl_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "hl_attr_define" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 1 },
+                .{ .map = kvs(&[_]Value.KV{
+                    .{ .key = .{ .string = "foreground" }, .value = .{ .integer = 0xff0000 } },
+                    .{ .key = .{ .string = "background" }, .value = .{ .integer = 0x111111 } },
+                }) },
+                .nil,
+                .{ .array = values(&[_]Value{
+                    .{ .map = kvs(&[_]Value.KV{
+                        .{ .key = .{ .string = "ui_name" }, .value = .{ .string = "CursorLine" } },
+                    }) },
+                }) },
+            }) },
+        }) },
+    };
+    try state.handleRedraw(&hl_events);
+
+    const line_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_line" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 2 },
+                .{ .integer = 0 },
+                .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{ .{ .string = "A" }, .{ .integer = 1 }, .{ .integer = 1 } }) },
+                    .{ .array = values(&[_]Value{ .{ .string = "B" }, .{ .integer = 1 }, .{ .integer = 0 } }) },
+                    .{ .array = values(&[_]Value{ .{ .string = "C" }, .{ .integer = 1 } }) },
+                }) },
+            }) },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 3 },
+                .{ .integer = 1 },
+                .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{ .{ .string = "D" }, .{ .integer = 1 }, .{ .integer = 2 } }) },
+                }) },
+            }) },
+        }) },
+    };
+    try state.handleRedraw(&line_events);
+
+    const live_grid = state.get(2).?;
+    try std.testing.expectEqualStrings("A", live_grid.cells[0].char[0..live_grid.cells[0].len]);
+
+    const lifecycle_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_cursor_goto" },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 0 }, .{ .integer = 2 } }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_scroll" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 2 },
+                .{ .integer = 0 },
+                .{ .integer = 3 },
+                .{ .integer = 0 },
+                .{ .integer = 4 },
+                .{ .integer = 1 },
+                .{ .integer = 0 },
+            }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_pos" },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 0 }, .{ .integer = 1 }, .{ .integer = 2 } }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_float_pos" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 3 }, .{ .integer = 0 }, .{ .integer = 0 }, .{ .integer = 0 }, .{ .integer = 0 },
+                .{ .integer = 0 }, .{ .integer = 0 }, .{ .integer = 0 }, .{ .integer = 0 }, .{ .integer = 2 },
+                .{ .integer = 1 },
+            }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_hide" },
+            .{ .array = values(&[_]Value{.{ .integer = 3 }}) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_close" },
+            .{ .array = values(&[_]Value{.{ .integer = 3 }}) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_destroy" },
+            .{ .array = values(&[_]Value{.{ .integer = 2 }}) },
+        }) },
+    };
+    try state.handleRedraw(&lifecycle_events);
+    try std.testing.expectEqual(@as(i64, 2), state.cursor_grid);
+    const cursor_pos = state.cursorScreenPos();
+    try std.testing.expectEqual(@as(i32, 2), cursor_pos.x);
+    try std.testing.expectEqual(@as(i32, 0), cursor_pos.y);
+    try std.testing.expect(state.get(3) == null);
+    try std.testing.expect(state.get(2) == null);
+}
+
+test "ui protocol preserves width after scrolling and keeps explicit zero repeat intact" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 5 }, .{ .integer = 4 } }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_line" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 1 },
+                .{ .integer = 0 },
+                .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{.{ .string = "1" }}) },
+                    .{ .array = values(&[_]Value{ .{ .string = "2" }, .{ .integer = 1 }, .{ .integer = 0 } }) },
+                    .{ .array = values(&[_]Value{.{ .string = "3" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "4" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "5" }}) },
+                }) },
+            }) },
+        }) },
+    };
+    try state.handleRedraw(&events);
+
+    try std.testing.expectEqualStrings("1", state.grid.cells[0].char[0..state.grid.cells[0].len]);
+    try std.testing.expectEqualStrings("3", state.grid.cells[1].char[0..state.grid.cells[1].len]);
+    try std.testing.expectEqualStrings("4", state.grid.cells[2].char[0..state.grid.cells[2].len]);
+    try std.testing.expectEqualStrings("5", state.grid.cells[3].char[0..state.grid.cells[3].len]);
+}

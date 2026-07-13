@@ -1,0 +1,36 @@
+    │ EXPLORER             +F +D  │  [No Name]    x   [No Name]    x  +                                       |     -
+▋ E │ > cache                     │1   Welcome to Vide — mo Warning: Plugins are disabled for this recovery session.
+    │ > config                    │~
+    │ > data                      │~
+  S │ > state                     │~
+    │                             │~
+    │                             │~
+  G │                             │~
+    │                             │~
+    │                             │~
+  A │                             │~
+    │                             │~
+    │                             │~
+  X │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+    │                             │~
+  * │                             │~
+    │                             │-- INSERT --                                                       1,37-35       All
+  IDE   File  Edit  Selection  Buffer                                                          Focus: Editor   [?] Help
