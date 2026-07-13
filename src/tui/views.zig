@@ -618,11 +618,12 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                     .warning => Color{ .rgb = .{ .r = 145, .g = 105, .b = 20 } },
                     .failure => Color{ .rgb = .{ .r = 140, .g = 45, .b = 50 } },
                 };
-                drawRect(a.ren, Rect{ .x = x, .y = 1, .w = max_w, .h = 1 }, " ", t.fg_primary, bg);
-                a.ren.drawTextClipped(x + 1, 1, max_w - 2, prefix, t.fg_primary, bg, true, false);
+                const notice_fg = theme.readableForeground(t.fg_primary, bg, 7.0);
+                drawRect(a.ren, Rect{ .x = x, .y = 1, .w = max_w, .h = 1 }, " ", notice_fg, bg);
+                a.ren.drawTextClipped(x + 1, 1, max_w - 2, prefix, notice_fg, bg, true, false);
                 const prefix_w: u16 = @intCast(prefix.len);
                 if (max_w > prefix_w + 2)
-                    a.ren.drawTextClipped(x + 1 + prefix_w, 1, max_w - prefix_w - 2, message, t.fg_primary, bg, false, false);
+                    a.ren.drawTextClipped(x + 1 + prefix_w, 1, max_w - prefix_w - 2, message, notice_fg, bg, false, false);
             }
         }
     }

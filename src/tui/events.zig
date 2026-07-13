@@ -1120,14 +1120,14 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         if (tab_w < 4) break;
                         if (m.col >= tx and m.col < tx + tab_w) {
                             if (m.col >= tx + tab_w - 2 and m.col < tx + tab_w) {
+                                var close_args = [_]Value{.{ .integer = tab.bufnr }};
                                 const delete_params = [_]Value{
-                                    .{ .integer = tab.bufnr },
-                                    .{ .map = &[_]Value.KV{} },
+                                    .{ .string = "return _G.vide_close_buffer(...)" },
+                                    .{ .array = &close_args },
                                 };
-                                // Neovim owns buffer lifecycle and will reject
-                                // deletion of unsaved buffers. The subsequent
-                                // vide_buffers notification updates the tab UI.
-                                a.rpc.notify("nvim_buf_delete", &delete_params) catch {};
+                                // The helper targets inactive tabs and provides
+                                // Neovim's confirmation UI for unsaved buffers.
+                                a.rpc.notify("nvim_exec_lua", &delete_params) catch {};
                             } else {
                                 const select_params = [_]Value{.{ .integer = tab.bufnr }};
                                 a.rpc.notify("nvim_set_current_buf", &select_params) catch {};

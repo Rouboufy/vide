@@ -1,6 +1,7 @@
 assert(type(_G.vide_enable_ide_mode) == 'function')
 assert(type(_G.vide_disable_ide_mode) == 'function')
 assert(type(_G.vide_ide_action) == 'function')
+assert(type(_G.vide_close_buffer) == 'function')
 assert(vim.fn.maparg(' ot', 'n') ~= '', 'missing bottom terminal split mapping: <Space> o t')
 assert(vim.fn.maparg(' oT', 'n') ~= '', 'missing vertical terminal split mapping: <Space> o T')
 
@@ -52,6 +53,11 @@ _G.vide_ide_action('previous_buffer')
 assert(vim.api.nvim_get_current_buf() == first_buffer)
 _G.vide_ide_action('next_buffer')
 assert(vim.api.nvim_get_current_buf() ~= first_buffer)
+
+local disposable_buffer = vim.api.nvim_get_current_buf()
+assert(_G.vide_close_buffer(disposable_buffer) == true)
+assert(not vim.api.nvim_buf_is_valid(disposable_buffer))
+assert(vim.api.nvim_get_current_buf() == first_buffer)
 
 _G.vide_disable_ide_mode()
 assert(vim.g.vide_ide_mode == false)

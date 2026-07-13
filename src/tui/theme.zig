@@ -25,7 +25,7 @@ pub const Theme = struct {
         return Color{ .rgb = .{ .r = r, .g = g, .b = b } };
     }
 
-    pub fn updateFromConfig(self: *Theme, map: []nvim.Value.MapEntry) void {
+    pub fn updateFromConfig(self: *Theme, map: []nvim.Value.KV) void {
         for (map) |kv| {
             if (kv.key == .string and kv.value == .string) {
                 const k = kv.key.string;
@@ -46,6 +46,16 @@ pub const Theme = struct {
                 }
             }
         }
+
+        // Theme highlight groups are not guaranteed to be readable against
+        // the sidebar used by settings and other native Vide panels. Keep the
+        // supplied palette when it is accessible, otherwise move foregrounds
+        // toward the higher-contrast endpoint.
+        self.fg_primary = readableForeground(self.fg_primary, self.bg_sidebar, 7.0);
+        self.fg_secondary = readableForeground(self.fg_secondary, self.bg_sidebar, 4.5);
+        self.fg_accent = readableForeground(self.fg_accent, self.bg_sidebar, 4.5);
+        self.border_color = readableForeground(self.border_color, self.bg_sidebar, 3.0);
+        self.fg_statusbar = readableForeground(self.fg_statusbar, self.bg_statusbar, 4.5);
     }
 };
 
@@ -69,10 +79,61 @@ fn contrastRatio(a: Color, b: Color) f32 {
     return (lighter + 0.05) / (darker + 0.05);
 }
 
+pub fn readableForeground(foreground: Color, background: Color, minimum_ratio: f32) Color {
+    if (contrastRatio(foreground, background) >= minimum_ratio) return foreground;
+    const fg = switch (foreground) {
+        .rgb => |rgb| rgb,
+        else => return foreground,
+    };
+    const black = Color{ .rgb = .{ .r = 0, .g = 0, .b = 0 } };
+    const white = Color{ .rgb = .{ .r = 255, .g = 255, .b = 255 } };
+    const endpoint: u8 = if (contrastRatio(white, background) >= contrastRatio(black, background)) 255 else 0;
+
+    var step: u16 = 1;
+    while (step <= 20) : (step += 1) {
+        const amount = step * 5;
+        const candidate = Color{ .rgb = .{
+            .r = @intCast((@as(u16, fg.r) * (100 - amount) + @as(u16, endpoint) * amount) / 100),
+            .g = @intCast((@as(u16, fg.g) * (100 - amount) + @as(u16, endpoint) * amount) / 100),
+            .b = @intCast((@as(u16, fg.b) * (100 - amount) + @as(u16, endpoint) * amount) / 100),
+        } };
+        if (contrastRatio(candidate, background) >= minimum_ratio) return candidate;
+    }
+    return Color{ .rgb = .{ .r = endpoint, .g = endpoint, .b = endpoint } };
+}
+
 test "default theme keeps text and focus contrast readable" {
     const t = Theme{};
     try std.testing.expect(contrastRatio(t.fg_primary, t.bg_editor) >= 7.0);
     try std.testing.expect(contrastRatio(t.fg_secondary, t.bg_sidebar) >= 4.0);
     try std.testing.expect(contrastRatio(t.fg_statusbar, t.bg_statusbar) >= 4.0);
     try std.testing.expect(contrastRatio(t.fg_accent, t.bg_accent) >= 7.0);
+}
+
+test "theme update repairs low-contrast settings colors" {
+    var t = Theme{};
+    var entries = [_]nvim.Value.KV{
+        .{ .key = .{ .string = "bg_sidebar" }, .value = .{ .string = "#080808" } },
+        .{ .key = .{ .string = "fg_primary" }, .value = .{ .string = "#303030" } },
+        .{ .key = .{ .string = "fg_secondary" }, .value = .{ .string = "#4a4a4a" } },
+        .{ .key = .{ .string = "border_color" }, .value = .{ .string = "#202020" } },
+    };
+    t.updateFromConfig(&entries);
+
+    try std.testing.expect(contrastRatio(t.fg_primary, t.bg_sidebar) >= 7.0);
+    try std.testing.expect(contrastRatio(t.fg_secondary, t.bg_sidebar) >= 4.5);
+    try std.testing.expect(contrastRatio(t.border_color, t.bg_sidebar) >= 3.0);
+}
+
+test "notification backgrounds receive readable text" {
+    const low_contrast = Color{ .rgb = .{ .r = 150, .g = 120, .b = 70 } };
+    const backgrounds = [_]Color{
+        .{ .rgb = .{ .r = 0, .g = 122, .b = 204 } },
+        .{ .rgb = .{ .r = 145, .g = 105, .b = 20 } },
+        .{ .rgb = .{ .r = 140, .g = 45, .b = 50 } },
+    };
+    for (backgrounds) |background| {
+        const text_color = readableForeground(low_contrast, background, 7.0);
+        try std.testing.expect(contrastRatio(text_color, background) >= 4.5);
+    }
 }

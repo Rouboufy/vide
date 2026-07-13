@@ -608,6 +608,25 @@ local function ide_clipboard_register()
     return vim.fn.has('clipboard') == 1 and '+' or '"'
 end
 
+-- Close a specific buffer from Vide's tab strip.  Using nvim_buf_delete
+-- directly gives modified buffers no confirmation UI, which makes the close
+-- button appear broken.  Select the requested buffer first so Neovim can show
+-- its normal confirmation in the editor window.
+_G.vide_close_buffer = function(bufnr)
+    bufnr = tonumber(bufnr)
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return false end
+
+    if vim.bo[bufnr].modified then
+        if vim.api.nvim_get_current_buf() ~= bufnr then
+            vim.api.nvim_set_current_buf(bufnr)
+        end
+        vim.cmd('confirm bdelete ' .. bufnr)
+    else
+        vim.api.nvim_buf_delete(bufnr, {})
+    end
+    return not vim.api.nvim_buf_is_valid(bufnr)
+end
+
 _G.vide_ide_action = function(action)
     local mode = vim.api.nvim_get_mode().mode
     local visual = mode:match('[vV\22]') ~= nil
@@ -626,7 +645,7 @@ _G.vide_ide_action = function(action)
     elseif action == 'find' then vim.cmd('Telescope current_buffer_fuzzy_find')
     elseif action == 'replace' then vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(':%s/', true, false, true), 'n', false); return
     elseif action == 'new' then vim.cmd('enew')
-    elseif action == 'close' then vim.cmd('confirm bdelete')
+    elseif action == 'close' then _G.vide_close_buffer(vim.api.nvim_get_current_buf())
     elseif action == 'next_buffer' then vim.cmd('bnext')
     elseif action == 'previous_buffer' then vim.cmd('bprevious')
     end
