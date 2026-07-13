@@ -33,9 +33,9 @@ Vide is a terminal-native Integrated Development Environment with a Zig frontend
 
 ### Current Interface
 
-| Workspace + integrated terminal | Native settings | IDE mode |
+| Normal mode | Native settings | IDE mode |
 | --- | --- | --- |
-| ![Vide workspace with the integrated terminal](docs/screenshots/workspace-terminal.webp) | ![Vide native Settings dialog](docs/screenshots/settings.webp) | ![Vide IDE mode](docs/screenshots/ide-mode.webp) |
+| ![Vide Normal mode](docs/screenshots/normal.webp) | ![Vide native Settings dialog](docs/screenshots/settings.webp) | ![Vide IDE mode](docs/screenshots/ide-mode.webp) |
 
 Additional reproducible captures cover [Normal mode](docs/media/normal.svg),
 [Zen mode](docs/media/zen.svg), [Git](docs/media/git.svg),
