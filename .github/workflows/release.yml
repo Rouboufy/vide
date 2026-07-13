@@ -53,8 +53,9 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}" COMMIT_SHA="$GITHUB_SHA" bash build_appimage.sh
           tests/appimage_smoke.sh Vide.AppDir
-          if ls Vide-*.AppImage >/dev/null 2>&1; then
-            mv Vide-*.AppImage Vide-*.AppImage.sha256 dist/
+          if appimage=$(find . -maxdepth 1 -type f -name 'Vide-*-x86_64.AppImage' -print -quit) && [ -n "$appimage" ]; then
+            cp "$appimage" dist/Vide-linux-x86_64.AppImage
+            mv "$appimage" "$appimage.sha256" dist/
           fi
       - name: Generate checksums
         run: |

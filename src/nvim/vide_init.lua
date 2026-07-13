@@ -188,7 +188,7 @@ local plugins_setup = {
                 local help_key = format_key(raw_help)
                 
                 local term = os.getenv("TERM") or ""
-                local nerd_fonts = false
+                local nerd_fonts = true
                 if state.nerd_fonts ~= nil then
                     nerd_fonts = state.nerd_fonts
                 end
@@ -608,6 +608,37 @@ local function ide_clipboard_register()
     return vim.fn.has('clipboard') == 1 and '+' or '"'
 end
 
+-- Native shortcuts such as Ctrl+F can be pressed while a Telescope picker or
+-- another floating window owns focus.  Plain `:close` refuses to close a
+-- modified prompt buffer (E37), and the resulting RPC error is rendered into
+-- the UI.  Let Telescope clean itself up first, then force-close any remaining
+-- floats so global actions are safe to repeat.
+_G.vide_close_floating_windows = function()
+    local telescope_prompts = {}
+    for _, winid in ipairs(vim.api.nvim_list_wins()) do
+        local ok, bufnr = pcall(vim.api.nvim_win_get_buf, winid)
+        if ok and vim.bo[bufnr].filetype == 'TelescopePrompt' then
+            telescope_prompts[bufnr] = true
+        end
+    end
+
+    if next(telescope_prompts) then
+        local ok, actions = pcall(require, 'telescope.actions')
+        if ok then
+            for bufnr in pairs(telescope_prompts) do
+                pcall(actions.close, bufnr)
+            end
+        end
+    end
+
+    for _, winid in ipairs(vim.api.nvim_list_wins()) do
+        local ok, config = pcall(vim.api.nvim_win_get_config, winid)
+        if ok and config.relative ~= '' then
+            pcall(vim.api.nvim_win_close, winid, true)
+        end
+    end
+end
+
 -- Close a specific buffer from Vide's tab strip.  Using nvim_buf_delete
 -- directly gives modified buffers no confirmation UI, which makes the close
 -- button appear broken.  Select the requested buffer first so Neovim can show
@@ -795,7 +826,7 @@ _G.vide_load_settings = function()
             if state.nerd_fonts ~= nil then
                 vim.g.vide_nerd_fonts = state.nerd_fonts
             else
-                vim.g.vide_nerd_fonts = false
+                vim.g.vide_nerd_fonts = true
             end
             if term == "linux" then
                 vim.g.vide_nerd_fonts = false

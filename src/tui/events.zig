@@ -470,14 +470,14 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         a.needs_resize = true;
         return true;
     } else if (new_file) {
-        const cmd_p = [1]Value{.{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('enew')" }};
+        const cmd_p = [1]Value{.{ .string = "_G.vide_close_floating_windows(); vim.cmd('enew')" }};
         const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
         if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
         }
         return true;
     } else if (find_file) {
-        const cmd_p = [1]Value{.{ .string = "while #vim.api.nvim_win_get_config(0).relative > 0 do vim.cmd('close') end; vim.cmd('Telescope find_files')" }};
+        const cmd_p = [1]Value{.{ .string = "_G.vide_close_floating_windows(); vim.cmd('Telescope find_files')" }};
         const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
         if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
             @import("../nvim/msgpack.zig").freeValue(res, a.allocator);

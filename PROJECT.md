@@ -74,7 +74,8 @@ loaded or modified.
 
 At runtime VIDE requires Neovim. Git and network access are needed when
 installing or updating plugins. Zig is required only when building from source.
-Nerd Fonts are optional; portable text symbols are the default.
+Nerd Fonts are recommended and their icons are enabled by default; portable
+text symbols remain available from Settings.
 
 ## Current engineering priorities
 

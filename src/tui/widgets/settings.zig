@@ -53,7 +53,7 @@ pub const SettingsConfig = struct {
     colorcolumn: []const u8 = "",
     split_separator: []const u8 = "│",
     keybindings: Keybindings = .{},
-    nerd_fonts: bool = false,
+    nerd_fonts: bool = true,
     mode: []const u8 = "normal",
 
     pub fn deinit(self: *SettingsConfig, allocator: std.mem.Allocator) void {
@@ -252,9 +252,26 @@ pub const SettingsWidget = struct {
         \\}
         \\trap cleanup EXIT INT TERM
         \\tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/vide-software-update.XXXXXX") || exit 1
-        \\if curl -fsSL --retry 3 -o "$tmp_dir/setup.sh" "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh" &&
-        \\   bash "$tmp_dir/setup.sh" --no-plugins; then
-        \\    result=success
+        \\if [ -n "${APPIMAGE:-}" ] && [ -f "$APPIMAGE" ]; then
+        \\    asset=Vide-linux-x86_64.AppImage
+        \\    release=https://github.com/Rouboufy/vide/releases/latest/download
+        \\    if curl -fsSL --retry 3 -o "$tmp_dir/$asset" "$release/$asset" &&
+        \\       curl -fsSL --retry 3 -o "$tmp_dir/SHA256SUMS" "$release/SHA256SUMS"; then
+        \\        expected=$(awk -v asset="$asset" '$2 == asset || $2 == "./" asset { print $1; exit }' "$tmp_dir/SHA256SUMS")
+        \\        actual=$(sha256sum "$tmp_dir/$asset" | awk '{print $1}')
+        \\        if [ -n "$expected" ] && [ "$actual" = "$expected" ] &&
+        \\           cp "$tmp_dir/$asset" "$APPIMAGE.new" && chmod 755 "$APPIMAGE.new" &&
+        \\           mv -f "$APPIMAGE.new" "$APPIMAGE"; then
+        \\            result=success
+        \\        else
+        \\            rm -f "$APPIMAGE.new"
+        \\        fi
+        \\    fi
+        \\else
+        \\    if curl -fsSL --retry 3 -o "$tmp_dir/setup.sh" "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh" &&
+        \\       bash "$tmp_dir/setup.sh" --no-plugins; then
+        \\        result=success
+        \\    fi
         \\fi
     ;
 
@@ -1743,13 +1760,16 @@ test "settings roundtrip preserves canonical mode defaults" {
     try std.testing.expect(!loaded.ide);
     try std.testing.expect(!loaded.zen);
     try std.testing.expect(!loaded.zen_handoff);
-    try std.testing.expect(!loaded.nerd_fonts);
+    try std.testing.expect(loaded.nerd_fonts);
     try std.testing.expectEqualStrings("", loaded.colorcolumn);
 }
 
 test "software updater uses the official release installer" {
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "--no-plugins") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "${APPIMAGE:-}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "Vide-linux-x86_64.AppImage") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "SHA256SUMS") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "success") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "failure") != null);
 }

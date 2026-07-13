@@ -2,6 +2,7 @@ assert(type(_G.vide_enable_ide_mode) == 'function')
 assert(type(_G.vide_disable_ide_mode) == 'function')
 assert(type(_G.vide_ide_action) == 'function')
 assert(type(_G.vide_close_buffer) == 'function')
+assert(type(_G.vide_close_floating_windows) == 'function')
 assert(vim.fn.maparg(' ot', 'n') ~= '', 'missing bottom terminal split mapping: <Space> o t')
 assert(vim.fn.maparg(' oT', 'n') ~= '', 'missing vertical terminal split mapping: <Space> o T')
 
@@ -19,6 +20,22 @@ vim.api.nvim_win_close(0, true)
 
 vim.cmd('enew!')
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'alpha beta', 'gamma' })
+
+-- Repeating a global shortcut while a modified prompt-like float has focus
+-- must not raise E37 or damage the edited file underneath it.
+local edited_buffer = vim.api.nvim_get_current_buf()
+local floating_buffer = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(floating_buffer, 0, -1, false, { 'query' })
+vim.bo[floating_buffer].modified = true
+local floating_window = vim.api.nvim_open_win(floating_buffer, true, {
+  relative = 'editor', row = 1, col = 1, width = 20, height = 1, style = 'minimal',
+})
+_G.vide_close_floating_windows()
+_G.vide_close_floating_windows()
+assert(not vim.api.nvim_win_is_valid(floating_window))
+assert(vim.api.nvim_get_current_buf() == edited_buffer)
+assert(vim.bo[edited_buffer].modified == true)
+
 _G.vide_enable_ide_mode()
 assert(vim.g.vide_ide_mode == true)
 

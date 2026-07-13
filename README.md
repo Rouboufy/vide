@@ -132,7 +132,7 @@ Before installing Vide, make sure you have the following:
 | **git** | any | Required to clone the repository |
 | **curl** | any | Required by `setup.sh` |
 | **Python** | `>= 3` | Required by the extension shop and automatic Zig installation |
-| **A Nerd Font** | optional | Enables richer icons; portable text symbols are used by default |
+| **A Nerd Font** | recommended | Rich icons are enabled by default; portable text symbols can be selected in Settings |
 | **True Color terminal** | — | Any modern terminal (Alacritty, Kitty, Ghostty, etc.) |
 
 > [!IMPORTANT]

@@ -6,8 +6,14 @@ Neovim. User data still uses Vide's isolated XDG directories outside the
 read-only image.
 
 Tagged releases publish `Vide-<version>-x86_64.AppImage`, its neighboring
-`.sha256`, and the release-wide `SHA256SUMS`. `VERSION.txt` records the Vide
-version, Git commit, architecture, and bundled Neovim version.
+`.sha256`, the stable updater asset `Vide-linux-x86_64.AppImage`, and the
+release-wide `SHA256SUMS`. `VERSION.txt` records the Vide version, Git commit,
+architecture, and bundled Neovim version.
+
+The About panel's update button detects the AppImage runtime through
+`$APPIMAGE`, verifies the stable asset against `SHA256SUMS`, and atomically
+replaces the launched image. The image must be in a user-writable directory.
+Native installations continue to update through `setup.sh`.
 
 ## Reproduce and verify
 
