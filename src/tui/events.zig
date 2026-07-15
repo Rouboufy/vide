@@ -7,6 +7,20 @@ const Value = @import("../nvim/msgpack.zig").Value;
 const Layout = @import("layout.zig").Layout;
 const settings = @import("widgets/settings.zig");
 
+fn primaryEditorColumn(a: *const App) u16 {
+    var min_col: u16 = std.math.maxInt(u16);
+    for (a.editor_wins.items) |win| min_col = @min(min_col, win.col);
+    return if (min_col == std.math.maxInt(u16)) 0 else min_col;
+}
+
+fn isSecondarySplitBuffer(a: *const App, bufnr: i64) bool {
+    const primary_col = primaryEditorColumn(a);
+    for (a.editor_wins.items) |win| {
+        if (win.col > primary_col and win.bufnr == bufnr) return true;
+    }
+    return false;
+}
+
 fn ideMenuAt(relative_x: u16) ?u8 {
     const ranges = [_][2]u16{ .{ 7, 12 }, .{ 13, 18 }, .{ 19, 29 }, .{ 30, 38 } };
     for (ranges, 0..) |range, i| {
@@ -26,6 +40,44 @@ fn ideMenuAction(menu: u8, row: u16) ?[]const u8 {
     return if (row < actions.len) actions[row] else null;
 }
 
+fn aiCommandMovesFocus(command: []const u8) bool {
+    return std.mem.indexOf(u8, command, "OpenAITerminal") != null or
+        std.mem.indexOf(u8, command, "FocusAITerminal") != null or
+        std.mem.indexOf(u8, command, "RestartAITerminal") != null or
+        std.mem.indexOf(u8, command, "RunAIAction") != null;
+}
+
+fn editorActionCode(action: []const u8, code_buf: []u8) ?[]const u8 {
+    return if (std.mem.eql(u8, action, "ai_explain_selection"))
+        "_G.RunAIAction('explain_selection')"
+    else if (std.mem.eql(u8, action, "ai_fix_selection"))
+        "_G.RunAIAction('fix_selection')"
+    else if (std.mem.eql(u8, action, "ai_add_context"))
+        "_G.SendSelectionToAI()"
+    else
+        std.fmt.bufPrint(code_buf, "_G.vide_ide_action('{s}')", .{action}) catch null;
+}
+
+fn executeEditorAction(a: *App, action: []const u8) void {
+    var code_buf: [96]u8 = undefined;
+    const code = editorActionCode(action, &code_buf) orelse {
+        a.notify(.failure, "Editor action could not be prepared.", .{});
+        return;
+    };
+    const params = [_]Value{ .{ .string = code }, .{ .array = &[_]Value{} } };
+    a.rpc.notify("nvim_exec_lua", &params) catch |err| {
+        a.notify(.failure, "Editor action failed: {}", .{err});
+    };
+}
+
+test "editor context AI actions route to the AI bridge" {
+    var buf: [96]u8 = undefined;
+    try std.testing.expectEqualStrings("_G.RunAIAction('explain_selection')", editorActionCode("ai_explain_selection", &buf).?);
+    try std.testing.expectEqualStrings("_G.RunAIAction('fix_selection')", editorActionCode("ai_fix_selection", &buf).?);
+    try std.testing.expectEqualStrings("_G.SendSelectionToAI()", editorActionCode("ai_add_context", &buf).?);
+    try std.testing.expectEqualStrings("_G.vide_ide_action('copy')", editorActionCode("copy", &buf).?);
+}
+
 test "IDE menu hit targets and actions stay aligned" {
     try std.testing.expectEqual(@as(?u8, 0), ideMenuAt(7));
     try std.testing.expectEqual(@as(?u8, 1), ideMenuAt(15));
@@ -35,6 +87,12 @@ test "IDE menu hit targets and actions stay aligned" {
     try std.testing.expectEqualStrings("replace", ideMenuAction(1, 6).?);
     try std.testing.expectEqualStrings("select_line", ideMenuAction(2, 1).?);
     try std.testing.expect(ideMenuAction(2, 2) == null);
+}
+
+test "AI context commands keep sidebar focus" {
+    try std.testing.expect(!aiCommandMovesFocus("lua _G.SendDiagnosticsToAI()"));
+    try std.testing.expect(aiCommandMovesFocus("lua _G.OpenAITerminal('codex')"));
+    try std.testing.expect(aiCommandMovesFocus("lua _G.RunAIAction('write_tests')"));
 }
 
 fn writeHandoffInit(path: []const u8, content: []const u8) void {
@@ -227,6 +285,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1b[6~")) break :get_key "<PageDown>";
         if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
         if (std.mem.eql(u8, k.raw, "\x1b[23~")) break :get_key "<F11>";
+        if (std.mem.eql(u8, k.raw, "\x1b[24~")) break :get_key "<F12>";
         if (std.mem.eql(u8, k.raw, "\x1b[Z")) break :get_key "<S-Tab>";
         if (std.mem.eql(u8, k.raw, "\x09")) break :get_key "<Tab>";
         if (k.raw.len == 2 and k.raw[0] == 0x1b) {
@@ -310,6 +369,30 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     };
 
     if (nk.len > 0) {
+        if (!a.bug_report.is_open and std.mem.eql(u8, nk, "<F12>")) {
+            a.bug_report.open();
+            a.needs_resize = true;
+            return true;
+        }
+        if (a.bug_report.is_open) {
+            _ = a.bug_report.handleKey(nk);
+            a.needs_resize = true;
+            return true;
+        }
+        switch (a.editor_context_menu.handleKey(nk)) {
+            .action => |action| {
+                executeEditorAction(a, action);
+                a.term.setHoverMouse(false);
+                a.needs_resize = true;
+                return true;
+            },
+            .handled => {
+                if (!a.editor_context_menu.is_open) a.term.setHoverMouse(false);
+                a.needs_resize = true;
+                return true;
+            },
+            .ignored => {},
+        }
         if (a.settings_widget.is_open) {
             if (a.settings_widget.handleKey(nk)) {
                 a.needs_resize = true;
@@ -572,7 +655,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                         defer a.allocator.free(cmd_p);
                         cmd_p[0] = .{ .string = cmd[8..] };
                         a.rpc.notify("nvim_command", cmd_p) catch {};
-                        a.sidebar_focus = false;
+                        if (aiCommandMovesFocus(cmd)) a.sidebar_focus = false;
                     }
                     a.needs_resize = true;
                     return true;
@@ -619,6 +702,45 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     a.last_click_x = m.col;
     a.last_click_y = m.row;
 
+    if (a.bug_report.is_open) {
+        if (m.action == .press or m.button == .wheel_up or m.button == .wheel_down) {
+            _ = a.bug_report.handleMouse(m, a.ren.width, a.ren.height);
+            a.needs_resize = true;
+        }
+        return;
+    }
+
+    if (a.editor_context_menu.is_open) {
+        if (m.action == .press and m.button == .right) {
+            if (m.col >= layout.editor.x and m.col < layout.editor.x + layout.editor.w and
+                m.row >= layout.editor.y and m.row < layout.editor.y + layout.editor.h)
+            {
+                a.editor_context_menu.open(m.col, m.row, a.ren.width, a.ren.height);
+                a.term.setHoverMouse(true);
+            } else {
+                a.editor_context_menu.close();
+                a.term.setHoverMouse(false);
+            }
+            a.needs_resize = true;
+            return;
+        }
+        if (a.editor_context_menu.handleMouse(m)) |action| executeEditorAction(a, action);
+        if (!a.editor_context_menu.is_open) a.term.setHoverMouse(false);
+        a.needs_resize = true;
+        return;
+    }
+
+    if (m.action == .press and m.row == layout.status_bar.y and layout.status_bar.w >= 28) {
+        const report_w: u16 = 14;
+        const help_w: u16 = if (a.mode == .zen) 0 else if (a.settings_widget.config.nerd_fonts) @intCast(" 󰋖 Help ".len) else @intCast(" [?] Help ".len);
+        const report_x = layout.status_bar.x + layout.status_bar.w -| help_w -| report_w;
+        if (m.col >= report_x and m.col < report_x + report_w) {
+            a.bug_report.open();
+            a.needs_resize = true;
+            return;
+        }
+    }
+
     // IDE status-bar menus expose familiar actions to mouse-only users.
     if (a.ide_menu) |menu| {
         if (m.action == .press) {
@@ -631,12 +753,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             if (m.col >= mx and m.col < mx + widths[menu] and m.row > my and m.row < my + mh - 1) {
                 const row = m.row - my - 1;
                 const action = ideMenuAction(menu, row) orelse return;
-                const code = try std.fmt.allocPrint(a.allocator, "_G.vide_ide_action('{s}')", .{action});
-                defer a.allocator.free(code);
-                const params = [_]Value{ .{ .string = code }, .{ .array = &[_]Value{} } };
-                a.rpc.notify("nvim_exec_lua", &params) catch |err| {
-                    a.notify(.failure, "IDE action failed: {}", .{err});
-                };
+                executeEditorAction(a, action);
                 a.ide_menu = null;
                 a.needs_resize = true;
                 return;
@@ -849,7 +966,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
 
     if (a.settings_widget.is_open) {
         if (m.action == .press) {
-            if (a.settings_widget.handleMouse(m.col, m.row, a.ren.width, a.ren.height)) {
+            if (a.settings_widget.handleMouse(m, a.ren.width, a.ren.height)) {
                 a.needs_resize = true;
                 startRequestedSoftwareUpdate(a);
                 if (a.settings_widget.save_failed) {
@@ -1017,14 +1134,14 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     }
                     a.needs_resize = true;
                 } else if (a.activity_bar.active_idx == 3) {
-                    if (a.ai_panel.handleMouse(m.col, m.row, layout.file_tree)) |cmd| {
+                    if (a.ai_panel.handleMouse(m, layout.file_tree)) |cmd| {
                         if (std.mem.startsWith(u8, cmd, "__CMD__:lua ")) {
                             const actual_cmd = cmd[8..];
                             var cmd_p = try a.allocator.alloc(Value, 1);
                             defer a.allocator.free(cmd_p);
                             cmd_p[0] = .{ .string = actual_cmd };
                             a.rpc.notify("nvim_command", cmd_p) catch {};
-                            a.sidebar_focus = false;
+                            if (aiCommandMovesFocus(actual_cmd)) a.sidebar_focus = false;
                         }
                     }
                     a.needs_resize = true;
@@ -1124,10 +1241,40 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
 
                 // Handle tab bar clicks
                 if (m.row == layout.tab_bar.y) {
+                    const primary_col = primaryEditorColumn(a);
+                    const right_limit = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
+
+                    // A split-local tab focuses or closes its owning Neovim
+                    // window instead of switching the primary editor buffer.
+                    for (a.editor_wins.items) |win| {
+                        if (win.col <= primary_col or win.row != 0 or win.width < 4) continue;
+                        const split_x = layout.tab_bar.x + win.col;
+                        if (split_x >= right_limit) continue;
+                        const desired_w: u16 = @intCast(@min(win.name.len + 8, std.math.maxInt(u16)));
+                        const tab_w = @min(@min(desired_w, win.width), right_limit - split_x);
+                        if (tab_w < 4 or m.col < split_x or m.col >= split_x + tab_w) continue;
+                        if (m.col >= split_x + tab_w - 2) {
+                            var close_args = [_]Value{ .{ .integer = win.id }, .{ .integer = win.bufnr } };
+                            const close_params = [_]Value{
+                                .{ .string = "return _G.vide_close_split(...)" },
+                                .{ .array = &close_args },
+                            };
+                            a.rpc.notify("nvim_exec_lua", &close_params) catch {};
+                        } else {
+                            const focus_params = [_]Value{.{ .integer = win.id }};
+                            a.rpc.notify("nvim_set_current_win", &focus_params) catch {};
+                        }
+                        return;
+                    }
+
                     var tx: u16 = layout.tab_bar.x;
                     var clicked_tab = false;
-                    const tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
+                    var tab_end = right_limit;
+                    for (a.editor_wins.items) |win| {
+                        if (win.col > primary_col) tab_end = @min(tab_end, layout.tab_bar.x + win.col);
+                    }
                     for (a.tabs.items) |tab| {
+                        if (isSecondarySplitBuffer(a, tab.bufnr)) continue;
                         if (tx >= tab_end) break;
                         const desired_w: u16 = @intCast(@min(tab.name.len + 8, std.math.maxInt(u16)));
                         const tab_w = @min(desired_w, tab_end - tx);
@@ -1143,8 +1290,12 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                                 // Neovim's confirmation UI for unsaved buffers.
                                 a.rpc.notify("nvim_exec_lua", &delete_params) catch {};
                             } else {
-                                const select_params = [_]Value{.{ .integer = tab.bufnr }};
-                                a.rpc.notify("nvim_set_current_buf", &select_params) catch {};
+                                var select_args = [_]Value{.{ .integer = tab.bufnr }};
+                                const select_params = [_]Value{
+                                    .{ .string = "return _G.vide_select_buffer(...)" },
+                                    .{ .array = &select_args },
+                                };
+                                a.rpc.notify("nvim_exec_lua", &select_params) catch {};
                             }
                             clicked_tab = true;
                             break;
@@ -1152,8 +1303,8 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         tx += tab_w;
                     }
                     if (!clicked_tab and tx + 1 < tab_end and m.col == tx + 1) {
-                        const cmd_p = [_]Value{.{ .string = "enew" }};
-                        a.rpc.notify("nvim_command", &cmd_p) catch {};
+                        const new_params = [_]Value{ .{ .string = "return _G.vide_new_primary_buffer()" }, .{ .array = &[_]Value{} } };
+                        a.rpc.notify("nvim_exec_lua", &new_params) catch {};
                     }
                 }
             }
@@ -1225,6 +1376,14 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         m.row >= layout.editor.y and m.row < layout.editor.y + layout.editor.h)
     {
         if (m.action == .press) a.terminal_focus = false;
+        if (m.action == .press and m.button == .right) {
+            a.ide_menu = null;
+            a.show_split_menu = false;
+            a.editor_context_menu.open(m.col, m.row, a.ren.width, a.ren.height);
+            a.term.setHoverMouse(true);
+            a.needs_resize = true;
+            return;
+        }
         nvim_helpers.sendMouseEvent(a.rpc, a.allocator, m, m.col - layout.editor.x, m.row - layout.editor.y);
     } else {
         if (m.action == .press) a.terminal_focus = false;

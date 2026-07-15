@@ -3,6 +3,7 @@ set -euo pipefail
 
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo unknown)}"
 COMMIT_SHA="${COMMIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+VIDE_BUG_REPORT_ENDPOINT="${VIDE_BUG_REPORT_ENDPOINT:-}"
 NEOVIM_VERSION="${NEOVIM_VERSION:-v0.11.6}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -17,7 +18,8 @@ mkdir -p "$APP_DIR/usr/bin" "$APP_DIR/usr/share/applications" "$APP_DIR/usr/shar
 echo "Building Vide $VERSION ($COMMIT_SHA) for x86_64-linux-musl..."
 ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$WORK_DIR/zig-global}" \
 ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR:-$WORK_DIR/zig-local}" \
-zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dversion="$VERSION" --prefix "$WORK_DIR/vide"
+zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux-musl -Dversion="$VERSION" \
+    -Dbug-report-endpoint="$VIDE_BUG_REPORT_ENDPOINT" --prefix "$WORK_DIR/vide"
 cp "$WORK_DIR/vide/bin/vide" "$APP_DIR/usr/bin/vide"
 
 if [[ -n "${NEOVIM_SOURCE_DIR:-}" ]]; then

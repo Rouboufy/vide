@@ -639,6 +639,42 @@ _G.vide_close_floating_windows = function()
     end
 end
 
+local function vide_primary_editor_win()
+    local best_win, best_col, best_row = nil, math.huge, math.huge
+    for _, winid in ipairs(vim.api.nvim_list_wins()) do
+        local config = vim.api.nvim_win_get_config(winid)
+        local buf = vim.api.nvim_win_get_buf(winid)
+        if config.relative == "" and vim.bo[buf].buftype == "" then
+            local pos = vim.api.nvim_win_get_position(winid)
+            if pos[2] < best_col or (pos[2] == best_col and pos[1] < best_row) then
+                best_win, best_col, best_row = winid, pos[2], pos[1]
+            end
+        end
+    end
+    return best_win
+end
+
+_G.vide_select_buffer = function(bufnr)
+    bufnr = tonumber(bufnr)
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return false end
+    for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+        if vim.api.nvim_win_is_valid(winid) then
+            vim.api.nvim_set_current_win(winid)
+            return true
+        end
+    end
+    local primary = vide_primary_editor_win()
+    if primary and vim.api.nvim_win_is_valid(primary) then vim.api.nvim_set_current_win(primary) end
+    vim.api.nvim_set_current_buf(bufnr)
+    return true
+end
+
+_G.vide_new_primary_buffer = function()
+    local primary = vide_primary_editor_win()
+    if primary and vim.api.nvim_win_is_valid(primary) then vim.api.nvim_set_current_win(primary) end
+    vim.cmd("enew")
+end
+
 -- Close a specific buffer from Vide's tab strip.  Using nvim_buf_delete
 -- directly gives modified buffers no confirmation UI, which makes the close
 -- button appear broken.  Select the requested buffer first so Neovim can show
@@ -647,15 +683,33 @@ _G.vide_close_buffer = function(bufnr)
     bufnr = tonumber(bufnr)
     if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return false end
 
+    -- AI terminals belong to their split rather than the file tab strip. Stop
+    -- their job and remove them without Neovim's "add ! to override" prompt.
+    if bufnr == _G.last_ai_buf and _G.CloseAITerminal then
+        _G.CloseAITerminal()
+        return not vim.api.nvim_buf_is_valid(bufnr)
+    end
+
     if vim.bo[bufnr].modified then
-        if vim.api.nvim_get_current_buf() ~= bufnr then
-            vim.api.nvim_set_current_buf(bufnr)
-        end
+        if vim.api.nvim_get_current_buf() ~= bufnr then _G.vide_select_buffer(bufnr) end
         vim.cmd('confirm bdelete ' .. bufnr)
     else
         vim.api.nvim_buf_delete(bufnr, {})
     end
     return not vim.api.nvim_buf_is_valid(bufnr)
+end
+
+_G.vide_close_split = function(winid, bufnr)
+    winid = tonumber(winid)
+    bufnr = tonumber(bufnr)
+    if bufnr == _G.last_ai_buf and _G.CloseAITerminal then
+        _G.CloseAITerminal()
+        return true
+    end
+    if not winid or not vim.api.nvim_win_is_valid(winid) then return false end
+    local ok, err = pcall(vim.api.nvim_win_close, winid, false)
+    if not ok then _G.vide_native_notice("warning", tostring(err)) end
+    return ok
 end
 
 _G.vide_ide_action = function(action)
@@ -1060,6 +1114,12 @@ function M.sync_theme()
     end
     
     local bg_accent = get_color("VideAccent", "fg") or get_color("Function", "fg") or get_color("Statement", "fg") or "#007acc"
+
+    -- Some colorschemes make Visual indistinguishable from Normal once Vide
+    -- normalizes editor backgrounds. Keep mouse and keyboard selections clear.
+    local selection_bg = get_contrast(bg_editor, 36) or "#264f78"
+    vim.api.nvim_set_hl(0, "Visual", { bg = selection_bg, bold = true })
+    vim.api.nvim_set_hl(0, "VisualNOS", { bg = selection_bg, bold = true })
     
     local fg_statusbar = "#ffffff"
     do
@@ -1469,6 +1529,7 @@ local function notify_win_positions()
                 if short_name == "" then short_name = "[No Name]" end
                 table.insert(win_list, {
                     id = w,
+                    bufnr = buf,
                     row = pos[1],
                     col = pos[2],
                     width = width,
@@ -1482,12 +1543,13 @@ local function notify_win_positions()
     vim.rpcnotify(1, "vide_win_positions", win_list)
 end
 
-vim.api.nvim_create_autocmd({"WinNew", "WinClosed", "WinEnter", "WinLeave"}, {
+vim.api.nvim_create_autocmd({"WinNew", "WinClosed", "WinEnter", "WinLeave", "BufEnter", "BufWinEnter", "BufFilePost"}, {
     callback = function()
         vim.schedule(notify_telescope)
         vim.schedule(notify_win_positions)
     end
 })
+vim.schedule(notify_win_positions)
 
 -- Configure Telescope to use no borders so Vide can draw its own widget frame
 pcall(function()
@@ -1736,10 +1798,14 @@ local VIDE_KEYS = {
     "  <Space> s              Substitute word under cursor everywhere",
     "  <Space> x              Make current file executable (chmod +x)",
     "",
-    "  ── AI ASSISTANT CONTEXT ────────────────────────────────────────",
-    "  <Space> a f            Send current file path to AI assistant",
-    "  <Space> a c            Send entire file content to AI assistant",
-    "  <Space> a s (Visual)   Send selected text to AI assistant",
+    "  ── AI CODING WORKSPACE ─────────────────────────────────────────",
+    "  AI activity icon       Agents, Context, and Actions workspace",
+    "  1 / 2 / 3              Open Agents / Context / Actions section",
+    "  Left / Right           Switch AI workspace section",
+    "  Up / Down + Enter      Choose and run an AI workspace item",
+    "  <Space> a f            Add current file reference to AI context",
+    "  <Space> a c            Add current buffer contents to AI context",
+    "  <Space> a s (Visual)   Add selected code and line range to context",
 }
 
 local state = { active_tab = "vim", buf = nil, win = nil }
@@ -1919,8 +1985,8 @@ _G.open_vide_onboarding = function()
         table.insert(lines, string.format('    [%s] %-11s %s', capability[2] and 'OK' or '--', capability[1], capability[3]))
     end
     vim.list_extend(lines, {
-        '', '  Mouse: click to focus, drag in text to select, use the status-row',
-        '  menus for file/edit actions, and drag panel borders to resize.',
+        '', '  Mouse: click to focus, drag in text to select, right-click the editor',
+        '  for copy/paste/edit actions, and drag panel borders to resize.',
         '', '  Six essentials:',
         '    Ctrl+S Save     Ctrl+F Find       Ctrl+Z Undo',
         '    Ctrl+E Files    Ctrl+T Terminal   F11 Zen / previous mode',
@@ -1949,72 +2015,237 @@ if vim.env.VIDE_SKIP_ONBOARDING ~= '1' and vim.uv.fs_stat(onboarding_marker) == 
 end
 
 _G.last_ai_job_id = nil
+_G.last_ai_command = nil
+_G.last_ai_buf = nil
+_G.last_ai_win = nil
+_G.last_ai_source_win = nil
+_G.ai_generation = 0
+_G.ai_ready_at = 0
+
+local ai_context_limit = 64 * 1024
+
+local function ai_notify_status(command, state)
+    pcall(vim.rpcnotify, 1, "vide_ai_status", command or "", state)
+end
+
+local function ai_sanitize(text)
+    text = tostring(text or ""):gsub("%z", ""):gsub("\27", "")
+    if #text > ai_context_limit then
+        text = text:sub(1, ai_context_limit) .. "\n\n[Context truncated by Vide at 64 KiB]"
+    end
+    return text
+end
 
 function _G.GetActiveAIJob()
     local job_id = _G.last_ai_job_id
     if not job_id then return nil end
-    local ok, res = pcall(vim.fn.jobwait, {job_id}, 0)
-    if ok and res and res[1] == -1 then
-        return job_id
-    end
+    local ok, res = pcall(vim.fn.jobwait, { job_id }, 0)
+    if ok and res and res[1] == -1 then return job_id end
     _G.last_ai_job_id = nil
+    ai_notify_status(_G.last_ai_command, "stopped")
     return nil
 end
 
-function _G.SendSelectionToAI()
+local ai_agent_preference = { "codex", "claude", "gemini", "opencode", "agy", "copilot" }
+
+local function ai_notice(level, message)
+    _G.vide_native_notice(level, message)
+end
+
+local function require_ai_job()
     local job_id = _G.GetActiveAIJob()
-    if not job_id then
-        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
-        return
+    if job_id then return job_id end
+    local command = _G.last_ai_command
+    if not command or vim.fn.executable(command) == 0 then
+        command = nil
+        for _, candidate in ipairs(ai_agent_preference) do
+            if vim.fn.executable(candidate) == 1 then command = candidate; break end
+        end
     end
-    
+    if not command then
+        ai_notice("warning", "Install Codex, Claude Code, Gemini, OpenCode, Antigravity, or Copilot to use AI actions.")
+        return nil
+    end
+    _G.OpenAITerminal(command)
+    return _G.GetActiveAIJob()
+end
+
+local function send_ai_text(text, submit)
+    local job_id = require_ai_job()
+    if not job_id then return false end
+    text = ai_sanitize(text)
+    local generation = _G.ai_generation
+    local payload = "\27[200~" .. text .. "\27[201~" .. (submit and "\r" or "")
+    local function deliver()
+        if generation ~= _G.ai_generation or _G.GetActiveAIJob() ~= job_id then
+            ai_notice("warning", "The AI session stopped before the context could be delivered.")
+            return
+        end
+        vim.fn.chansend(job_id, payload)
+    end
+
+    -- A freshly launched full-screen agent needs a moment to enable its input
+    -- parser. Queue the first prompt instead of letting an initializing process
+    -- consume or discard bracketed-paste control sequences.
+    local delay = math.max(0, (_G.ai_ready_at or 0) - vim.uv.now())
+    if delay > 0 then vim.defer_fn(deliver, delay) else deliver() end
+    return true
+end
+
+local function context_block(kind, metadata, body)
+    return string.format("<vide_context type=%q %s>\n%s\n</vide_context>\n", kind, metadata or "", ai_sanitize(body))
+end
+
+local function source_buffer()
+    if _G.last_ai_source_win and vim.api.nvim_win_is_valid(_G.last_ai_source_win) then
+        local buf = vim.api.nvim_win_get_buf(_G.last_ai_source_win)
+        if vim.bo[buf].buftype == "" then return buf end
+    end
+    local current = vim.api.nvim_get_current_buf()
+    if vim.bo[current].buftype == "" then
+        -- Remember the editor window before an AI action changes focus. This is
+        -- also needed to leave Visual mode and finalize the '< and '> marks.
+        _G.last_ai_source_win = vim.api.nvim_get_current_win()
+        return current
+    end
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.bo[buf].buftype == "" then
+            _G.last_ai_source_win = win
+            return buf
+        end
+    end
+    return nil
+end
+
+local function current_file()
+    local buf = source_buffer()
+    if not buf then return nil end
+    local path = vim.api.nvim_buf_get_name(buf)
+    if path == "" then return nil end
+    return path
+end
+
+local function selected_text()
+    local buf = source_buffer()
+    if not buf then return nil end
     local mode = vim.api.nvim_get_mode().mode
-    if mode:sub(1,1) == "v" or mode:sub(1,1) == "V" or mode == "\22" then
-        vim.cmd("normal! \x1b") -- exit visual mode
+    if (mode:sub(1, 1) == "v" or mode:sub(1, 1) == "V" or mode == "\22") and
+        _G.last_ai_source_win and vim.api.nvim_win_is_valid(_G.last_ai_source_win) then
+        vim.api.nvim_win_call(_G.last_ai_source_win, function() vim.cmd("normal! \27") end)
     end
-    
-    local s_start = vim.fn.getpos("'<")
-    local s_end = vim.fn.getpos("'>")
-    if not s_start or not s_end or s_start[2] == 0 or s_end[2] == 0 then
-        vim.notify("No selection found. Please select some text first!", vim.log.levels.WARN)
+    local first = vim.api.nvim_buf_get_mark(buf, "<")
+    local last = vim.api.nvim_buf_get_mark(buf, ">")
+    if not first or not last or first[1] == 0 or last[1] == 0 then return nil end
+    local lines = vim.api.nvim_buf_get_lines(buf, first[1] - 1, last[1], false)
+    if #lines == 0 then return nil end
+    if vim.fn.visualmode() == "v" then
+        lines[#lines] = lines[#lines]:sub(1, last[2] + 1)
+        lines[1] = lines[1]:sub(first[2] + 1)
+    end
+    return table.concat(lines, "\n"), first[1], last[1]
+end
+
+local function diagnostics_text()
+    local buf = source_buffer()
+    if not buf then return "No source buffer is active." end
+    local diagnostics = vim.diagnostic.get(buf)
+    if #diagnostics == 0 then return "No diagnostics in the current file." end
+    local severity = vim.diagnostic.severity
+    local names = { [severity.ERROR] = "ERROR", [severity.WARN] = "WARN", [severity.INFO] = "INFO", [severity.HINT] = "HINT" }
+    local lines = {}
+    for _, diagnostic in ipairs(diagnostics) do
+        table.insert(lines, string.format("%s %d:%d %s", names[diagnostic.severity] or "DIAG", diagnostic.lnum + 1, diagnostic.col + 1, diagnostic.message:gsub("\n", " ")))
+    end
+    return table.concat(lines, "\n")
+end
+
+local function git_diff_text()
+    local diff = vim.fn.system({ "git", "diff", "--no-ext-diff", "HEAD" })
+    if vim.v.shell_error ~= 0 then diff = vim.fn.system({ "git", "diff", "--no-ext-diff" }) end
+    if diff == "" then return "Working tree has no tracked changes." end
+    return diff
+end
+
+function _G.SendSelectionToAI()
+    local text, first, last = selected_text()
+    if not text then
+        ai_notice("warning", "Select some code first, then open the right-click menu.")
         return
     end
-    
-    local lines = vim.api.nvim_buf_get_lines(0, s_start[2] - 1, s_end[2], false)
-    if #lines == 0 then return end
-    
-    if mode == "v" then
-        lines[#lines] = string.sub(lines[#lines], 1, s_end[3])
-        lines[1] = string.sub(lines[1], s_start[3])
+    local path = current_file() or "[No Name]"
+    if send_ai_text(context_block("selection", string.format("file=%q lines=%q", path, first .. "-" .. last), text), false) then
+        vim.notify("Selection added to AI context", vim.log.levels.INFO)
     end
-    
-    local text = table.concat(lines, "\n")
-    vim.fn.chansend(job_id, text)
-    vim.notify("Sent selection to AI terminal", vim.log.levels.INFO)
 end
 
 function _G.SendFilePathToAI()
-    local job_id = _G.GetActiveAIJob()
-    if not job_id then
-        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+    local path = current_file()
+    if not path then
+        vim.notify("The current buffer has no file path.", vim.log.levels.WARN)
         return
     end
-    local fp = vim.fn.expand("%:p")
-    if fp == "" then return end
-    vim.fn.chansend(job_id, fp .. " ")
-    vim.notify("Sent file path to AI terminal", vim.log.levels.INFO)
+    if send_ai_text(context_block("file", string.format("path=%q", path), "Use this file as context."), false) then
+        vim.notify("File reference added to AI context", vim.log.levels.INFO)
+    end
 end
 
 function _G.SendFileContentToAI()
-    local job_id = _G.GetActiveAIJob()
-    if not job_id then
-        vim.notify("No active AI terminal found. Open one from the AI Panel first!", vim.log.levels.WARN)
+    local path = current_file() or "[No Name]"
+    local buf = source_buffer()
+    if not buf then vim.notify("No source buffer is active.", vim.log.levels.WARN); return end
+    local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+    if send_ai_text(context_block("buffer", string.format("file=%q", path), text), false) then
+        vim.notify("Buffer contents added to AI context", vim.log.levels.INFO)
+    end
+end
+
+function _G.SendDiagnosticsToAI()
+    local path = current_file() or "[No Name]"
+    if send_ai_text(context_block("diagnostics", string.format("file=%q", path), diagnostics_text()), false) then
+        vim.notify("Diagnostics added to AI context", vim.log.levels.INFO)
+    end
+end
+
+function _G.SendGitDiffToAI()
+    if send_ai_text(context_block("git_diff", "", git_diff_text()), false) then
+        vim.notify("Git diff added to AI context", vim.log.levels.INFO)
+    end
+end
+
+function _G.RunAIAction(action)
+    local path = current_file() or "[No Name]"
+    local prompt
+    if action == "fix_diagnostics" then
+        prompt = "Fix the diagnostics in " .. path .. ". Inspect the surrounding code, make the smallest correct edits, and run relevant checks.\n" .. context_block("diagnostics", string.format("file=%q", path), diagnostics_text())
+    elseif action == "explain_selection" then
+        local text, first, last = selected_text()
+        if not text then ai_notice("warning", "Select some code first, then choose Explain with AI."); return end
+        prompt = "Explain this code clearly, including intent, important control flow, and likely pitfalls.\n" .. context_block("selection", string.format("file=%q lines=%q", path, first .. "-" .. last), text)
+    elseif action == "fix_selection" then
+        local text, first, last = selected_text()
+        if not text then ai_notice("warning", "Select some code first, then choose Fix / Improve with AI."); return end
+        prompt = "Fix or improve the selected code in " .. path .. ". Preserve its intended behavior, follow the surrounding conventions, make the smallest useful edit, and run relevant checks.\n" .. context_block("selection", string.format("file=%q lines=%q", path, first .. "-" .. last), text)
+    elseif action == "write_tests" then
+        prompt = "Write or improve focused tests for " .. path .. ". Follow the repository's existing test style and run the relevant test command."
+    elseif action == "review_changes" then
+        prompt = "Review the current working-tree changes for correctness, regressions, security issues, and missing tests. Report findings by severity before proposing edits.\n" .. context_block("git_diff", "", git_diff_text())
+    elseif action == "implement_todo" then
+        local buf = source_buffer()
+        if not buf then vim.notify("No source buffer is active.", vim.log.levels.WARN); return end
+        local row = 1
+        if _G.last_ai_source_win and vim.api.nvim_win_is_valid(_G.last_ai_source_win) then
+            row = vim.api.nvim_win_get_cursor(_G.last_ai_source_win)[1]
+        end
+        local first = math.max(0, row - 8)
+        local last = math.min(vim.api.nvim_buf_line_count(buf), row + 7)
+        local nearby = table.concat(vim.api.nvim_buf_get_lines(buf, first, last, false), "\n")
+        prompt = "Implement the TODO or unfinished behavior near the cursor in " .. path .. ". Preserve local conventions and run relevant tests.\n" .. context_block("near_cursor", string.format("file=%q lines=%q", path, (first + 1) .. "-" .. last), nearby)
+    else
+        ai_notice("error", "Unknown AI action: " .. tostring(action))
         return
     end
-    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-    local text = table.concat(lines, "\n")
-    vim.fn.chansend(job_id, text)
-    vim.notify("Sent file content to AI terminal", vim.log.levels.INFO)
+    if send_ai_text(prompt, true) then vim.schedule(_G.FocusAITerminal) end
 end
 
 vim.keymap.set("v", "<leader>as", _G.SendSelectionToAI, { desc = "Send selected text to AI terminal" })
@@ -2029,25 +2260,123 @@ vim.keymap.set({ "n", "v", "i" }, "<C-M-s>", _G.SendSelectionToAI, { desc = "Sen
 vim.keymap.set({ "n", "v", "i" }, "<C-M-f>", _G.SendFilePathToAI, { desc = "Send current file path to AI terminal" })
 vim.keymap.set({ "n", "v", "i" }, "<C-M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
 
-function _G.OpenAITerminal(cmd)
-    vim.cmd("botright vsplit")
-    vim.cmd("wincmd L")
-    vim.cmd("enew")
-    local shell = vim.env.SHELL or "bash"
-    local job_id = vim.fn.termopen(shell)
-    _G.last_ai_job_id = job_id
-    
-    local run_cmd = cmd
-    if vim.fn.executable(cmd) == 0 then
-        run_cmd = "echo 'Command \"" .. cmd .. "\" is not installed. Please install it first.'; exec $SHELL"
-    end
+function _G.NotifyAIMissing(cmd)
+    vim.notify("AI agent '" .. cmd .. "' is not installed or not available on PATH.", vim.log.levels.WARN)
+end
 
-    -- Send the command and enter
-    vim.fn.chansend(job_id, run_cmd .. "\n")
+local function configure_ai_winbar(win, command)
+    if not win or not vim.api.nvim_win_is_valid(win) then return end
+    -- Vide draws split-owned tabs in its native top strip.
+    vim.wo[win].winbar = ""
+end
+
+function _G.FocusAITerminal()
+    if not require_ai_job() then return end
+    if _G.last_ai_win and vim.api.nvim_win_is_valid(_G.last_ai_win) then
+        vim.api.nvim_set_current_win(_G.last_ai_win)
+        vim.cmd("startinsert")
+        return
+    end
+    if _G.last_ai_buf and vim.api.nvim_buf_is_valid(_G.last_ai_buf) then
+        vim.cmd("botright vsplit")
+        vim.cmd("wincmd L")
+        vim.api.nvim_win_set_buf(0, _G.last_ai_buf)
+        _G.last_ai_win = vim.api.nvim_get_current_win()
+        configure_ai_winbar(_G.last_ai_win, _G.last_ai_command or "agent")
+        vim.cmd("startinsert")
+    end
+end
+
+function _G.StopAITerminal()
+    local job_id = _G.GetActiveAIJob()
+    if not job_id then return end
+    _G.ai_generation = _G.ai_generation + 1
+    _G.last_ai_job_id = nil
+    pcall(vim.fn.jobstop, job_id)
+    ai_notify_status(_G.last_ai_command, "stopped")
+    vim.notify("AI session stopped", vim.log.levels.INFO)
+end
+
+function _G.CloseAITerminal()
+    local job_id = _G.GetActiveAIJob()
+    local win = _G.last_ai_win
+    local buf = _G.last_ai_buf
+    local source_win = _G.last_ai_source_win
+
+    -- Invalidate callbacks before stopping the job so a stale on_exit cannot
+    -- overwrite the state of a newly opened agent session.
+    _G.ai_generation = _G.ai_generation + 1
+    _G.last_ai_job_id = nil
+    _G.last_ai_win = nil
+    _G.last_ai_buf = nil
+    _G.ai_ready_at = 0
+
+    if job_id then pcall(vim.fn.jobstop, job_id) end
+    if win and vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
+    if buf and vim.api.nvim_buf_is_valid(buf) then pcall(vim.api.nvim_buf_delete, buf, { force = true }) end
+    ai_notify_status(_G.last_ai_command, "stopped")
+
+    if source_win and vim.api.nvim_win_is_valid(source_win) then
+        pcall(vim.api.nvim_set_current_win, source_win)
+    end
+    ai_notice("info", "AI panel closed")
+end
+
+function _G.VideCloseAIWinbar()
+    _G.CloseAITerminal()
+end
+
+function _G.RestartAITerminal()
+    local command = _G.last_ai_command
+    if not command then
+        vim.notify("No AI session to restart.", vim.log.levels.WARN)
+        return
+    end
+    _G.StopAITerminal()
+    vim.schedule(function() _G.OpenAITerminal(command) end)
+end
+
+function _G.OpenAITerminal(cmd)
+    if vim.fn.executable(cmd) == 0 then _G.NotifyAIMissing(cmd); return end
+    local active = _G.GetActiveAIJob()
+    if active then _G.StopAITerminal() end
+    local current_win = vim.api.nvim_get_current_win()
+    local current_buf = vim.api.nvim_get_current_buf()
+    if vim.bo[current_buf].buftype == "" then _G.last_ai_source_win = current_win end
+    if _G.last_ai_win and vim.api.nvim_win_is_valid(_G.last_ai_win) then
+        vim.api.nvim_set_current_win(_G.last_ai_win)
+        vim.cmd("enew")
+    else
+        vim.cmd("botright vsplit")
+        vim.cmd("wincmd L")
+        vim.cmd("enew")
+    end
+    _G.ai_generation = _G.ai_generation + 1
+    local generation = _G.ai_generation
+    -- Launch the agent directly. Going through an interactive shell creates a
+    -- race where the first AI prompt can be pasted into the shell before its
+    -- `exec` command has replaced it with the agent.
+    local job_id = vim.fn.termopen({ cmd }, {
+        on_exit = function()
+            if generation ~= _G.ai_generation then return end
+            _G.last_ai_job_id = nil
+            ai_notify_status(cmd, "stopped")
+        end,
+    })
+    _G.last_ai_job_id = job_id
+    _G.last_ai_command = cmd
+    _G.ai_ready_at = vim.uv.now() + 900
+    _G.last_ai_buf = vim.api.nvim_get_current_buf()
+    _G.last_ai_win = vim.api.nvim_get_current_win()
+    vim.bo[_G.last_ai_buf].bufhidden = "hide"
+    vim.api.nvim_buf_set_name(_G.last_ai_buf, string.format("AI: %s [%d]", cmd, generation))
+    configure_ai_winbar(_G.last_ai_win, cmd)
+    ai_notify_status(cmd, "running")
     vim.cmd("startinsert")
 end
 
--- Disable default right-click behavior to prevent popup menus which cause freezes in headless mode
+-- Vide renders its own native editor context menu, so Neovim must not also
+-- open or process a second right-click menu in the embedded UI.
 for _, mode in ipairs({ 'n', 'v', 'i', 's', 'c' }) do
     vim.keymap.set(mode, '<RightMouse>', '<Nop>', { silent = true })
     vim.keymap.set(mode, '<RightRelease>', '<Nop>', { silent = true })
@@ -2062,13 +2391,17 @@ end
 local function vide_notify_buffers()
     local buffers = {}
     for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
-        local name = info.name or ""
-        table.insert(buffers, {
-            bufnr = info.bufnr,
-            name = name,
-            relative_name = name == "" and "" or vim.fn.fnamemodify(name, ":."),
-            changed = info.changed == 1,
-        })
+        -- Split-owned AI terminals have their own winbar tab and should not
+        -- masquerade as files in Vide's global file tab strip.
+        if info.bufnr ~= _G.last_ai_buf then
+            local name = info.name or ""
+            table.insert(buffers, {
+                bufnr = info.bufnr,
+                name = name,
+                relative_name = name == "" and "" or vim.fn.fnamemodify(name, ":."),
+                changed = info.changed == 1,
+            })
+        end
     end
     vim.rpcnotify(1, "vide_buffers", buffers, vim.api.nvim_get_current_buf())
 end

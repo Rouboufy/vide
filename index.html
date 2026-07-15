@@ -22,25 +22,25 @@
     <a class="brand" href="#top"><img src="packaging/vide.svg" alt="" width="36" height="36">Vide</a>
     <nav aria-label="Primary">
       <a href="#modes">Modes</a><a href="#features">Features</a><a href="#install">Install</a><a href="#support">Support</a>
-      <a href="https://github.com/Rouboufy/vide">GitHub</a><a class="nav-release" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.4">v0.2.4</a>
+      <a href="https://github.com/Rouboufy/vide">GitHub</a><a class="nav-release" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.5">v0.2.5</a>
     </nav>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
       <div>
-        <a class="release-pill" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.4"><span>Latest</span> Vide 0.2.4 is available <span aria-hidden="true">→</span></a>
+        <a class="release-pill" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.5"><span>Latest</span> Vide 0.2.5 is available <span aria-hidden="true">→</span></a>
         <p class="eyebrow">Terminal-native. Neovim-powered. No Electron.</p>
         <h1>The IDE that hides a terminal.<br>The terminal that wears an IDE.</h1>
-        <p class="lede">Vide combines a native Zig interface, an isolated Neovim editor, mouse-driven tools, and three editing experiences in one lightweight terminal application.</p>
-        <div class="actions"><a class="button primary" href="#install">Install Vide</a><a class="button" href="#download-options">Download v0.2.4</a></div>
+        <p class="lede">Vide combines a native Zig interface, an isolated Neovim editor, mouse-driven tools, and an agent-ready AI coding workspace in one lightweight terminal application.</p>
+        <div class="actions"><a class="button primary" href="#install">Install Vide</a><a class="button" href="#download-options">Download v0.2.5</a></div>
         <ul class="hero-facts" aria-label="Vide highlights"><li>Zig-native UI</li><li>Isolated Neovim</li><li>Linux &amp; macOS builds</li></ul>
       </div>
       <figure class="terminal-frame"><div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>vide — normal</span></div><img class="hero-shot" src="docs/screenshots/normal.webp" alt="Vide Normal mode showing the editor dashboard and activity bar" width="1920" height="1153"></figure>
     </section>
 
     <aside class="shortcut-strip" aria-label="Popular keyboard shortcuts">
-      <span><kbd>Ctrl</kbd> + <kbd>E</kbd> Explorer</span><span><kbd>Ctrl</kbd> + <kbd>T</kbd> Terminal</span><span><kbd>Space</kbd> <kbd>o</kbd> <kbd>t</kbd> Terminal split</span><span><kbd>F11</kbd> Zen mode</span>
+      <span><kbd>Ctrl</kbd> + <kbd>E</kbd> Explorer</span><span><kbd>Ctrl</kbd> + <kbd>T</kbd> Terminal</span><span><kbd>Right click</kbd> Editor actions</span><span><kbd>F11</kbd> Zen mode</span><span><kbd>F12</kbd> Report a bug</span>
     </aside>
 
     <section id="modes">
@@ -58,6 +58,9 @@
         <article><span class="feature-icon" aria-hidden="true">⌘</span><h3>Workspace navigation</h3><p>Keyboard and mouse file explorer, visual buffers, split controls, search actions, and project-aware language recommendations.</p></article>
         <article><span class="feature-icon" aria-hidden="true">›_</span><h3>Integrated terminal and Git</h3><p>Resizable terminal, debug and output panels, Git status, staging, commits, branch history, and detailed repository actions.</p></article>
         <article><span class="feature-icon" aria-hidden="true">{ }</span><h3>Language tooling</h3><p>Bundled completion, Treesitter, LSP integration, Mason package management, diagnostics, formatting, and health reporting.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">AI</span><h3>Agent coding workspace</h3><p>Launch Codex, Claude Code, Gemini, OpenCode, Copilot, or Antigravity with selected code, files, diagnostics, and Git changes attached as focused context.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">↗</span><h3>Native editor interactions</h3><p>Right-click editing and AI actions, visible mouse selection, scrollable menus, and split-owned tabs keep common workflows direct and discoverable.</p></article>
+        <article><span class="feature-icon" aria-hidden="true">!</span><h3>Private bug reporting</h3><p>Report issues inside Vide with explicit log consent, credential and home-path redaction, and privacy-conscious system diagnostics.</p></article>
         <article><span class="feature-icon" aria-hidden="true">◇</span><h3>Isolated by design</h3><p>Vide never loads or rewrites the user’s unrelated system-Neovim configuration. Settings, plugins, logs, and sessions have separate XDG paths.</p></article>
       </div>
       <div class="gallery">
@@ -77,8 +80,8 @@
       <details class="download-menu" id="download-options">
         <summary><span><strong>Choose a download</strong><small>Native releases, AppImage, or source</small></span></summary>
         <div class="download-options">
-          <a href="https://github.com/Rouboufy/vide/releases/tag/v0.2.4"><span class="install-tag">Linux + macOS</span><strong>Native releases</strong><small>Checksum-verified x86-64 and ARM64 binaries. Requires Neovim 0.10+.</small></a>
-          <a href="https://github.com/Rouboufy/vide/releases/latest/download/Vide-0.2.4-x86_64.AppImage"><span class="install-tag">Linux x86-64</span><strong>Portable AppImage</strong><small>Bundles Neovim 0.11.6, desktop metadata, and its own checksum.</small></a>
+          <a href="https://github.com/Rouboufy/vide/releases/tag/v0.2.5"><span class="install-tag">Linux + macOS</span><strong>Native releases</strong><small>Checksum-verified x86-64 and ARM64 binaries. Requires Neovim 0.10+.</small></a>
+          <a href="https://github.com/Rouboufy/vide/releases/latest/download/Vide-linux-x86_64.AppImage"><span class="install-tag">Linux x86-64</span><strong>Portable AppImage</strong><small>Bundles Neovim 0.11.6, desktop metadata, and its own checksum.</small></a>
           <a href="https://github.com/Rouboufy/vide#build-from-source"><span class="install-tag">Developers</span><strong>Build from source</strong><small>Use <code>setup.sh --source</code> with the pinned Zig 0.16.0 toolchain.</small></a>
         </div>
       </details>

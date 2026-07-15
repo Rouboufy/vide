@@ -129,6 +129,12 @@ kbd { padding: .12rem .38rem; border: 1px solid #4a525c; border-bottom-width: 2p
 .download-menu summary strong { color: #fff; }
 .download-menu summary small, .download-options small { color: var(--muted); }
 .download-options { position: absolute; z-index: 3; right: 0; left: 0; overflow: hidden; border: 1px solid var(--blue); border-top: 0; border-radius: 0 0 10px 10px; background: #101317; box-shadow: 0 20px 45px #0009; }
+.download-options {
+  max-height: min(24rem, calc(100vh - 16rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .download-options a { display: grid; padding: 1rem 1.1rem; color: var(--text); text-decoration: none; }
 .download-options a + a { border-top: 1px solid var(--line); }
 .download-options a:hover, .download-options a:focus-visible { background: #17232c; color: #fff; }

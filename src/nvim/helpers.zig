@@ -129,6 +129,11 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             .info;
         app.notify(level, "{s}", .{params.array[1].string});
         std.log.info("Neovim notice [{s}]: {s}", .{ params.array[0].string, params.array[1].string });
+    } else if (std.mem.eql(u8, method, "vide_ai_status") and params == .array and params.array.len >= 2 and
+        params.array[0] == .string and params.array[1] == .string)
+    {
+        app.ai_panel.updateSession(params.array[0].string, params.array[1].string);
+        app.needs_resize = true;
     } else if (std.mem.eql(u8, method, "vide_settings_changed")) {
         var old_cfg = app.settings_widget.config;
         if (settings.SettingsConfig.load(app.settings_widget.allocator, app.settings_widget.settings_path)) |new_cfg| {
@@ -171,12 +176,14 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
         if (list_val == .array) {
             for (list_val.array) |w_val| {
                 if (w_val == .map) {
-                    var info = WinInfo{ .id = 0, .row = 0, .col = 0, .width = 0, .height = 0, .active = false, .name = "" };
+                    var info = WinInfo{ .id = 0, .bufnr = 0, .row = 0, .col = 0, .width = 0, .height = 0, .active = false, .name = "" };
                     for (w_val.map) |kv| {
                         if (kv.key == .string) {
                             const key = kv.key.string;
                             if (std.mem.eql(u8, key, "id") and kv.value == .integer) {
                                 info.id = kv.value.integer;
+                            } else if (std.mem.eql(u8, key, "bufnr") and kv.value == .integer) {
+                                info.bufnr = kv.value.integer;
                             } else if (std.mem.eql(u8, key, "row") and kv.value == .integer) {
                                 info.row = @as(u16, @intCast(kv.value.integer));
                             } else if (std.mem.eql(u8, key, "col") and kv.value == .integer) {

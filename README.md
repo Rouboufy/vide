@@ -103,6 +103,8 @@ stored only in Vide's isolated data directory.
 ### Native Zig Components
 The surrounding UI elements are built natively in Zig for maximum speed and memory efficiency:
 * **Interactive File Explorer:** Directly queries the filesystem (`std.fs`), supporting mouse-driven navigation, directory expansion, and real-time Git/Neovim modification indicators.
+* **Native Editor Context Menu:** Right-click editing with Undo, Redo, Cut, Copy, Paste, Select All, and source-aware AI actions for explaining or improving selected code.
+* **AI Coding Workspace:** Launches detected Codex, Claude Code, Gemini, OpenCode, Copilot, or Antigravity CLIs with live session state, source-aware context sharing, and focused actions for diagnostics, tests, code review, explanations, and TODO implementation.
 * **Package Management Widgets:** Custom, full-screen TUI interfaces for both the Lazy plugin manager and the Mason package registry, featuring real-time search filtering and mouse control.
 * **Configuration Menu:** A dedicated GUI-like settings panel for adjusting themes, indentation, line numbers, and keybindings on the fly.
 
@@ -130,7 +132,7 @@ Before installing Vide, make sure you have the following:
 | **Neovim** | `>= 0.10.0` | Required as the editor engine |
 | **Zig** | `0.16.0` | Exact supported version for reproducible source builds |
 | **git** | any | Required to clone the repository |
-| **curl** | any | Required by `setup.sh` |
+| **curl** | any | Required by `setup.sh` and the optional in-app bug reporter |
 | **Python** | `>= 3` | Required by the extension shop and automatic Zig installation |
 | **A Nerd Font** | recommended | Rich icons are enabled by default; portable text symbols can be selected in Settings |
 | **True Color terminal** | — | Any modern terminal (Alacritty, Kitty, Ghostty, etc.) |
@@ -260,6 +262,7 @@ These keybindings are handled directly by the Vide TUI layer:
 | Action | Keybinding |
 | :--- | :--- |
 | **Toggle Zen / previous mode** | `F11` |
+| **Report a bug** | `F12` or the bottom-right button |
 | **Toggle File Explorer** | `Ctrl + E` |
 | **Toggle Terminal Panel** | `Ctrl + T` |
 | **Resize Panel Left** | `Alt + ←` |

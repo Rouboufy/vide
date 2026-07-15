@@ -1,0 +1,13 @@
+name = "vide-bug-report"
+main = "src/index.ts"
+compatibility_date = "2026-07-15"
+
+[vars]
+GITHUB_OWNER = "Rouboufy"
+GITHUB_REPO = "vide"
+
+# Create this namespace, then replace the placeholder before deployment:
+#   npx wrangler kv namespace create REPORT_LIMITS
+[[kv_namespaces]]
+binding = "REPORT_LIMITS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

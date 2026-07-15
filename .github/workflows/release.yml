@@ -31,6 +31,8 @@ jobs:
         with:
           version: 0.16.0
       - name: Build native release binaries
+        env:
+          VIDE_BUG_REPORT_ENDPOINT: ${{ vars.VIDE_BUG_REPORT_ENDPOINT }}
         run: |
           mkdir -p dist
           mkdir -p .zig-cache/global .zig-cache/local
@@ -41,7 +43,8 @@ jobs:
             ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-cache/global \
             ZIG_LOCAL_CACHE_DIR=$PWD/.zig-cache/local \
               zig build -Dtarget="$target" -Doptimize=ReleaseFast \
-                -Dversion="${GITHUB_REF_NAME#v}" --prefix "$prefix"
+                -Dversion="${GITHUB_REF_NAME#v}" \
+                -Dbug-report-endpoint="$VIDE_BUG_REPORT_ENDPOINT" --prefix "$prefix"
             cp "$prefix/bin/vide" "dist/$asset"
             tar -C "$prefix/bin" -czf "dist/$asset.tar.gz" vide
           }
@@ -50,6 +53,8 @@ jobs:
           build_asset x86_64-macos vide-macos-x86_64
           build_asset aarch64-macos vide-macos-aarch64
       - name: Build AppImage
+        env:
+          VIDE_BUG_REPORT_ENDPOINT: ${{ vars.VIDE_BUG_REPORT_ENDPOINT }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}" COMMIT_SHA="$GITHUB_SHA" bash build_appimage.sh
           tests/appimage_smoke.sh Vide.AppDir

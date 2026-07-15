@@ -8,4 +8,6 @@ test "all core modules compile and register their tests" {
     _ = @import("tui/capabilities.zig");
     _ = @import("tui/theme.zig");
     _ = @import("tui/widgets/primitives.zig");
+    _ = @import("tui/widgets/bug_report.zig");
+    _ = @import("tui/widgets/editor_context_menu.zig");
 }

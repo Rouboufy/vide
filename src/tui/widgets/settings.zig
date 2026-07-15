@@ -2,7 +2,40 @@ const std = @import("std");
 const build_options = @import("build_options");
 const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
+const input = @import("../input.zig");
 const primitives = @import("primitives.zig");
+
+const max_visible_themes: usize = 8;
+
+fn isThemeHeading(theme_name: []const u8) bool {
+    return std.mem.startsWith(u8, theme_name, "---");
+}
+
+fn scrollThemeList(themes: []const []const u8, hover_idx: *usize, scroll_offset: *usize, down: bool) void {
+    if (themes.len <= max_visible_themes) return;
+
+    const max_offset = themes.len - max_visible_themes;
+    scroll_offset.* = if (down)
+        @min(scroll_offset.* + 1, max_offset)
+    else
+        scroll_offset.* -| 1;
+
+    const visible_end = @min(themes.len, scroll_offset.* + max_visible_themes);
+    if (hover_idx.* < scroll_offset.*) {
+        var idx = scroll_offset.*;
+        while (idx < visible_end and isThemeHeading(themes[idx])) : (idx += 1) {}
+        if (idx < visible_end) hover_idx.* = idx;
+    } else if (hover_idx.* >= visible_end) {
+        var idx = visible_end;
+        while (idx > scroll_offset.*) {
+            idx -= 1;
+            if (!isThemeHeading(themes[idx])) {
+                hover_idx.* = idx;
+                break;
+            }
+        }
+    }
+}
 
 pub const Keybindings = struct {
     toggle_explorer: []const u8 = "<C-e>", // Ctrl-e
@@ -124,6 +157,13 @@ pub const SettingsConfig = struct {
         } else if (std.mem.eql(u8, config.mode, "ide")) {
             config.zen = false;
             config.ide = true;
+        }
+
+        // Ctrl+Z was Vide's original Zen binding, but it masks the standard
+        // undo shortcut. Migrate that legacy default while preserving every
+        // other user-selected Zen binding.
+        if (std.mem.eql(u8, config.keybindings.toggle_zen, "<C-z>")) {
+            config.keybindings.toggle_zen = "<F11>";
         }
 
         config.theme = try allocator.dupe(u8, config.theme);
@@ -465,7 +505,6 @@ pub const SettingsWidget = struct {
         for (self.themes.items, 0..) |t, idx| {
             if (std.mem.eql(u8, t, self.config.theme)) {
                 self.hover_dropdown_idx = idx;
-                const max_visible_themes = 8;
                 if (idx >= max_visible_themes) {
                     self.dropdown_scroll_offset = idx - (max_visible_themes / 2);
                     if (self.dropdown_scroll_offset + max_visible_themes > self.themes.items.len) {
@@ -985,7 +1024,6 @@ pub const SettingsWidget = struct {
             // Items
             var item_y = drop_y + 1;
             if (self.active_dropdown == .theme) {
-                const max_visible_themes = 8;
                 var i: usize = self.dropdown_scroll_offset;
                 const end_idx = @min(self.themes.items.len, self.dropdown_scroll_offset + max_visible_themes);
                 while (i < end_idx) : (i += 1) {
@@ -1186,7 +1224,6 @@ pub const SettingsWidget = struct {
                     if (next_idx < items_len) {
                         self.hover_dropdown_idx = next_idx;
                         if (self.active_dropdown == .theme) {
-                            const max_visible_themes = 8;
                             if (self.hover_dropdown_idx >= self.dropdown_scroll_offset + max_visible_themes) {
                                 self.dropdown_scroll_offset = self.hover_dropdown_idx - (max_visible_themes - 1);
                             }
@@ -1430,8 +1467,11 @@ pub const SettingsWidget = struct {
         return false;
     }
 
-    pub fn handleMouse(self: *SettingsWidget, mx: u16, my: u16, screen_w: u16, screen_h: u16) bool {
+    pub fn handleMouse(self: *SettingsWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16) bool {
         if (!self.is_open) return false;
+
+        const mx = m.col;
+        const my = m.row;
 
         if (self.selected_plugin) |p| {
             const plugin_modal = primitives.Modal.centered(screen_w, screen_h, 50, 12, 0);
@@ -1536,6 +1576,21 @@ pub const SettingsWidget = struct {
 
             const max_visible = if (self.active_dropdown == .theme) @min(items_len, 8) else items_len;
             const drop_h = @as(u16, @intCast(max_visible)) + 2;
+
+            if (m.button == .wheel_up or m.button == .wheel_down) {
+                if (self.active_dropdown == .theme and
+                    mx >= drop_x and mx < drop_x + drop_w and
+                    my >= drop_y and my < drop_y + drop_h)
+                {
+                    scrollThemeList(
+                        self.themes.items,
+                        &self.hover_dropdown_idx,
+                        &self.dropdown_scroll_offset,
+                        m.button == .wheel_down,
+                    );
+                }
+                return true;
+            }
 
             if (mx >= drop_x and mx < drop_x + drop_w and my > drop_y and my < drop_y + drop_h - 1) {
                 const click_offset = my - drop_y - 1;
@@ -1764,6 +1819,21 @@ test "settings roundtrip preserves canonical mode defaults" {
     try std.testing.expectEqualStrings("", loaded.colorcolumn);
 }
 
+test "legacy Ctrl+Z Zen binding migrates to F11" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+
+    var legacy = SettingsConfig{};
+    legacy.keybindings.toggle_zen = "<C-z>";
+    try legacy.save(path);
+
+    var loaded = try SettingsConfig.load(std.testing.allocator, path);
+    defer loaded.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("<F11>", loaded.keybindings.toggle_zen);
+}
+
 test "software updater uses the official release installer" {
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "--no-plugins") != null);
@@ -1772,4 +1842,36 @@ test "software updater uses the official release installer" {
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "SHA256SUMS") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "success") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "failure") != null);
+}
+
+test "theme dropdown mouse scrolling keeps the highlight visible" {
+    const themes = [_][]const u8{
+        "--- Vide Themes ---",
+        "vscode",
+        "kanagawa",
+        "nord",
+        "gruvbox",
+        "rose-pine",
+        "--- Installed ---",
+        "custom-one",
+        "custom-two",
+        "custom-three",
+        "custom-four",
+    };
+    var hover_idx: usize = 1;
+    var scroll_offset: usize = 0;
+
+    scrollThemeList(&themes, &hover_idx, &scroll_offset, true);
+    try std.testing.expectEqual(@as(usize, 1), scroll_offset);
+    try std.testing.expectEqual(@as(usize, 1), hover_idx);
+
+    scrollThemeList(&themes, &hover_idx, &scroll_offset, true);
+    try std.testing.expectEqual(@as(usize, 2), scroll_offset);
+    try std.testing.expectEqual(@as(usize, 2), hover_idx);
+
+    hover_idx = 10;
+    scroll_offset = 3;
+    scrollThemeList(&themes, &hover_idx, &scroll_offset, false);
+    try std.testing.expectEqual(@as(usize, 2), scroll_offset);
+    try std.testing.expectEqual(@as(usize, 9), hover_idx);
 }

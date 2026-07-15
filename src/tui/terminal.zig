@@ -92,6 +92,7 @@ pub const Terminal = struct {
     owns_tty_fd: bool,
     tty_writer: TerminalWriter,
     mouse_enabled: bool,
+    hover_mouse_enabled: bool,
     paste_enabled: bool,
 
     pub fn writer(self: *Terminal) *std.Io.Writer {
@@ -130,6 +131,7 @@ pub const Terminal = struct {
             .owns_tty_fd = opened_tty != null,
             .tty_writer = TerminalWriter.init(output_fd),
             .mouse_enabled = capabilities.mouse,
+            .hover_mouse_enabled = false,
             .paste_enabled = capabilities.bracketed_paste,
         };
 
@@ -143,12 +145,23 @@ pub const Terminal = struct {
     pub fn deinit(self: *Terminal) void {
         // Disable bracketed paste, disable mouse tracking, show cursor, disable alternate screen
         if (self.paste_enabled) self.writer().writeAll("\x1b[?2004l") catch {};
-        if (self.mouse_enabled) self.writer().writeAll("\x1b[?1002l\x1b[?1006l") catch {};
+        if (self.mouse_enabled) self.writer().writeAll("\x1b[?1003l\x1b[?1002l\x1b[?1006l") catch {};
         self.writer().writeAll("\x1b[?25h\x1b[?1049l") catch {};
 
         // Restore original terminal attributes
         posix.tcsetattr(self.tty_fd, .FLUSH, self.orig_termios) catch {};
         if (self.owns_tty_fd) _ = posix.system.close(self.tty_fd);
+    }
+
+    pub fn setHoverMouse(self: *Terminal, enabled: bool) void {
+        if (!self.mouse_enabled or self.hover_mouse_enabled == enabled) return;
+        if (enabled) {
+            self.writer().writeAll("\x1b[?1003h") catch return;
+        } else {
+            // Restore button-event tracking used for selection and resizing.
+            self.writer().writeAll("\x1b[?1003l\x1b[?1002h") catch return;
+        }
+        self.hover_mouse_enabled = enabled;
     }
 
     pub fn getSize(self: Terminal) ![2]u16 {

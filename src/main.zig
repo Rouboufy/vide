@@ -16,6 +16,7 @@ const SearchPanel = @import("tui/widgets/search_panel.zig").SearchPanel;
 const OutputPanel = @import("tui/widgets/output_panel.zig").OutputPanel;
 const DebugConsole = @import("tui/widgets/debug_console.zig").DebugConsole;
 const ExtensionShop = @import("tui/widgets/extension_shop.zig").ExtensionShop;
+const BugReportWidget = @import("tui/widgets/bug_report.zig").BugReportWidget;
 
 const NvimProcess = @import("nvim/process.zig").NvimProcess;
 const RpcClient = @import("nvim/rpc.zig").RpcClient;
@@ -110,7 +111,7 @@ pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_
     if (global_term) |term| {
         term.deinit();
     } else {
-        const esc = "\x1b[?2004l\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l\x1b[0m\r\n";
+        const esc = "\x1b[?2004l\x1b[?1003l\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l\x1b[0m\r\n";
         _ = posix.system.write(2, esc, esc.len);
     }
     std.debug.defaultPanic(msg, ret_addr);
@@ -376,7 +377,7 @@ fn runNvimSession(
     defer extension_shop.deinit();
     app.extension_shop = &extension_shop;
 
-    var ai_panel = @import("tui/widgets/ai_panel.zig").AiPanel.init(alloc);
+    var ai_panel = @import("tui/widgets/ai_panel.zig").AiPanel.init(alloc, init.io, init.environ_map);
     defer ai_panel.deinit();
     app.ai_panel = &ai_panel;
 
@@ -387,6 +388,11 @@ fn runNvimSession(
     var debug_console = DebugConsole.init(alloc);
     defer debug_console.deinit();
     app.debug_console = &debug_console;
+
+    const report_endpoint = init.environ_map.get("VIDE_BUG_REPORT_ENDPOINT") orelse build_options.bug_report_endpoint;
+    var bug_report = try BugReportWidget.init(alloc, init.io, app_data_dir, init.environ_map.get("HOME") orelse "", report_endpoint, build_options.version, init.environ_map);
+    defer bug_report.deinit();
+    app.bug_report = &bug_report;
 
     const settings_path = try std.fs.path.join(alloc, &[_][]const u8{ app_data_dir, "settings.json" });
     const preview_path = try std.fs.path.join(alloc, &[_][]const u8{ app_data_dir, "preview.json" });
@@ -579,6 +585,8 @@ fn runNvimSession(
                 else => {},
             }
         }
+
+        if (bug_report.poll()) app.needs_resize = true;
 
         const cols = ren.width;
         const rows = ren.height;
@@ -857,6 +865,10 @@ fn runNvimSession(
                     },
                     .paste => |p| {
                         defer alloc.free(p);
+                        if (app.bug_report.handlePaste(p)) {
+                            app.needs_resize = true;
+                            continue;
+                        }
                         var params = try alloc.alloc(Value, 3);
                         defer alloc.free(params);
                         params[0] = .{ .string = p };

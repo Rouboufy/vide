@@ -20,6 +20,8 @@ const MasonWidget = @import("widgets/mason.zig").MasonWidget;
 const LazyWidget = @import("widgets/lazy.zig").LazyWidget;
 const GitDetailedWidget = @import("widgets/git_detailed.zig").GitDetailedWidget;
 const ExtensionShop = @import("widgets/extension_shop.zig").ExtensionShop;
+const BugReportWidget = @import("widgets/bug_report.zig").BugReportWidget;
+const EditorContextMenu = @import("widgets/editor_context_menu.zig").EditorContextMenu;
 
 pub const Mode = enum { ide, zen, normal };
 pub const PanelPosition = enum { bottom, right };
@@ -27,6 +29,7 @@ pub const NoticeLevel = enum { info, warning, failure };
 
 pub const WinInfo = struct {
     id: i64,
+    bufnr: i64,
     row: u16,
     col: u16,
     width: u16,
@@ -89,6 +92,8 @@ pub const App = struct {
     lazy_widget: *LazyWidget,
     git_detailed_widget: *GitDetailedWidget,
     extension_shop: *ExtensionShop,
+    bug_report: *BugReportWidget,
+    editor_context_menu: EditorContextMenu = .{},
     activity_bar: ActivityBar,
 
     // Mouse tracking state
@@ -165,6 +170,7 @@ pub const App = struct {
             .lazy_widget = undefined,
             .git_detailed_widget = undefined,
             .extension_shop = undefined,
+            .bug_report = undefined,
             .activity_bar = ActivityBar{ .active_idx = 0 },
             .layout_arena = arena,
             .root_split = root_node,

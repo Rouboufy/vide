@@ -17,6 +17,33 @@ fn drawText(ren: *Renderer, x: u16, y: u16, text: []const u8, fg: Color, bg: Col
     ren.drawText(x, y, text, fg, bg, bold, italic);
 }
 
+fn primaryEditorColumn(a: *const App) u16 {
+    var min_col: u16 = std.math.maxInt(u16);
+    for (a.editor_wins.items) |win| min_col = @min(min_col, win.col);
+    return if (min_col == std.math.maxInt(u16)) 0 else min_col;
+}
+
+fn isSecondarySplitBuffer(a: *const App, bufnr: i64) bool {
+    const primary_col = primaryEditorColumn(a);
+    for (a.editor_wins.items) |win| {
+        if (win.col > primary_col and win.bufnr == bufnr) return true;
+    }
+    return false;
+}
+
+fn primaryEditorBuffer(a: *const App) i64 {
+    const primary_col = primaryEditorColumn(a);
+    var best_row: u16 = std.math.maxInt(u16);
+    var bufnr: i64 = 0;
+    for (a.editor_wins.items) |win| {
+        if (win.col == primary_col and win.row < best_row) {
+            best_row = win.row;
+            bufnr = win.bufnr;
+        }
+    }
+    return bufnr;
+}
+
 pub fn drawWorkspace(a: *App, layout: Layout) void {
     const t = &a.active_theme;
     drawRect(a.ren, layout.total, " ", t.fg_primary, t.bg_editor);
@@ -174,10 +201,16 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         }
         drawRect(a.ren, layout.tab_bar, " ", t.fg_secondary, t.bg_sidebar);
         var tx: u16 = layout.tab_bar.x;
-        const tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
+        var tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
+        const primary_col = primaryEditorColumn(a);
+        for (a.editor_wins.items) |win| {
+            if (win.col > primary_col) tab_end = @min(tab_end, layout.tab_bar.x + win.col);
+        }
+        const primary_bufnr = primaryEditorBuffer(a);
         for (a.tabs.items, 0..) |tab, i| {
+            if (isSecondarySplitBuffer(a, tab.bufnr)) continue;
             if (tx >= tab_end) break;
-            const is_active = (i == a.active_tab);
+            const is_active = if (primary_bufnr != 0) tab.bufnr == primary_bufnr else i == a.active_tab;
             const desired_w: u16 = @intCast(@min(tab.name.len + 8, std.math.maxInt(u16)));
             const tab_w = @min(desired_w, tab_end - tx);
             if (tab_w < 4) break;
@@ -193,6 +226,25 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         }
         // Draw + button for new tab
         if (tx + 1 < tab_end) drawText(a.ren, tx + 1, layout.tab_bar.y, "+", t.fg_secondary, t.bg_sidebar, true, false);
+
+        // Buffers shown in right-hand splits own a local tab aligned over that
+        // pane, matching the visual ownership of desktop IDE split groups.
+        for (a.editor_wins.items) |win| {
+            if (win.col <= primary_col or win.row != 0 or win.width < 4) continue;
+            const split_x = layout.tab_bar.x + win.col;
+            const right_limit = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
+            if (split_x >= right_limit) continue;
+            const desired_w: u16 = @intCast(@min(win.name.len + 8, std.math.maxInt(u16)));
+            const tab_w = @min(@min(desired_w, win.width), right_limit - split_x);
+            if (tab_w < 4) continue;
+            const bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive;
+            const fg = if (win.active) t.fg_primary else t.fg_secondary;
+            drawRect(a.ren, .{ .x = split_x, .y = layout.tab_bar.y, .w = tab_w, .h = 1 }, " ", fg, bg);
+            a.ren.drawTextClipped(split_x + 2, layout.tab_bar.y, tab_w - 4, win.name, fg, bg, win.active, false);
+            const close_color = if (win.active) Color{ .rgb = .{ .r = 235, .g = 100, .b = 100 } } else t.fg_secondary;
+            const close_icon = if (a.settings_widget.config.nerd_fonts) "󰅖" else "x";
+            drawText(a.ren, split_x + tab_w - 2, layout.tab_bar.y, close_icon, close_color, bg, false, false);
+        }
 
         // Draw split buttons at the top right of the editor (in tab bar)
         if (layout.tab_bar.w > 15) {
@@ -224,9 +276,7 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             const menu_xs = [_]u16{ 7, 13, 19, 30 };
             for (menu_labels, 0..) |label, i| {
                 const selected = a.ide_menu != null and a.ide_menu.? == @as(u8, @intCast(i));
-                drawText(a.ren, layout.status_bar.x + menu_xs[i], layout.status_bar.y, label,
-                    if (selected) t.fg_primary else t.fg_statusbar,
-                    if (selected) t.bg_accent else t.bg_statusbar, selected, false);
+                drawText(a.ren, layout.status_bar.x + menu_xs[i], layout.status_bar.y, label, if (selected) t.fg_primary else t.fg_statusbar, if (selected) t.bg_accent else t.bg_statusbar, selected, false);
             }
         }
 
@@ -261,6 +311,12 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             const help_x = layout.status_bar.w - help_w;
             drawText(a.ren, layout.status_bar.x + help_x, layout.status_bar.y, help_btn, t.fg_statusbar, t.bg_statusbar, true, false);
 
+            const report_btn = " Report bug ";
+            const report_w: u16 = 14;
+            if (help_x >= report_w + 1) {
+                drawText(a.ren, layout.status_bar.x + help_x - report_w, layout.status_bar.y, report_btn, t.fg_statusbar, t.bg_statusbar, true, false);
+            }
+
             const focus_label = if (a.terminal_focus)
                 "Focus: Terminal"
             else if (a.sidebar_focus)
@@ -268,8 +324,9 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
             else
                 "Focus: Editor";
             const focus_w: u16 = @intCast(focus_label.len);
-            if (help_x > focus_w + 2 and layout.status_bar.w > 55) {
-                drawText(a.ren, layout.status_bar.x + help_x - focus_w - 2, layout.status_bar.y, focus_label, t.fg_statusbar, t.bg_statusbar, false, false);
+            const focus_end = help_x -| report_w;
+            if (focus_end > focus_w + 2 and layout.status_bar.w > 55) {
+                drawText(a.ren, layout.status_bar.x + focus_end - focus_w - 2, layout.status_bar.y, focus_label, t.fg_statusbar, t.bg_statusbar, false, false);
             }
         }
 
@@ -429,6 +486,9 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
         drawRect(a.ren, layout.status_bar, " ", t.fg_statusbar, t.bg_statusbar);
         const mode_str = if (a.settings_widget.config.nerd_fonts) " 󰚌  ZEN " else " ZEN ";
         drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
+        if (layout.status_bar.w >= 28) {
+            drawText(a.ren, layout.status_bar.x + layout.status_bar.w - 14, layout.status_bar.y, " Report bug ", t.fg_statusbar, t.bg_statusbar, true, false);
+        }
     }
     if (a.settings_widget.is_open) {
         a.settings_widget.draw(a.ren, a.ren.width, a.ren.height, .{
@@ -626,5 +686,28 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
                     a.ren.drawTextClipped(x + 1 + prefix_w, 1, max_w - prefix_w - 2, message, notice_fg, bg, false, false);
             }
         }
+    }
+
+    a.editor_context_menu.draw(a.ren, .{
+        .bg_editor = t.bg_editor,
+        .bg_sidebar = t.bg_sidebar,
+        .bg_accent = t.bg_accent,
+        .fg_primary = t.fg_primary,
+        .fg_secondary = t.fg_secondary,
+        .border_color = t.border_color,
+        .fg_accent = t.fg_accent,
+    });
+
+    // The report dialog is the top-most native surface.
+    if (a.bug_report.is_open) {
+        a.bug_report.draw(a.ren, a.ren.width, a.ren.height, .{
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
+        });
     }
 }
