@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const version = b.option([]const u8, "version", "Vide version") orelse "0.2.5-dev";
+    const version = b.option([]const u8, "version", "Vide version") orelse "0.2.6-dev";
     const bug_report_endpoint = b.option([]const u8, "bug-report-endpoint", "HTTPS endpoint for the bug reporting gateway") orelse "";
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
