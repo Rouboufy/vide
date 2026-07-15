@@ -304,12 +304,41 @@ pub const UiState = struct {
             const g = try self.getOrCreate(id);
             g.is_float = true;
             g.visible = true;
+            // Neovim 0.12 appends the resolved screen position to this event.
+            // Older versions (including the 0.11 runtime bundled in the
+            // AppImage) stop after zindex, so resolve their anchor-relative
+            // position here instead of leaving every float at (0, 0).
             if (arg.array.len >= 11 and
                 arg.array[9] == .integer and
                 arg.array[10] == .integer)
             {
                 g.row = @as(i32, @intCast(arg.array[9].integer));
                 g.col = @as(i32, @intCast(arg.array[10].integer));
+            } else if (arg.array.len >= 6 and
+                arg.array[2] == .string and
+                arg.array[3] == .integer and
+                arg.array[4] == .integer and
+                arg.array[5] == .integer)
+            {
+                var row = @as(i32, @intCast(arg.array[4].integer));
+                var col = @as(i32, @intCast(arg.array[5].integer));
+                const anchor_grid = arg.array[3].integer;
+                if (anchor_grid != 1) {
+                    if (self.get(anchor_grid)) |anchor| {
+                        row += anchor.row;
+                        col += anchor.col;
+                    }
+                }
+
+                const anchor = arg.array[2].string;
+                if (std.mem.indexOfScalar(u8, anchor, 'S') != null) {
+                    row -= @as(i32, @intCast(g.height));
+                }
+                if (std.mem.indexOfScalar(u8, anchor, 'E') != null) {
+                    col -= @as(i32, @intCast(g.width));
+                }
+                g.row = row;
+                g.col = col;
             }
         }
     }
@@ -577,6 +606,50 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
     try std.testing.expectEqual(@as(i32, 0), cursor_pos.y);
     try std.testing.expect(state.get(3) == null);
     try std.testing.expect(state.get(2) == null);
+}
+
+test "ui protocol resolves legacy float positions without absolute coordinates" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 40 }, .{ .integer = 12 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 3 }, .{ .integer = 20 }, .{ .integer = 6 } }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_pos" },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 20 }, .{ .integer = 4 }, .{ .integer = 7 } }) },
+        }) },
+        // Neovim 0.11: [grid, win, anchor, anchor_grid, anchor_row,
+        //               anchor_col, focusable, zindex]
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_float_pos" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 3 }, .{ .integer = 30 }, .{ .string = "NW" }, .{ .integer = 1 },
+                .{ .integer = 8 }, .{ .integer = 13 }, .{ .bool = true },   .{ .integer = 50 },
+            }) },
+        }) },
+    };
+    try state.handleRedraw(&events);
+
+    const float = state.get(3).?;
+    try std.testing.expectEqual(@as(i32, 8), float.row);
+    try std.testing.expectEqual(@as(i32, 13), float.col);
+
+    const anchored_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "win_float_pos" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 3 },  .{ .integer = 30 }, .{ .string = "SE" }, .{ .integer = 2 },
+                .{ .integer = 10 }, .{ .integer = 30 }, .{ .bool = true },   .{ .integer = 50 },
+            }) },
+        }) },
+    };
+    try state.handleRedraw(&anchored_events);
+    try std.testing.expectEqual(@as(i32, 8), float.row);
+    try std.testing.expectEqual(@as(i32, 17), float.col);
 }
 
 test "ui protocol preserves width after scrolling and keeps explicit zero repeat intact" {
