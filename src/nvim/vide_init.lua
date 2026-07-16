@@ -605,7 +605,8 @@ local function ide_startinsert()
 end
 
 local function ide_clipboard_register()
-    return vim.fn.has('clipboard') == 1 and '+' or '"'
+    local system_clipboard_enabled = vim.o.clipboard:match('unnamedplus') ~= nil
+    return vim.fn.has('clipboard') == 1 and system_clipboard_enabled and '+' or '"'
 end
 
 -- Native shortcuts such as Ctrl+F can be pressed while a Telescope picker or

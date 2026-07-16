@@ -59,8 +59,10 @@ _G.vide_ide_action('undo')
 _G.vide_ide_action('redo')
 
 vim.cmd('stopinsert')
-local paste_register = vim.fn.has('clipboard') == 1 and '+' or '"'
-vim.fn.setreg(paste_register, { 'pasted from IDE' }, 'l')
+-- Keep this headless test independent of the host pasteboard. This also checks
+-- that IDE actions respect the user's disabled System Clipboard setting.
+vim.o.clipboard = ''
+vim.fn.setreg('"', { 'pasted from IDE' }, 'l')
 _G.vide_ide_action('paste')
 assert(vim.api.nvim_get_current_line() == 'pasted from IDE')
 
