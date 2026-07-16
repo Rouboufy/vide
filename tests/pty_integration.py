@@ -35,6 +35,19 @@ def read_available(fd, deadline):
     return bytes(output)
 
 
+def terminate_child(pid, grace=1.0):
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        waited, status = os.waitpid(pid, os.WNOHANG)
+        if waited != 0:
+            return status
+        time.sleep(0.05)
+    os.kill(pid, signal.SIGKILL)
+    _, status = os.waitpid(pid, 0)
+    return status
+
+
 def run_mode(mode):
     with tempfile.TemporaryDirectory(prefix="vide-pty-") as temp:
         base = pathlib.Path(temp)
@@ -85,8 +98,7 @@ def run_mode(mode):
                 break
             time.sleep(0.1)
         if waited == 0:
-            os.kill(pid, signal.SIGTERM)
-            _, status = os.waitpid(pid, 0)
+            status = terminate_child(pid)
             tail = bytes(output[-1000:]).decode("utf-8", errors="replace")
             log_path = data / "vide.log"
             log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else "<missing>"
