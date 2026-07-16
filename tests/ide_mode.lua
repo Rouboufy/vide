@@ -59,7 +59,8 @@ _G.vide_ide_action('undo')
 _G.vide_ide_action('redo')
 
 vim.cmd('stopinsert')
-vim.fn.setreg('"', { 'pasted from IDE' }, 'l')
+local paste_register = vim.fn.has('clipboard') == 1 and '+' or '"'
+vim.fn.setreg(paste_register, { 'pasted from IDE' }, 'l')
 _G.vide_ide_action('paste')
 assert(vim.api.nvim_get_current_line() == 'pasted from IDE')
 

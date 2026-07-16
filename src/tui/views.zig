@@ -264,9 +264,9 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
 
         // Draw mode indicator
         const mode_str = switch (a.mode) {
-            .ide => if (a.settings_widget.config.nerd_fonts) " 󰚌  IDE " else " IDE ",
-            .normal => if (a.settings_widget.config.nerd_fonts) " 󰚌  NORMAL " else " NORMAL ",
-            .zen => if (a.settings_widget.config.nerd_fonts) " 󰚌  ZEN " else " ZEN ",
+            .ide => if (a.settings_widget.config.nerd_fonts) " V_  IDE " else " IDE ",
+            .normal => if (a.settings_widget.config.nerd_fonts) " V_  NORMAL " else " NORMAL ",
+            .zen => if (a.settings_widget.config.nerd_fonts) " V_  ZEN " else " ZEN ",
         };
         drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
 
@@ -484,7 +484,7 @@ pub fn drawWorkspace(a: *App, layout: Layout) void {
     }
     if (a.mode == .zen and layout.status_bar.h > 0) {
         drawRect(a.ren, layout.status_bar, " ", t.fg_statusbar, t.bg_statusbar);
-        const mode_str = if (a.settings_widget.config.nerd_fonts) " 󰚌  ZEN " else " ZEN ";
+        const mode_str = if (a.settings_widget.config.nerd_fonts) " V_  ZEN " else " ZEN ";
         drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
         if (layout.status_bar.w >= 28) {
             drawText(a.ren, layout.status_bar.x + layout.status_bar.w - 14, layout.status_bar.y, " Report bug ", t.fg_statusbar, t.bg_statusbar, true, false);
