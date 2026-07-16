@@ -27,6 +27,8 @@ def read_available(fd, deadline):
             continue
         try:
             chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            continue
         except OSError:
             break
         if not chunk:
@@ -70,6 +72,7 @@ def run_mode(mode):
             })
             os.execve(BINARY, [str(BINARY)], env)
 
+        os.set_blocking(fd, False)
         original = termios.tcgetattr(fd)
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         os.kill(pid, signal.SIGWINCH)
@@ -133,6 +136,7 @@ def run_startup_failure():
             env = os.environ.copy()
             env.update({"HOME": temp, "PATH": "/nonexistent", "VIDE_DISABLE_PLUGINS": "1"})
             os.execve(BINARY, [str(BINARY)], env)
+        os.set_blocking(fd, False)
         original = termios.tcgetattr(fd)
         output = read_available(fd, time.monotonic() + 3)
         _, status = os.waitpid(pid, 0)
