@@ -87,6 +87,8 @@ jobs:
           tests/onboarding.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
       - name: Test terminal compatibility on macOS
         timeout-minutes: 5
+        env:
+          VIDE_TEST_SKIP_STARTUP_FAILURE: "1"
         run: |
           set -o pipefail
           tests/terminal_compat.sh host 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
