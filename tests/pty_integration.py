@@ -7,6 +7,7 @@ import pty
 import select
 import signal
 import struct
+import subprocess
 import tempfile
 import termios
 import time
@@ -57,20 +58,23 @@ def run_mode(mode):
         data.mkdir(parents=True)
         (data / "settings.json").write_text(json.dumps({"mode": mode}), encoding="utf-8")
 
-        pid, fd = pty.fork()
-        if pid == 0:
-            env = os.environ.copy()
-            env.update({
-                "HOME": temp,
-                "XDG_CONFIG_HOME": str(base / "config"),
-                "XDG_DATA_HOME": str(base / "data"),
-                "XDG_STATE_HOME": str(base / "state"),
-                "XDG_CACHE_HOME": str(base / "cache"),
-                "VIDE_DISABLE_PLUGINS": "1",
-                "VIDE_SKIP_ONBOARDING": "1",
-                "TERM": "xterm-256color",
-            })
-            os.execve(BINARY, [str(BINARY)], env)
+        env = os.environ.copy()
+        env.update({
+            "HOME": temp,
+            "XDG_CONFIG_HOME": str(base / "config"),
+            "XDG_DATA_HOME": str(base / "data"),
+            "XDG_STATE_HOME": str(base / "state"),
+            "XDG_CACHE_HOME": str(base / "cache"),
+            "VIDE_DISABLE_PLUGINS": "1",
+            "VIDE_SKIP_ONBOARDING": "1",
+            "TERM": "xterm-256color",
+        })
+        fd, slave_fd = pty.openpty()
+        child = subprocess.Popen(
+            [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env
+        )
+        os.close(slave_fd)
+        pid = child.pid
 
         os.set_blocking(fd, False)
         original = termios.tcgetattr(fd)
@@ -131,11 +135,14 @@ def run_mode(mode):
 
 def run_startup_failure():
     with tempfile.TemporaryDirectory(prefix="vide-pty-failure-") as temp:
-        pid, fd = pty.fork()
-        if pid == 0:
-            env = os.environ.copy()
-            env.update({"HOME": temp, "PATH": "/nonexistent", "VIDE_DISABLE_PLUGINS": "1"})
-            os.execve(BINARY, [str(BINARY)], env)
+        env = os.environ.copy()
+        env.update({"HOME": temp, "PATH": "/nonexistent", "VIDE_DISABLE_PLUGINS": "1"})
+        fd, slave_fd = pty.openpty()
+        child = subprocess.Popen(
+            [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env
+        )
+        os.close(slave_fd)
+        pid = child.pid
         os.set_blocking(fd, False)
         original = termios.tcgetattr(fd)
         output = read_available(fd, time.monotonic() + 3)
