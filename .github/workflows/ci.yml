@@ -69,13 +69,26 @@ jobs:
           version: 0.16.0
       - name: Install Neovim
         run: brew list neovim >/dev/null 2>&1 || brew install neovim
-      - name: Build and test IDE mode on macOS
+      - name: Build and run Zig tests on macOS
+        timeout-minutes: 5
         run: |
           set -o pipefail
           zig build test 2>&1 | tee "$RUNNER_TEMP/macos-smoke.log"
           zig build 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+      - name: Test IDE mode on macOS
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
           tests/ide_mode.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+      - name: Test onboarding on macOS
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
           tests/onboarding.sh 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
+      - name: Test terminal compatibility on macOS
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
           tests/terminal_compat.sh host 2>&1 | tee -a "$RUNNER_TEMP/macos-smoke.log"
       - name: Upload macOS smoke log
         if: always()
