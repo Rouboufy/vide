@@ -129,9 +129,9 @@ Before installing Vide, make sure you have the following:
 
 | Dependency | Minimum Version | Notes |
 | :--- | :--- | :--- |
-| **Neovim** | `>= 0.10.0` | Required as the editor engine |
-| **Zig** | `0.16.0` | Exact supported version for reproducible source builds |
-| **git** | any | Required to clone the repository |
+| **Neovim** | `>= 0.10.0` | Required only for source builds; release bundles include 0.12.4 |
+| **Zig** | `0.16.0` | Required only for reproducible source builds |
+| **git** | any | Required only to clone or build from source |
 | **curl** | any | Required by `setup.sh` and the optional in-app bug reporter |
 | **Python** | `>= 3` | Required by the extension shop and automatic Zig installation |
 | **A Nerd Font** | recommended | Rich icons are enabled by default; portable text symbols can be selected in Settings |
@@ -146,7 +146,7 @@ Before installing Vide, make sure you have the following:
 
 Run the one-line installer. It will automatically:
 
-1. Detect missing or outdated runtime dependencies
+1. Detect a missing download tool (and source-build dependencies when needed)
 2. Ask before changing system packages
 3. Download the latest supported release binary
 4. Install it to `~/.local/bin/vide`
@@ -165,12 +165,13 @@ builds require the pinned Zig version to be installed first. Automatic package
 installation supports apt, pacman, dnf, zypper, and Homebrew and installs only
 dependencies detected as missing or too old.
 
-Tagged releases provide checksum-verified binaries for Linux x86-64 and ARM64,
-and macOS Intel and Apple Silicon. The installer selects the matching asset,
-verifies it against the release's `SHA256SUMS`, and replaces the installed
-binary atomically. Neovim is required on the host and is not embedded in these
-archives. Source compilation remains available through `--source` for
-development and unsupported targets.
+Tagged releases provide checksum-verified bundles for Linux x86-64 and ARM64,
+and macOS Intel and Apple Silicon. Each bundle contains Vide, Neovim 0.12.4,
+and its runtime. The installer selects and verifies the matching bundle, then
+installs it under Vide's data directory and links only the Vide launcher into
+`~/.local/bin`. The launcher uses its private Neovim; it never replaces the
+user's `nvim` executable or configuration. Source compilation remains available
+through `--source` for development and unsupported targets.
 
 After installation, run:
 
@@ -231,11 +232,11 @@ checkout or reinstall from a fresh clone. Vide keeps user settings and plugin
 state in its own XDG directories, so normal updates should not touch them.
 
 If you are using the AppImage packaging script, the resulting image bundles a
-pinned Neovim 0.11.6 runtime inside the AppDir; host Neovim is not required for
+pinned Neovim 0.12.4 runtime inside the AppDir; host Neovim is not required for
 this package. It records the Vide version, commit, architecture, and bundled
 Neovim version in `VERSION.txt`, includes desktop/icon/AppStream metadata, and
-publishes a neighboring `.sha256` checksum. Native archive installations use
-the host Neovim instead.
+publishes a neighboring `.sha256` checksum. Native release bundles likewise use
+their own Neovim runtime.
 See [AppImage packaging and verification](docs/appimage.md) for reproducible
 commands and recorded distribution smoke tests.
 

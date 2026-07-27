@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+RUNTIME="$HERE/../lib/vide"
+export PATH="$RUNTIME/nvim/bin:$PATH"
+export VIMRUNTIME="$RUNTIME/nvim/share/nvim/runtime"
+exec "$RUNTIME/vide" "$@"

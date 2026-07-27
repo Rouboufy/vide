@@ -61,14 +61,13 @@ declare -a MISSING=()
 if [ -n "${VIDE_TEST_MISSING:-}" ]; then
     read -r -a MISSING <<< "$VIDE_TEST_MISSING"
 else
-    for cmd in curl nvim; do
-        command -v "$cmd" >/dev/null 2>&1 || MISSING+=("$cmd")
-    done
-    if command -v nvim >/dev/null 2>&1; then
+    command -v curl >/dev/null 2>&1 || MISSING+=("curl")
+    if $SOURCE_BUILD && command -v nvim >/dev/null 2>&1; then
         NVIM_VERSION="$(nvim --version | head -n1 | awk '{gsub(/^v/, "", $2); print $2}')"
         version_at_least "$NVIM_VERSION" 0.10.0 || MISSING+=("neovim>=0.10.0")
     fi
     if $SOURCE_BUILD; then
+        command -v nvim >/dev/null 2>&1 || MISSING+=("neovim>=0.10.0")
         command -v git >/dev/null 2>&1 || MISSING+=("git")
         if ! command -v zig >/dev/null 2>&1 || [ "$(zig version)" != "$ZIG_VERSION" ]; then
             echo "Source builds require Zig $ZIG_VERSION exactly. Install it from https://ziglang.org/download/ and retry." >&2
@@ -126,10 +125,10 @@ fi
 
 release_asset() {
     case "$OS_NAME/$ARCH" in
-        Linux/x86_64|Linux/amd64) printf '%s' "vide-linux-x86_64" ;;
-        Linux/aarch64|Linux/arm64) printf '%s' "vide-linux-aarch64" ;;
-        Darwin/x86_64|Darwin/amd64) printf '%s' "vide-macos-x86_64" ;;
-        Darwin/aarch64|Darwin/arm64) printf '%s' "vide-macos-aarch64" ;;
+        Linux/x86_64|Linux/amd64) printf '%s' "vide-linux-x86_64.tar.gz" ;;
+        Linux/aarch64|Linux/arm64) printf '%s' "vide-linux-aarch64.tar.gz" ;;
+        Darwin/x86_64|Darwin/amd64) printf '%s' "vide-macos-x86_64.tar.gz" ;;
+        Darwin/aarch64|Darwin/arm64) printf '%s' "vide-macos-aarch64.tar.gz" ;;
         *) return 1 ;;
     esac
 }
@@ -181,12 +180,20 @@ if ! $SOURCE_BUILD; then
         [ -n "$expected" ] || { echo "Release checksum is missing for $RELEASE_ASSET." >&2; exit 1; }
         actual="$(hash_file "$DOWNLOAD_DIR/$RELEASE_ASSET")"
         [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $RELEASE_ASSET." >&2; exit 1; }
-        chmod 755 "$DOWNLOAD_DIR/$RELEASE_ASSET"
-        mv "$DOWNLOAD_DIR/$RELEASE_ASSET" "$BIN_DIR/vide.new"
-        mv -f "$BIN_DIR/vide.new" "$BIN_DIR/vide"
+        tar -xzf "$DOWNLOAD_DIR/$RELEASE_ASSET" -C "$DOWNLOAD_DIR"
+        BUNDLE_DIR="$DOWNLOAD_DIR/${RELEASE_ASSET%.tar.gz}"
+        [ -x "$BUNDLE_DIR/bin/vide" ] || { echo "Release bundle is invalid." >&2; exit 1; }
+        INSTALL_DIR="$DATA_HOME/runtime"
+        BACKUP_DIR="$DATA_HOME/runtime.previous"
+        rm -rf "$BACKUP_DIR"
+        if [ -e "$INSTALL_DIR" ]; then mv "$INSTALL_DIR" "$BACKUP_DIR"; fi
+        mv "$BUNDLE_DIR" "$INSTALL_DIR"
+        ln -sfn "$INSTALL_DIR/bin/vide" "$BIN_DIR/vide"
+        rm -rf "$BACKUP_DIR"
     else
         echo "+ verify SHA256SUMS for $RELEASE_ASSET"
-        echo "+ atomically install $RELEASE_ASSET as $BIN_DIR/vide"
+        echo "+ install bundled Neovim runtime from $RELEASE_ASSET"
+        echo "+ link $BIN_DIR/vide to its private launcher"
     fi
 else
     if [ ! -f "$SOURCE_DIR/build.zig" ]; then

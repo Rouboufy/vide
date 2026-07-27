@@ -30,9 +30,9 @@ check_asset() {
     [ "$output" = "$expected" ]
 }
 
-check_asset Linux x86_64 vide-linux-x86_64
-check_asset Linux aarch64 vide-linux-aarch64
-check_asset Darwin x86_64 vide-macos-x86_64
-check_asset Darwin arm64 vide-macos-aarch64
+check_asset Linux x86_64 vide-linux-x86_64.tar.gz
+check_asset Linux aarch64 vide-linux-aarch64.tar.gz
+check_asset Darwin x86_64 vide-macos-x86_64.tar.gz
+check_asset Darwin arm64 vide-macos-aarch64.tar.gz
 
 echo "Installer package-manager and release-asset plans passed"

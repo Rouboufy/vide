@@ -4,7 +4,7 @@ set -euo pipefail
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo unknown)}"
 COMMIT_SHA="${COMMIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 VIDE_BUG_REPORT_ENDPOINT="${VIDE_BUG_REPORT_ENDPOINT:-}"
-NEOVIM_VERSION="${NEOVIM_VERSION:-v0.11.6}"
+NEOVIM_VERSION="${NEOVIM_VERSION:-v0.12.4}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 APP_DIR="${APP_DIR:-$ROOT/Vide.AppDir}"

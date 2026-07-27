@@ -1,6 +1,6 @@
 # AppImage packaging and verification
 
-Vide's x86-64 AppImage contains Vide, Neovim 0.11.6, Neovim's runtime,
+Vide's x86-64 AppImage contains Vide, Neovim 0.12.4, Neovim's runtime,
 desktop metadata, an SVG icon, and AppStream metadata. It does not require host
 Neovim. User data still uses Vide's isolated XDG directories outside the
 read-only image.
