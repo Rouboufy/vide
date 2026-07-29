@@ -35,4 +35,10 @@ check_asset Linux aarch64 vide-linux-aarch64.tar.gz
 check_asset Darwin x86_64 vide-macos-x86_64.tar.gz
 check_asset Darwin arm64 vide-macos-aarch64.tar.gz
 
+progress_file=$(mktemp "${TMPDIR:-/tmp}/vide-setup-progress.XXXXXX")
+trap 'rm -f "$progress_file"' EXIT
+VIDE_TEST_PLATFORM=Linux VIDE_TEST_ARCH=x86_64 VIDE_UPDATE_PROGRESS_FILE="$progress_file" \
+    bash setup.sh --dry-run --no-plugins >/dev/null
+grep -Fxq 72 "$progress_file"
+
 echo "Installer package-manager and release-asset plans passed"

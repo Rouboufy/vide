@@ -5,6 +5,65 @@ const renderer = @import("../renderer.zig");
 const primitives = @import("primitives.zig");
 const Rect = @import("../layout.zig").Rect;
 
+const WrappedLineIterator = struct {
+    text: []const u8,
+    max_width: u16,
+    index: usize = 0,
+    finished: bool = false,
+
+    fn init(text: []const u8, max_width: u16) WrappedLineIterator {
+        return .{ .text = text, .max_width = @max(1, max_width) };
+    }
+
+    fn next(self: *WrappedLineIterator) ?[]const u8 {
+        if (self.finished) return null;
+        if (self.index == self.text.len) {
+            self.finished = true;
+            return if (self.text.len > 0 and self.text[self.text.len - 1] == '\n')
+                self.text[self.text.len..]
+            else
+                null;
+        }
+
+        const start = self.index;
+        var end = start;
+        var width: u16 = 0;
+        while (end < self.text.len) {
+            if (self.text[end] == '\n') {
+                self.index = end + 1;
+                return self.text[start..end];
+            }
+
+            const sequence_len = std.unicode.utf8ByteSequenceLength(self.text[end]) catch 1;
+            const char_end = @min(self.text.len, end + sequence_len);
+            const codepoint = std.unicode.utf8Decode(self.text[end..char_end]) catch @as(u21, self.text[end]);
+            const cell_width: u16 = renderer.unicodeCellWidth(codepoint);
+            if (cell_width > 0 and width +| cell_width > self.max_width and end > start) {
+                self.index = end;
+                return self.text[start..end];
+            }
+            width +|= cell_width;
+            end = char_end;
+        }
+
+        self.index = end;
+        self.finished = true;
+        return self.text[start..end];
+    }
+};
+
+fn wrappedLineCount(text: []const u8, max_width: u16) usize {
+    if (text.len == 0) return 0;
+    var iterator = WrappedLineIterator.init(text, max_width);
+    var count: usize = 0;
+    while (iterator.next() != null) count += 1;
+    return count;
+}
+
+fn wrappedLineSkip(text: []const u8, max_width: u16, visible_rows: u16) usize {
+    return wrappedLineCount(text, max_width) -| @as(usize, visible_rows);
+}
+
 pub const Category = enum {
     editor,
     terminal,
@@ -312,10 +371,14 @@ pub const BugReportWidget = struct {
         if (self.description.items.len == 0) {
             ren.drawTextClipped(x + 1, r.y + 10, w - 2, "Steps to reproduce, expected result, and what happened...", theme.fg_secondary, desc_bg, false, false);
         } else {
-            var lines = std.mem.splitScalar(u8, self.description.items, '\n');
+            const line_width = w -| 2;
+            const visible_rows: u16 = 5;
+            var lines = WrappedLineIterator.init(self.description.items, line_width);
+            var skip = wrappedLineSkip(self.description.items, line_width, visible_rows);
+            while (skip > 0) : (skip -= 1) _ = lines.next();
             var row: u16 = 0;
-            while (lines.next()) |line| : (row += 1) {
-                if (row >= 5) break;
+            while (row < visible_rows) : (row += 1) {
+                const line = lines.next() orelse break;
                 ren.drawTextClipped(x + 1, r.y + 10 + row, w - 2, line, theme.fg_primary, desc_bg, false, false);
             }
         }
@@ -755,4 +818,28 @@ test "bug report detects display and terminal environment without identity data"
     try std.testing.expectEqualStrings("WezTerm", widget.terminal);
     try std.testing.expectEqualStrings("2026.1", widget.terminal_version);
     try std.testing.expectEqualStrings("zsh", widget.shell);
+}
+
+test "bug report description wraps long and wide-character lines" {
+    var lines = WrappedLineIterator.init("abcdefg\nab界c", 6);
+    try std.testing.expectEqualStrings("abcdef", lines.next().?);
+    try std.testing.expectEqualStrings("g", lines.next().?);
+    try std.testing.expectEqualStrings("ab界c", lines.next().?);
+    try std.testing.expect(lines.next() == null);
+
+    var wide_lines = WrappedLineIterator.init("ab界cd", 4);
+    try std.testing.expectEqualStrings("ab界", wide_lines.next().?);
+    try std.testing.expectEqualStrings("cd", wide_lines.next().?);
+    try std.testing.expect(wide_lines.next() == null);
+}
+
+test "bug report description keeps the newest wrapped rows visible" {
+    const text = "first\nsecond\nthird\nfourth\nfifth\nsixth";
+    try std.testing.expectEqual(@as(usize, 6), wrappedLineCount(text, 20));
+    try std.testing.expectEqual(@as(usize, 1), wrappedLineSkip(text, 20, 5));
+
+    var trailing_newline = WrappedLineIterator.init("line\n", 20);
+    try std.testing.expectEqualStrings("line", trailing_newline.next().?);
+    try std.testing.expectEqualStrings("", trailing_newline.next().?);
+    try std.testing.expect(trailing_newline.next() == null);
 }

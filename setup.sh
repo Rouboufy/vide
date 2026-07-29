@@ -46,6 +46,15 @@ run() {
     fi
 }
 
+report_update_progress() {
+    local percent=$1
+    local progress_file="${VIDE_UPDATE_PROGRESS_FILE:-}"
+    [ -n "$progress_file" ] || return 0
+    local progress_tmp="${progress_file}.tmp.$$"
+    printf '%s\n' "$percent" >"$progress_tmp"
+    mv -f "$progress_tmp" "$progress_file"
+}
+
 version_at_least() {
     [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
@@ -173,22 +182,28 @@ if ! $SOURCE_BUILD; then
         DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vide-install.XXXXXX")"
         trap 'rm -rf "$DOWNLOAD_DIR"' EXIT
     fi
+    report_update_progress 30
     run curl -fL --retry 3 -o "$DOWNLOAD_DIR/$RELEASE_ASSET" "$RELEASE_BASE/$RELEASE_ASSET"
+    report_update_progress 65
     run curl -fL --retry 3 -o "$DOWNLOAD_DIR/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS"
+    report_update_progress 72
     if ! $DRY_RUN; then
         expected="$(awk -v asset="$RELEASE_ASSET" '$2 == asset || $2 == "./" asset { print $1; exit }' "$DOWNLOAD_DIR/SHA256SUMS")"
         [ -n "$expected" ] || { echo "Release checksum is missing for $RELEASE_ASSET." >&2; exit 1; }
         actual="$(hash_file "$DOWNLOAD_DIR/$RELEASE_ASSET")"
         [ "$actual" = "$expected" ] || { echo "Checksum verification failed for $RELEASE_ASSET." >&2; exit 1; }
+        report_update_progress 80
         tar -xzf "$DOWNLOAD_DIR/$RELEASE_ASSET" -C "$DOWNLOAD_DIR"
         BUNDLE_DIR="$DOWNLOAD_DIR/${RELEASE_ASSET%.tar.gz}"
         [ -x "$BUNDLE_DIR/bin/vide" ] || { echo "Release bundle is invalid." >&2; exit 1; }
+        report_update_progress 88
         INSTALL_DIR="$DATA_HOME/runtime"
         BACKUP_DIR="$DATA_HOME/runtime.previous"
         rm -rf "$BACKUP_DIR"
         if [ -e "$INSTALL_DIR" ]; then mv "$INSTALL_DIR" "$BACKUP_DIR"; fi
         mv "$BUNDLE_DIR" "$INSTALL_DIR"
         ln -sfn "$INSTALL_DIR/bin/vide" "$BIN_DIR/vide"
+        report_update_progress 98
         rm -rf "$BACKUP_DIR"
     else
         echo "+ verify SHA256SUMS for $RELEASE_ASSET"
@@ -210,8 +225,11 @@ else
             exit 1
         }
     fi
+    report_update_progress 30
     run zig build --build-file "$SOURCE_DIR/build.zig" -Doptimize=ReleaseFast --prefix "$SOURCE_DIR/zig-out"
+    report_update_progress 90
     run ln -sfn "$SOURCE_DIR/zig-out/bin/vide" "$BIN_DIR/vide"
+    report_update_progress 98
 fi
 
 if ! $NO_PLUGINS; then
@@ -231,6 +249,7 @@ $IS_WSL && echo "WSL detected; clipboard and terminal behavior depend on Windows
 if $DRY_RUN; then
     echo "Dry run complete; no files or packages were changed."
 else
+    report_update_progress 100
     echo "Vide installed at $BIN_DIR/vide"
 fi
 [[ ":$PATH:" = *":$BIN_DIR:"* ]] || echo "Add $BIN_DIR to PATH."

@@ -232,6 +232,7 @@ pub const SettingsWidget = struct {
     open_lazy: bool = false,
     software_update_requested: bool = false,
     software_update_status: SoftwareUpdateStatus = .idle,
+    software_update_progress: u8 = 0,
 
     keyboard_focus: FocusMode = .tabs,
     hover_row: usize = 0,
@@ -279,41 +280,7 @@ pub const SettingsWidget = struct {
         "About",
     };
 
-    const software_updater =
-        \\#!/bin/sh
-        \\status_file=$1
-        \\log_file=$2
-        \\exec >"$log_file" 2>&1
-        \\result=failure
-        \\tmp_dir=
-        \\cleanup() {
-        \\    printf '%s\\n' "$result" >"$status_file"
-        \\    [ -z "$tmp_dir" ] || rm -rf "$tmp_dir"
-        \\}
-        \\trap cleanup EXIT INT TERM
-        \\tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/vide-software-update.XXXXXX") || exit 1
-        \\if [ -n "${APPIMAGE:-}" ] && [ -f "$APPIMAGE" ]; then
-        \\    asset=Vide-linux-x86_64.AppImage
-        \\    release=https://github.com/Rouboufy/vide/releases/latest/download
-        \\    if curl -fsSL --retry 3 -o "$tmp_dir/$asset" "$release/$asset" &&
-        \\       curl -fsSL --retry 3 -o "$tmp_dir/SHA256SUMS" "$release/SHA256SUMS"; then
-        \\        expected=$(awk -v asset="$asset" '$2 == asset || $2 == "./" asset { print $1; exit }' "$tmp_dir/SHA256SUMS")
-        \\        actual=$(sha256sum "$tmp_dir/$asset" | awk '{print $1}')
-        \\        if [ -n "$expected" ] && [ "$actual" = "$expected" ] &&
-        \\           cp "$tmp_dir/$asset" "$APPIMAGE.new" && chmod 755 "$APPIMAGE.new" &&
-        \\           mv -f "$APPIMAGE.new" "$APPIMAGE"; then
-        \\            result=success
-        \\        else
-        \\            rm -f "$APPIMAGE.new"
-        \\        fi
-        \\    fi
-        \\else
-        \\    if curl -fsSL --retry 3 -o "$tmp_dir/setup.sh" "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh" &&
-        \\       bash "$tmp_dir/setup.sh" --no-plugins; then
-        \\        result=success
-        \\    fi
-        \\fi
-    ;
+    const software_updater = @embedFile("../../software_update.sh");
 
     pub fn init(allocator: std.mem.Allocator, settings_path: []const u8, io: std.Io, data_dir: []const u8) SettingsWidget {
         var load_failed = false;
@@ -368,8 +335,11 @@ pub const SettingsWidget = struct {
         defer self.allocator.free(status_path);
         const log_path = try self.updatePath("software-update.log");
         defer self.allocator.free(log_path);
+        const progress_path = try self.updatePath("software-update.progress");
+        defer self.allocator.free(progress_path);
 
         std.Io.Dir.cwd().deleteFile(self.io, status_path) catch {};
+        std.Io.Dir.cwd().deleteFile(self.io, progress_path) catch {};
         try std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = script_path, .data = software_updater });
 
         // The outer shell exits immediately after detaching the updater. Vide
@@ -377,11 +347,12 @@ pub const SettingsWidget = struct {
         const argv = &[_][]const u8{
             "sh",
             "-c",
-            "sh \"$1\" \"$2\" \"$3\" >/dev/null 2>&1 &",
+            "sh \"$1\" \"$2\" \"$3\" \"$4\" >/dev/null 2>&1 &",
             "vide-software-update",
             script_path,
             status_path,
             log_path,
+            progress_path,
         };
         var child = try std.process.spawn(self.io, .{
             .argv = argv,
@@ -391,11 +362,27 @@ pub const SettingsWidget = struct {
         });
         const term = try child.wait(self.io);
         if (term != .exited or term.exited != 0) return error.UpdateLaunchFailed;
+        self.software_update_progress = 0;
         self.software_update_status = .running;
+    }
+
+    fn pollSoftwareUpdateProgress(self: *SettingsWidget) void {
+        const progress_path = self.updatePath("software-update.progress") catch return;
+        defer self.allocator.free(progress_path);
+        const progress_path_z = self.allocator.dupeSentinel(u8, progress_path, 0) catch return;
+        defer self.allocator.free(progress_path_z);
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, progress_path_z, .{ .ACCMODE = .RDONLY }, 0) catch return;
+        defer _ = std.posix.system.close(fd);
+        var buf: [8]u8 = undefined;
+        const rc = std.posix.system.read(fd, &buf, buf.len);
+        if (std.posix.errno(rc) != .SUCCESS) return;
+        const value = std.fmt.parseInt(u8, std.mem.trim(u8, buf[0..@intCast(rc)], " \r\n\t"), 10) catch return;
+        self.software_update_progress = @min(value, 100);
     }
 
     pub fn pollSoftwareUpdate(self: *SettingsWidget) ?SoftwareUpdateStatus {
         if (self.software_update_status != .running) return null;
+        self.pollSoftwareUpdateProgress();
         const status_path = self.updatePath("software-update.status") catch return null;
         defer self.allocator.free(status_path);
         const status_path_z = self.allocator.dupeSentinel(u8, status_path, 0) catch return null;
@@ -407,6 +394,7 @@ pub const SettingsWidget = struct {
         if (std.posix.errno(rc) != .SUCCESS) return null;
         const result = std.mem.trim(u8, buf[0..@intCast(rc)], " \r\n\t");
         if (std.mem.eql(u8, result, "success")) {
+            self.software_update_progress = 100;
             self.software_update_status = .success;
         } else if (std.mem.eql(u8, result, "failure")) {
             self.software_update_status = .failure;
@@ -944,16 +932,25 @@ pub const SettingsWidget = struct {
                     .muted_fg = theme.fg_secondary,
                 });
 
-                ren.drawText(content_x, content_y + 8, "Runtime paths", theme.fg_primary, theme.bg_sidebar, true, false);
+                if (self.software_update_status != .idle) {
+                    const progress_width = @min(@as(u16, 28), w -| 30);
+                    const filled_width: u16 = @intCast((@as(u32, progress_width) * self.software_update_progress) / 100);
+                    ren.drawRect(.{ .x = content_x, .y = content_y + 8, .w = progress_width, .h = 1 }, "░", theme.fg_secondary, theme.bg_editor);
+                    ren.drawRect(.{ .x = content_x, .y = content_y + 8, .w = filled_width, .h = 1 }, "█", theme.fg_accent, theme.bg_editor);
+                    const progress_label = std.fmt.bufPrint(&buf, "{d}%", .{self.software_update_progress}) catch "";
+                    ren.drawText(content_x + progress_width + 1, content_y + 8, progress_label, theme.fg_primary, theme.bg_sidebar, true, false);
+                }
+
+                ren.drawText(content_x, content_y + 10, "Runtime paths", theme.fg_primary, theme.bg_sidebar, true, false);
                 a: {
                     const available = if (w > 26) w - 26 else 1;
-                    ren.drawText(content_x, content_y + 10, "Data:", theme.fg_secondary, theme.bg_sidebar, false, false);
-                    ren.drawTextClipped(content_x + 10, content_y + 10, available, self.data_dir, theme.fg_primary, theme.bg_sidebar, false, false);
-                    ren.drawText(content_x, content_y + 12, "Settings:", theme.fg_secondary, theme.bg_sidebar, false, false);
-                    ren.drawTextClipped(content_x + 10, content_y + 12, available, self.settings_path, theme.fg_primary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 12, "Data:", theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawTextClipped(content_x + 10, content_y + 12, available, self.data_dir, theme.fg_primary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 14, "Settings:", theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawTextClipped(content_x + 10, content_y + 14, available, self.settings_path, theme.fg_primary, theme.bg_sidebar, false, false);
                     const log_path = std.fmt.bufPrint(&buf, "{s}/vide.log", .{self.data_dir}) catch self.data_dir;
-                    ren.drawText(content_x, content_y + 14, "Log:", theme.fg_secondary, theme.bg_sidebar, false, false);
-                    ren.drawTextClipped(content_x + 10, content_y + 14, available, log_path, theme.fg_primary, theme.bg_sidebar, false, false);
+                    ren.drawText(content_x, content_y + 16, "Log:", theme.fg_secondary, theme.bg_sidebar, false, false);
+                    ren.drawTextClipped(content_x + 10, content_y + 16, available, log_path, theme.fg_primary, theme.bg_sidebar, false, false);
                     break :a;
                 }
             },
@@ -1842,6 +1839,31 @@ test "software updater uses the official release installer" {
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "SHA256SUMS") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "success") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "failure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "progress_file") != null);
+    try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "VIDE_UPDATE_PROGRESS_FILE") != null);
+}
+
+test "software updater polls and clamps atomic progress state" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(data_dir);
+    const settings_path = try std.fs.path.join(std.testing.allocator, &.{ data_dir, "settings.json" });
+    defer std.testing.allocator.free(settings_path);
+    const progress_path = try std.fs.path.join(std.testing.allocator, &.{ data_dir, "software-update.progress" });
+    defer std.testing.allocator.free(progress_path);
+
+    var widget = SettingsWidget.init(std.testing.allocator, settings_path, std.testing.io, data_dir);
+    defer widget.deinit();
+    widget.software_update_status = .running;
+
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = progress_path, .data = "63\n" });
+    widget.pollSoftwareUpdateProgress();
+    try std.testing.expectEqual(@as(u8, 63), widget.software_update_progress);
+
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = progress_path, .data = "250\n" });
+    widget.pollSoftwareUpdateProgress();
+    try std.testing.expectEqual(@as(u8, 100), widget.software_update_progress);
 }
 
 test "theme dropdown mouse scrolling keeps the highlight visible" {

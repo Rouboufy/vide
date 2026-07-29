@@ -31,7 +31,7 @@ jobs:
           zig build
           python3 tests/pty_integration.py
       - name: Check shell scripts
-        run: shellcheck setup.sh update.sh uninstall.sh build_appimage.sh scripts/plugin_smoke.sh scripts/capture_media.sh tests/setup_plans.sh tests/ide_mode.sh tests/onboarding.sh tests/appimage_smoke.sh tests/media_assets.sh tests/terminal_compat.sh
+        run: shellcheck setup.sh update.sh uninstall.sh build_appimage.sh src/software_update.sh packaging/vide-launcher scripts/plugin_smoke.sh scripts/capture_media.sh tests/setup_plans.sh tests/launcher_smoke.sh tests/ide_mode.sh tests/onboarding.sh tests/appimage_smoke.sh tests/media_assets.sh tests/terminal_compat.sh
       - name: Validate generated media
         run: tests/media_assets.sh
       - name: Validate static website
@@ -40,6 +40,8 @@ jobs:
         run: python3 tests/performance_profile.py
       - name: Test installer package-manager plans
         run: bash tests/setup_plans.sh
+      - name: Test symlinked release launcher
+        run: sh tests/launcher_smoke.sh
 
   cross-build:
     runs-on: ubuntu-latest
