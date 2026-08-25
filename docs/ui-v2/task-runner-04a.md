@@ -97,16 +97,20 @@ unknown outcome without blindly repeating the mutation.
 Each active-child slot is protected by the runner mutex and carries the worker
 index, task operation ID, and a slot generation alongside the PID/handle. The
 worker is the only thread that spawns, signals, waits for, reaps, or clears its
-child; the reactor never signals a PID directly. Shutdown sets that slot's
-atomic cancellation request while holding the mutex and wakes the owning
-worker. Child adapters use bounded wait/poll intervals of at most 50 ms rather
-than an indefinite wait, so the worker rechecks cancellation after publishing
-the handle and between waits. It performs the graceful/forced sequence, reaps
-the exact child, then clears the slot under the mutex before another child can
-reuse it. Generation and operation-ID checks make a late cancellation request
-harmless after PID reuse. The reactor may observe slot state for diagnostics
-but waits for the worker's cleared-slot condition rather than racing `wait` or
-termination.
+child; the reactor never signals a PID directly. Every worker also has a
+persistent atomic shutdown-cancel flag. Shutdown sets all worker flags before
+canceling queued commands, sets any published slot's cancellation request while
+holding the mutex, and wakes every worker. A worker checks its persistent flag
+after dequeue and before spawn, then checks it again while publishing the child
+slot under the mutex; publication copies an already-set flag into the slot
+request. This closes the dequeue-to-publication race. Child adapters use bounded
+wait/poll intervals of at most 50 ms rather than an indefinite wait, so the
+worker rechecks cancellation between waits. It performs the graceful/forced
+sequence, reaps the exact child, then clears the slot under the mutex before
+another child can reuse it. Generation and operation-ID checks make a late
+cancellation request harmless after PID reuse. The reactor may observe slot
+state for diagnostics but waits for the worker's cleared-slot condition rather
+than racing `wait` or termination.
 
 ## Payload, result, and allocator ownership
 
@@ -152,9 +156,9 @@ uninterruptible kernel operation can delay child reaping or worker exit. Zig
 0.16 has no timed thread join, and the runner neither detaches workers nor frees
 resources they may still access:
 
-1. Stop command admission and mark queued commands canceled.
-2. Broadcast to all command waiters and request cancellation of terminable
-   active children.
+1. Stop command admission, set every worker's persistent shutdown-cancel flag,
+   and mark queued commands canceled.
+2. Set requests on published child slots and broadcast to all command waiters.
 3. Keep draining completions while workers exit; workers never wait to publish.
 4. Reap terminable children and join workers. If the two-second target expires,
    record a shutdown-delay diagnostic and continue waiting; ownership remains
