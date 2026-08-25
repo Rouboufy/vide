@@ -443,7 +443,13 @@ pub const UiState = struct {
                 while (rep < repeat) : (rep += 1) {
                     if (row < target.height and col < target.width) {
                         var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic, .reverse = hl.reverse };
-                        cell.setChar(text);
+                        if (text.len == 0) {
+                            @memset(&cell.char, 0);
+                            cell.len = 0;
+                            cell.continuation = true;
+                        } else {
+                            cell.setChar(text);
+                        }
                         target.cells[@as(usize, row) * @as(usize, target.width) + col] = cell;
                     }
                     col += 1;
@@ -683,4 +689,102 @@ test "ui protocol preserves width after scrolling and keeps explicit zero repeat
     try std.testing.expectEqualStrings("3", state.grid.cells[1].char[0..state.grid.cells[1].len]);
     try std.testing.expectEqualStrings("4", state.grid.cells[2].char[0..state.grid.cells[2].len]);
     try std.testing.expectEqualStrings("5", state.grid.cells[3].char[0..state.grid.cells[3].len]);
+}
+
+test "deterministic msgpack redraw replay produces canonical styled unicode cell grid" {
+    // This is a decoded Neovim redraw batch first serialized through msgpack,
+    // ensuring the replay fixture exercises the wire representation as well as
+    // the protocol state machine.
+    const fixture = Value{ .array = values(&[_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 6 }, .{ .integer = 3 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 2 }, .{ .integer = 2 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 3 }, .{ .integer = 2 }, .{ .integer = 1 } }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "hl_attr_define" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 7 },
+                .{ .map = kvs(&[_]Value.KV{
+                    .{ .key = .{ .string = "foreground" }, .value = .{ .integer = 0x112233 } },
+                    .{ .key = .{ .string = "background" }, .value = .{ .integer = 0x445566 } },
+                    .{ .key = .{ .string = "bold" }, .value = .{ .bool = true } },
+                    .{ .key = .{ .string = "italic" }, .value = .{ .bool = true } },
+                    .{ .key = .{ .string = "reverse" }, .value = .{ .bool = true } },
+                }) },
+                .nil,
+                .{ .array = values(&[_]Value{}) },
+            }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_line" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{ .{ .string = "A" }, .{ .integer = 7 } }) },
+                    .{ .array = values(&[_]Value{.{ .string = "界" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "🚀" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "Z" }}) },
+                }) },
+            }) },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 1 }, .{ .integer = 1 }, .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{ .{ .string = "á" }, .{ .integer = 7 } }) },
+                    .{ .array = values(&[_]Value{ .{ .string = "s" }, .{ .integer = 0 }, .{ .integer = 5 } }) },
+                }) },
+            }) },
+        }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_cursor_goto" }, .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 1 }, .{ .integer = 0 } }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_pos" }, .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 20 }, .{ .integer = 1 }, .{ .integer = 2 } }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_float_pos" }, .{ .array = values(&[_]Value{
+            .{ .integer = 3 }, .{ .integer = 30 }, .{ .string = "NW" }, .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 0 }, .{ .bool = true }, .{ .integer = 50 },
+        }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_hide" }, .{ .array = values(&[_]Value{.{ .integer = 3 }}) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_clear" }, .{ .array = values(&[_]Value{.{ .integer = 2 }}) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_scroll" }, .{ .array = values(&[_]Value{
+            .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 3 }, .{ .integer = 0 }, .{ .integer = 6 }, .{ .integer = 1 }, .{ .integer = 0 },
+        }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_close" }, .{ .array = values(&[_]Value{.{ .integer = 3 }}) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_destroy" }, .{ .array = values(&[_]Value{.{ .integer = 2 }}) } }) },
+    }) };
+
+    var encoded = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer encoded.deinit();
+    try msgpack.encode(&encoded.writer, fixture);
+    var reader = std.Io.Reader.fixed(encoded.written());
+    const decoded = try msgpack.decode(&reader, std.testing.allocator);
+    defer msgpack.freeValue(decoded, std.testing.allocator);
+
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+    try state.handleRedraw(decoded.array);
+
+    // Canonical final grid after the one-row scroll. Every cell is asserted.
+    const expected = [_][]const u8{ "á", "s", "s", "s", "s", "s", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " " };
+    for (state.grid.cells, expected) |cell, text| {
+        try std.testing.expectEqualStrings(text, cell.char[0..cell.len]);
+    }
+    const styled = state.grid.cells[0];
+    try std.testing.expectEqual(Color{ .rgb = .{ .r = 0x11, .g = 0x22, .b = 0x33 } }, styled.fg);
+    try std.testing.expectEqual(Color{ .rgb = .{ .r = 0x44, .g = 0x55, .b = 0x66 } }, styled.bg);
+    try std.testing.expect(styled.bold and styled.italic and styled.reverse);
+    try std.testing.expectEqual(@as(u16, 0), state.cursor_x);
+    try std.testing.expectEqual(@as(u16, 1), state.cursor_y);
+    try std.testing.expect(state.get(2) == null and state.get(3) == null);
+
+    // Verify the pre-scroll Unicode fixture separately, including explicit
+    // wide-cell continuations from Neovim's empty-string cells.
+    var unicode_state = UiState.init(std.testing.allocator);
+    defer unicode_state.deinit();
+    try unicode_state.handleRedraw(decoded.array[0..3]);
+    try std.testing.expectEqualStrings("A", unicode_state.grid.cells[0].char[0..unicode_state.grid.cells[0].len]);
+    try std.testing.expectEqualStrings("界", unicode_state.grid.cells[1].char[0..unicode_state.grid.cells[1].len]);
+    try std.testing.expect(unicode_state.grid.cells[2].continuation and unicode_state.grid.cells[2].len == 0);
+    try std.testing.expectEqualStrings("🚀", unicode_state.grid.cells[3].char[0..unicode_state.grid.cells[3].len]);
+    try std.testing.expect(unicode_state.grid.cells[4].continuation and unicode_state.grid.cells[4].len == 0);
+    try std.testing.expectEqualStrings("Z", unicode_state.grid.cells[5].char[0..unicode_state.grid.cells[5].len]);
 }

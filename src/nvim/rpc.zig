@@ -3,6 +3,7 @@ const posix = std.posix;
 const NvimProcess = @import("process.zig").NvimProcess;
 const msgpack = @import("msgpack.zig");
 const Value = msgpack.Value;
+const metrics = @import("../metrics.zig");
 
 pub const RpcClient = struct {
     process: NvimProcess,
@@ -67,6 +68,8 @@ pub const RpcClient = struct {
     }
 
     pub fn call(self: *RpcClient, method: []const u8, params: []const Value) !Value {
+        var timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_rpc);
+        defer timer.stop();
         const id = self.nextId();
         var req_arr = try self.allocator.alloc(Value, 4);
         defer self.allocator.free(req_arr);
@@ -133,7 +136,9 @@ pub const RpcClient = struct {
         while (true) {
             // Read with retry on WouldBlock (non-blocking stdout fd)
             const checkpoint = self.reader.head;
+            var decode_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.rpc_decode);
             const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
+                decode_timer.stop();
                 self.reader.head = checkpoint;
                 if (err == error.WouldBlock) {
                     if (retries >= max_retries) {
@@ -147,6 +152,7 @@ pub const RpcClient = struct {
                 }
                 return err;
             };
+            decode_timer.stop();
             self.reader.discardConsumed();
             retries = 0;
             errdefer msgpack.freeValue(msg, self.allocator);
@@ -182,6 +188,8 @@ pub const RpcClient = struct {
                 }
             } else if (msg_type == 2) {
                 if (self.on_notification) |cb| {
+                    var callback_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.callback_dispatch);
+                    defer callback_timer.stop();
                     const method = msg.array[1].string;
                     const params = msg.array[2];
                     try cb(self.on_notification_ctx, method, params);
@@ -198,16 +206,23 @@ pub const RpcClient = struct {
         while (self.hasData() and msg_count < 250) : (msg_count += 1) {
             if (!try self.processOneMessage()) return false;
         }
+        if (metrics.global.enabled) {
+            metrics.global.queue_depth = @max(metrics.global.queue_depth, msg_count);
+            if (msg_count > 1) metrics.global.coalesced_events +|= @intCast(msg_count - 1);
+        }
         return true;
     }
 
     fn processOneMessage(self: *RpcClient) !bool {
         const checkpoint = self.reader.head;
+        var decode_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.rpc_decode);
         const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
+            decode_timer.stop();
             self.reader.head = checkpoint;
             if (err == error.EndOfStream) return false;
             return err;
         };
+        decode_timer.stop();
         self.reader.discardConsumed();
         defer msgpack.freeValue(msg, self.allocator);
         if (msg != .array or msg.array.len < 3 or msg.array[0] != .integer) return true;
@@ -216,6 +231,8 @@ pub const RpcClient = struct {
             self.replyError(msg.array[1].integer);
         } else if (msg_type == 2 and msg.array[1] == .string) {
             if (self.on_notification) |cb| {
+                var callback_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.callback_dispatch);
+                defer callback_timer.stop();
                 try cb(self.on_notification_ctx, msg.array[1].string, msg.array[2]);
             }
         }

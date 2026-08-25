@@ -11,6 +11,7 @@ const RpcContext = @import("../tui/app.zig").RpcContext;
 const theme = @import("../tui/theme.zig");
 const Rect = @import("../tui/layout.zig").Rect;
 const settings = @import("../tui/widgets/settings.zig");
+const metrics = @import("../metrics.zig");
 
 pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseEvent, rel_col: u16, rel_row: u16) void {
     const button_str: []const u8 = switch (m.button) {
@@ -42,6 +43,8 @@ pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseE
 }
 
 pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) anyerror!void {
+    var state_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.state_update);
+    defer state_timer.stop();
     const rpc_ctx: *RpcContext = @ptrCast(@alignCast(ctx orelse return));
     const ui_state = rpc_ctx.ui_state;
     const app = rpc_ctx.app;

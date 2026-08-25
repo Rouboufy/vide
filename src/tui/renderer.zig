@@ -1,4 +1,5 @@
 const std = @import("std");
+const metrics = @import("../metrics.zig");
 
 pub const Color = union(enum) {
     none,
@@ -203,6 +204,12 @@ pub const Renderer = struct {
     }
 
     pub fn flush(self: *Renderer) !void {
+        var encode_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.ansi_encoding);
+        defer encode_timer.stop();
+        if (metrics.global.enabled) {
+            metrics.global.frame_count +|= 1;
+            metrics.global.rendered_cells +|= @as(u64, self.width) * @as(u64, self.height);
+        }
         var cur_fg: Color = .none;
         var cur_bg: Color = .none;
         var cur_bold: bool = false;
@@ -211,13 +218,22 @@ pub const Renderer = struct {
         // Hide cursor and reset terminal attributes initially
         try self.writer.writeAll("\x1b[?25l\x1b[0m");
 
+        var dirty_count: u64 = 0;
+        var dirty_regions: u64 = 0;
         for (0..self.height) |y| {
+            var in_region = false;
             for (0..self.width) |x| {
                 const idx = y * self.width + x;
                 const cell = self.buf[idx];
                 const prev_cell = self.prev[idx];
 
-                if (std.meta.eql(cell, prev_cell)) continue;
+                if (std.meta.eql(cell, prev_cell)) {
+                    in_region = false;
+                    continue;
+                }
+                dirty_count +|= 1;
+                if (!in_region) dirty_regions +|= 1;
+                in_region = true;
                 if (cell.continuation) continue;
 
                 // Move cursor to 1-indexed console coordinates
@@ -280,6 +296,10 @@ pub const Renderer = struct {
         // Reset attributes on finish
         try self.writer.writeAll("\x1b[0m");
         @memcpy(self.prev, self.buf);
+        if (metrics.global.enabled) {
+            metrics.global.dirty_cells +|= dirty_count;
+            metrics.global.dirty_regions +|= dirty_regions;
+        }
     }
 };
 

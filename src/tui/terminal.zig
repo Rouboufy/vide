@@ -1,6 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 const Capabilities = @import("capabilities.zig").Capabilities;
+const metrics = @import("../metrics.zig");
 
 pub const TerminalWriter = struct {
     writer: std.Io.Writer,
@@ -21,8 +22,11 @@ pub const TerminalWriter = struct {
     }
 
     fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        var timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.writer_flush);
+        defer timer.stop();
         const self: *TerminalWriter = @alignCast(@fieldParentPtr("writer", w));
         var total_written: usize = 0;
+        const buffered_bytes = w.end;
 
         // 1. Consume any bytes currently in the writer's buffer.
         if (w.end > 0) {
@@ -82,6 +86,7 @@ pub const TerminalWriter = struct {
             }
         }
 
+        if (metrics.global.enabled) metrics.global.emitted_bytes +|= @intCast(total_written + buffered_bytes);
         return total_written;
     }
 };

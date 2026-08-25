@@ -30,6 +30,7 @@ const nvim_helpers = @import("nvim/helpers.zig");
 const views = @import("tui/views.zig");
 const events = @import("tui/events.zig");
 const Capabilities = @import("tui/capabilities.zig").Capabilities;
+const metrics = @import("metrics.zig");
 
 var global_term: ?*Terminal = null;
 var log_path: ?[]const u8 = null;
@@ -67,6 +68,8 @@ pub fn log(
     args: anytype,
 ) void {
     const path = log_path orelse return;
+    var log_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_io_log);
+    defer log_timer.stop();
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -135,6 +138,16 @@ fn requestedVersion(init: std.process.Init) bool {
     return isVersionArg(args.next() orelse return false);
 }
 
+fn diagnosticsRequested(init: std.process.Init) bool {
+    if (init.environ_map.get("VIDE_DIAGNOSTICS")) |value| {
+        if (value.len > 0 and !std.mem.eql(u8, value, "0") and !std.ascii.eqlIgnoreCase(value, "false")) return true;
+    }
+    var args = init.minimal.args.iterate();
+    _ = args.skip();
+    while (args.next()) |arg| if (std.mem.eql(u8, arg, "--diagnostics")) return true;
+    return false;
+}
+
 fn printVersion(init: std.process.Init) !void {
     var buffer: [128]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
@@ -156,6 +169,30 @@ fn innerMain(init: std.process.Init) !void {
     const data_home = init.environ_map.get("XDG_DATA_HOME") orelse fallback_data_home;
     const app_data_dir = try std.fs.path.join(alloc, &.{ data_home, "vide" });
     defer alloc.free(app_data_dir);
+    metrics.global.enabled = diagnosticsRequested(init);
+    defer if (metrics.global.enabled) {
+        const diagnostics_path = std.fs.path.join(alloc, &.{ app_data_dir, "diagnostics.json" }) catch null;
+        if (diagnostics_path) |path| {
+            defer alloc.free(path);
+            var json = std.Io.Writer.Allocating.init(alloc);
+            defer json.deinit();
+            if (metrics.global.exportJson(&json.writer)) {
+                if (std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600)) |fd| {
+                    defer _ = std.posix.system.close(fd);
+                    const bytes = json.written();
+                    var written: usize = 0;
+                    while (written < bytes.len) {
+                        const rc = std.posix.system.write(fd, bytes[written..].ptr, bytes.len - written);
+                        switch (std.posix.errno(rc)) {
+                            .SUCCESS => written += @intCast(rc),
+                            .INTR => continue,
+                            else => break,
+                        }
+                    }
+                } else |_| {}
+            } else |_| {}
+        }
+    };
 
     // Isolate all Neovim config, data, state, cache, undo and plugins from the
     // user's own Neovim. `--clean` also prevents sourcing their init.lua.
@@ -241,7 +278,13 @@ fn innerMain(init: std.process.Init) !void {
 
         var args = init.minimal.args.iterate();
         _ = args.skip(); // skip executable name
-        const initial_file: ?[]const u8 = args.next();
+        var initial_file: ?[]const u8 = null;
+        while (args.next()) |arg| {
+            if (!std.mem.eql(u8, arg, "--diagnostics")) {
+                initial_file = arg;
+                break;
+            }
+        }
 
         if (is_resuming) {
             const src_cmd_str = try std.fmt.allocPrint(alloc, "silent! source {s}", .{session_path});
@@ -398,7 +441,9 @@ fn runNvimSession(
     const preview_path = try std.fs.path.join(alloc, &[_][]const u8{ app_data_dir, "preview.json" });
     defer alloc.free(settings_path);
     defer alloc.free(preview_path);
+    var settings_io_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_io_settings);
     var settings_widget = SettingsWidget.init(alloc, settings_path, init.io, app_data_dir);
+    settings_io_timer.stop();
     const term_env = init.environ_map.get("TERM") orelse "";
     const is_linux_console = std.mem.eql(u8, term_env, "linux");
     if (is_linux_console) {
@@ -590,7 +635,9 @@ fn runNvimSession(
 
         const cols = ren.width;
         const rows = ren.height;
+        var layout_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.layout);
         const layout = Layout.compute(cols, rows, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
+        layout_timer.stop();
 
         if (app.needs_resize) {
             app.needs_resize = false;
@@ -599,12 +646,14 @@ fn runNvimSession(
             rp[0] = .{ .integer = @max(1, layout.editor.w) };
             rp[1] = .{ .integer = @max(1, layout.editor.h) };
             rpc.notify("nvim_ui_try_resize", rp) catch {};
+            if (metrics.global.enabled) metrics.global.editor_resize_requests +|= 1;
             if (layout.panel) |panel| {
                 var tp = try alloc.alloc(Value, 2);
                 defer alloc.free(tp);
                 tp[0] = .{ .integer = @max(1, panel.w) };
                 tp[1] = .{ .integer = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
                 rpc_term.notify("nvim_ui_try_resize", tp) catch {};
+                if (metrics.global.enabled) metrics.global.terminal_resize_requests +|= 1;
             }
         }
 
@@ -617,6 +666,7 @@ fn runNvimSession(
         _ = try nvim_helpers.processNvimEvents(rpc_term);
 
         if (first_frame) std.log.info("Drawing first frame", .{});
+        var composition_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.composition);
         views.drawWorkspace(&app, layout);
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
@@ -637,6 +687,7 @@ fn runNvimSession(
             break :panel_info panel.y + 1 + ui_term.cursor_y;
         } else @as(u16, @intCast(@max(0, @as(i32, @intCast(layout.editor.y)) + cursor_pos.y)));
         ren.drawCursor(final_cursor_x, final_cursor_y);
+        composition_timer.stop();
         try ren.flush();
         if (first_frame) {
             std.log.info("First frame flushed", .{});
@@ -651,7 +702,9 @@ fn runNvimSession(
         };
 
         const timeout: i32 = if (input.sigwinch_received.load(.monotonic)) 0 else 1000;
+        var poll_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.poll_wakeup);
         const poll_num = std.posix.poll(&fds, timeout) catch |err| {
+            poll_timer.stop();
             if (err == error.BlockedBySignal) {
                 if (input.sigwinch_received.swap(false, .monotonic)) {
                     var ws: posix.winsize = undefined;
@@ -665,6 +718,7 @@ fn runNvimSession(
             }
             return err;
         };
+        poll_timer.stop();
 
         if (poll_num > 0) {
             if ((fds[3].revents & std.posix.POLL.IN) != 0) {
@@ -766,10 +820,12 @@ fn runNvimSession(
 
             if (app.settings_widget.needs_apply) {
                 app.settings_widget.needs_apply = false;
+                var settings_save_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_io_settings);
                 app.settings_widget.config.save(preview_path) catch |err| {
                     app.notify(.failure, "Unable to save settings preview: {}", .{err});
                     std.log.err("Unable to save settings preview at {s}: {}", .{ preview_path, err });
                 };
+                settings_save_timer.stop();
 
                 app.needs_resize = true; // force redraw
 
@@ -857,7 +913,9 @@ fn runNvimSession(
             }
 
             if ((fds[0].revents & posix.POLL.IN) != 0) {
+                var input_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.input_decode);
                 const event = try input.readEvent(term.tty_fd, &seq_buf, alloc);
+                input_timer.stop();
                 switch (event) {
                     .key => |k| {
                         _ = try events.handleKey(&app, k, layout);
