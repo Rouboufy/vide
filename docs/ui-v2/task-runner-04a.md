@@ -1,7 +1,7 @@
 # Prompt 04A task-runner design record
 
-Status: Draft for review. This record starts Prompt 04A; it does not approve
-the design or open the Prompt 04B implementation gate.
+Status: Accepted 2026-08-26 by Rouboufy. The Prompt 04B implementation gate is
+open.
 
 ## Constraints and selected architecture
 
