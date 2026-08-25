@@ -94,6 +94,20 @@ call returns or its terminable child is reaped; it never reports such a mutation
 as canceled. A later reconciliation read uses the operation ID to resolve an
 unknown outcome without blindly repeating the mutation.
 
+Each active-child slot is protected by the runner mutex and carries the worker
+index, task operation ID, and a slot generation alongside the PID/handle. The
+worker is the only thread that spawns, signals, waits for, reaps, or clears its
+child; the reactor never signals a PID directly. Shutdown sets that slot's
+atomic cancellation request while holding the mutex and wakes the owning
+worker. Child adapters use bounded wait/poll intervals of at most 50 ms rather
+than an indefinite wait, so the worker rechecks cancellation after publishing
+the handle and between waits. It performs the graceful/forced sequence, reaps
+the exact child, then clears the slot under the mutex before another child can
+reuse it. Generation and operation-ID checks make a late cancellation request
+harmless after PID reuse. The reactor may observe slot state for diagnostics
+but waits for the worker's cleared-slot condition rather than racing `wait` or
+termination.
+
 ## Payload, result, and allocator ownership
 
 Commands and completions are tagged unions. Each union case provides one
@@ -174,12 +188,13 @@ no wakeups.
 ## Rollout and rollback
 
 04A changes documentation only. Its history starts at `7252773`, with later
-edits in mixed reactor-review commits `098ed75` and `a9c83a2`; rollback therefore
-removes the 04A document and its status entry as a content-level change rather
-than reverting those mixed commits wholesale. 04B will add the dormant runner
-and notifier without migrating production widgets. 04C is the first runtime
-consumer and must remain separately revertible to synchronous Git refresh. No
-task-runner state is persisted across process restarts.
+edits in mixed reactor-review commits `098ed75`, `a9c83a2`, and `5b9cd91`;
+rollback therefore removes the 04A document and its status entry as a
+content-level change rather than reverting those mixed commits wholesale. 04B
+will add the dormant runner and notifier without migrating production widgets.
+04C is the first runtime consumer and must remain separately revertible to
+synchronous Git refresh. No task-runner state is persisted across process
+restarts.
 
 ## Review decisions required before acceptance
 
