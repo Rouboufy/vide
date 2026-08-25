@@ -1,0 +1,11 @@
+VIDE | B | VideNormal                                                                                                   
+[FOCUS: Editor] src/main.zig                                                                                            
+| 1  const std = @import("std");                                                                                       |
+| 2  // editor remains usable                                                                                          |
++----------------------------------------------------------------------------------------------------------------------+
+Too small: resize to recover editor                                                                                     
+Resize to >=60x15 to restore them                                                                                       
+F1 Help: >sel !error 1 unread                                                                                           
+Loading... disabled [? why]                                                                                             
+F1 Help | Ctrl-Shift-P Commands                                                                                         
+:q Quit | state and sessions retained                                                                                   

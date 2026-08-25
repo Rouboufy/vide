@@ -1,0 +1,24 @@
+VideZen | [FOCUS: Editor]                                                       
+src/main.zig                                                                    
+                                                                                
+ 1 const app = Vide.init();                                                     
+                                                                                
+Editor owns full viewport                                                       
+Shell state retained                                                            
+[Leave Zen]                                                                     
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+F1 Help | Ctrl-Shift-P Commands                                                 

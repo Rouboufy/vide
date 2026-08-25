@@ -1,0 +1,24 @@
+VIDE|compact|[Commands]|[FOCUS: File Search]                                    
+[src/main.zig*]  src/tui/events.zig  !1 Problem  Loadin|[Search Files]          
+ 1  ~                                                  |Query: events.zig       
+ 2  const app = Vide.init();                           |> src/tui/events.zig    
+ 3  ~                                                  |[Open] [Cancel]         
+ 4  ~                                                  |results retained        
+ 5  ~                                                  |                        
+ 6  ~                                                  |                        
+ 7  ~                                                  |                        
+ 8  ~                                                  |                        
+ 9  ~                                                  |                        
+10  ~                                                  |                        
+11  ~                                                  |                        
+12  ~                                                  |                        
+13  ~                                                  |                        
+14  ~                                                  |                        
+15  ~                                                  |                        
+16  ~                                                  |                        
+17  ~                                                  |                        
+18  ~                                                  |                        
+19  ~                                                  |                        
+20  ~                                                  |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       

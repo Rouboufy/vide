@@ -1,0 +1,24 @@
+VIDE | VideNormal | compact | [FOCUS: Command Palette]                          
+[E]|[src/main.zig*]  src/tui/events.zig  !1 Problem  Lo|[Command Palette]       
+ S | 1  ~                                              |Filter: searchable      
+!1 | 2  const app = Vide.init();                       |> file.open             
+ G | 3  ~                                              |  file.save             
+ T | 4  ~                                              |  search.files          
+[] | 5  ~                                              |  search.text           
+ ? | 6  ~                                              |  problem.open          
+   | 7  ~                                              |  terminal.toggle       
+   | 8  ~                                              |  git.focus             
+   | 9  ~                                              |  settings.open         
+   |10  ~                                              |  split.vertical        
+   |11  ~                                              |  mode.zen              
+   |12  ~                                              |  focus.editor          
+   |13  ~                                              |  app.quit              
+   |14  ~                                              |[Run] [Close]           
+   |15  ~                                              |                        
+   |16  ~                                              |                        
+   |17  ~                                              |                        
+   |18  ~                                              |                        
+   |19  ~                                              |                        
+   |20  ~                                              |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       

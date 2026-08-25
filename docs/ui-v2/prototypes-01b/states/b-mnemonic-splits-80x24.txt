@@ -1,0 +1,24 @@
+Editor splits | [FOCUS: Editor grid 2]                                          
+src/main.zig                                                                    
++ editor grid 1 +|+ editor grid 2 +                                             
+| original buffer |>| focused buffer  |                                         
+| cursor/state    || cursor/state     |                                         
+[Move grid] [Close grid 2]                                                      
+Neovim owns both grids                                                          
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+F1 Help | Ctrl-Shift-P Commands                                                 

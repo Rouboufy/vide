@@ -1,0 +1,24 @@
+VIDE|compact|[Commands]|[FOCUS: Text Search]                                    
+[src/main.zig*]  src/tui/events.zig  !1 Problem  Loadin|[Search Text]           
+ 1  ~                                                  |Query: FocusTarget      
+ 2  const app = Vide.init();                           |> events.zig:88         
+ 3  ~                                                  |  app.zig:31            
+ 4  ~                                                  |[Open] [Cancel]         
+ 5  ~                                                  |results retained        
+ 6  ~                                                  |                        
+ 7  ~                                                  |                        
+ 8  ~                                                  |                        
+ 9  ~                                                  |                        
+10  ~                                                  |                        
+11  ~                                                  |                        
+12  ~                                                  |                        
+13  ~                                                  |                        
+14  ~                                                  |                        
+15  ~                                                  |                        
+16  ~                                                  |                        
+17  ~                                                  |                        
+18  ~                                                  |                        
+19  ~                                                  |                        
+20  ~                                                  |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       

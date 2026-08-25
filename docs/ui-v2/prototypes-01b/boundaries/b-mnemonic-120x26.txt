@@ -1,0 +1,26 @@
+VIDE | VideNormal | compact | [FOCUS: Editor]                                                                           
+[E]|[src/main.zig*]  src/tui/events.zig  !1 Problem  Loading...  Git 1                     |[Explorer] current          
+ S | 1  ~                                                                                  |> src/ selected             
+!1 | 2  const app = Vide.init();                                                           |  tui/                      
+ G | 3  ~                                                                                  |    app.zig                 
+ T | 4  ~                                                                                  |    events.zig ! Error      
+ C | 5  ~                                                                                  |  main.zig                  
+ ? | 6  ~                                                                                  |                            
+   | 7  ~                                                                                  |[Open] [New] [Actions]      
+   | 8  ~                                                                                  |Problems !1                 
+   | 9  ~                                                                                  |Git 1 unread                
+   |10  ~                                                                                  |Extensions Loading...       
+   |11  ~                                                                                  |Commit disabled [? why]     
+   |12  ~                                                                                  |Terminal [Open]             
+   |13  ~                                                                                  |Settings [Open]             
+   |14  ~                                                                                  |Help [?]                    
+   |15  ~                                                                                  |                            
+   |16  ~                                                                                  |                            
+   |17  ~                                                                                  |                            
+   |18  ~                                                                                  |                            
+   |19  ~                                                                                  |                            
+   |20  ~                                                                                  |                            
+   |21  ~                                                                                  |                            
+   |22  ~                                                                                  |                            
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S                                                     
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through                                               

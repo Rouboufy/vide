@@ -1,0 +1,24 @@
+VIDE|compact|[Commands]|[FOCUS: Child dialog]                                   
+[src/main.zig*]  src/tui/events.zig  !1 Problem  Loadin|[DIALOG Child]          
+ 1  ~                                                  |Dismissible             
+ 2  const app = Vide.init();                           |[Cancel]                
+ 3  ~                                                  |Escape -> parent Help   
+ 4  ~                                                  |input trapped here      
+ 5  ~                                                  |                        
+ 6  ~                                                  |                        
+ 7  ~                                                  |                        
+ 8  ~                                                  |                        
+ 9  ~                                                  |                        
+10  ~                                                  |                        
+11  ~                                                  |                        
+12  ~                                                  |                        
+13  ~                                                  |                        
+14  ~                                                  |                        
+15  ~                                                  |                        
+16  ~                                                  |                        
+17  ~                                                  |                        
+18  ~                                                  |                        
+19  ~                                                  |                        
+20  ~                                                  |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       

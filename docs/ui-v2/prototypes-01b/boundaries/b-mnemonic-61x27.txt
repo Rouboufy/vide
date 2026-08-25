@@ -1,0 +1,27 @@
+VIDE | VideNormal | constrained | [FOCUS: Editor]            
+[src/main.zig*]  src/tui/events.zig  !1 P|[Explorer] current 
+ 1  ~                                    |> src/ selected    
+ 2  const app = Vide.init();             |  tui/             
+ 3  ~                                    |    app.zig        
+ 4  ~                                    |    events.zig ! Er
+ 5  ~                                    |  main.zig         
+ 6  ~                                    |                   
+ 7  ~                                    |[Open] [New] [Actio
+ 8  ~                                    |Problems !1        
+ 9  ~                                    |Git 1 unread       
+10  ~                                    |Extensions Loading.
+11  ~                                    |Commit disabled [? 
+12  ~                                    |Terminal [Open]    
+13  ~                                    |Settings [Open]    
+14  ~                                    |Help [?]           
+15  ~                                    |                   
+16  ~                                    |                   
+17  ~                                    |                   
+18  ~                                    |                   
+19  ~                                    |                   
+20  ~                                    |                   
+21  ~                                    |                   
+22  ~                                    |                   
+23  ~                                    |                   
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save 
+Terminal hidden, session retained | Return: Ctrl-\ e         

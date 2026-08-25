@@ -1,0 +1,24 @@
+VIDE | VideNormal | compact | [FOCUS: Editor]                                   
+[E]|[src/main.zig*]  src/tui/events.zig  !1 Problem  Lo|[ACTIONS]               
+ S | 1  ~                                              |[Open File]             
+!1 | 2  const app = Vide.init();                       |[Save Ctrl-S]           
+ G | 3  ~                                              |[Search Files]          
+ T | 4  ~                                              |[Search Text]           
+ C | 5  ~                                              |[Split Vertical]        
+ ? | 6  ~                                              |[Close]                 
+   | 7  ~                                              |Return: Escape          
+   | 8  ~                                              |                        
+   | 9  ~                                              |                        
+   |10  ~                                              |                        
+   |11  ~                                              |                        
+   |12  ~                                              |                        
+   |13  ~                                              |                        
+   |14  ~                                              |                        
+   |15  ~                                              |                        
+   |16  ~                                              |                        
+   |17  ~                                              |                        
+   |18  ~                                              |                        
+   |19  ~                                              |                        
+   |20  ~                                              |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       
