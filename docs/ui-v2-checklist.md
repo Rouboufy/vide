@@ -8,11 +8,11 @@ Use this checklist alongside `docs/ui-v2-implementation-playbook.md`.
 
 ## Contracts and preparation
 
-- [ ] 00 — Establish the UI v2 program contract
+- [X] 00 — Establish the UI v2 program contract
 - [ ] **01A — Workflow and input contract — 👤 UX INPUT**
 - [ ] **01B — Prototypes — 👤 UX INPUT**
 - [ ] **01C — Validation and product decision — 👤 UX INPUT**
-- [ ] 02 — Make settings versioned, durable, and reversible
+- [X] 02 — Make settings versioned, durable, and reversible
 - [ ] 03 — Add performance observability and deterministic fixtures
 - [ ] 03B — Introduce the interactive reactor seam
 

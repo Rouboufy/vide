@@ -72,6 +72,26 @@ pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
 }
 
 pub const SettingsConfig = struct {
+    // Persistence contract:
+    // - v0 (unversioned) and v1 are the support window; future schemas are
+    //   read-refused and therefore remain byte-for-byte available for a newer
+    //   Vide. Downgrade is an explicit export/save from that newer release.
+    // - Unknown fields in a supported document are accepted for forward
+    //   reading, but only future-version documents promise lossless retention.
+    // - Saves are atomic, process-local last-writer-wins transactions. There is
+    //   no in-place write window and no advisory lock contract.
+    // - One `<path>.bak` last-known-good document is retained. Backup refresh is
+    //   best effort and occurs only after the new primary validates and lands.
+    // - POSIX save destinations are never followed through symlinks. Existing
+    //   symlinks are rejected; a racing symlink is replaced, never followed.
+    /// Settings schema supported by this binary. Unversioned files are v0 and
+    /// are migrated in memory; future versions are never rewritten.
+    pub const current_version: u32 = 1;
+    /// Settings are intentionally small. Bounding the document at 64 KiB
+    /// prevents an accidental or hostile file from consuming unbounded memory.
+    pub const max_document_bytes: usize = 64 * 1024;
+
+    version: u32 = current_version,
     clip: bool = true,
     zen: bool = false,
     zen_handoff: bool = false,
@@ -88,6 +108,85 @@ pub const SettingsConfig = struct {
     keybindings: Keybindings = .{},
     nerd_fonts: bool = true,
     mode: []const u8 = "normal",
+
+    const VersionHeader = struct { version: ?u32 = null };
+    const SaveFailurePoint = enum { none, after_create, after_write, after_sync, before_replace, after_replace };
+    var save_nonce: usize = 0;
+
+    fn migrateV0ToV1(config: SettingsConfig) SettingsConfig {
+        var migrated = config;
+        if (migrated.zen) {
+            migrated.mode = "zen";
+            migrated.ide = false;
+        } else if (migrated.ide) {
+            migrated.mode = "ide";
+            migrated.zen = false;
+        } else if (std.mem.eql(u8, migrated.mode, "zen")) {
+            migrated.zen = true;
+            migrated.ide = false;
+        } else if (std.mem.eql(u8, migrated.mode, "ide")) {
+            migrated.zen = false;
+            migrated.ide = true;
+        } else {
+            migrated.mode = "normal";
+            migrated.zen = false;
+            migrated.ide = false;
+        }
+        if (std.mem.eql(u8, migrated.keybindings.toggle_zen, "<C-z>"))
+            migrated.keybindings.toggle_zen = "<F11>";
+        migrated.version = 1;
+        return migrated;
+    }
+
+    /// Pure, deterministic migrations. Reapplying this function to a current
+    /// document is a no-op, which makes migrations idempotent.
+    fn migrateToCurrent(config: SettingsConfig, source_version: u32) !SettingsConfig {
+        if (source_version > current_version) return error.UnsupportedSettingsVersion;
+        var migrated = config;
+        var version = source_version;
+        while (version < current_version) : (version += 1) {
+            migrated = switch (version) {
+                0 => migrateV0ToV1(migrated),
+                else => return error.UnsupportedSettingsVersion,
+            };
+        }
+        // These normalizations predate the schema marker and are safe to
+        // reapply to early v1 writers that emitted the old values.
+        if (std.mem.eql(u8, migrated.keybindings.toggle_zen, "<C-z>"))
+            migrated.keybindings.toggle_zen = "<F11>";
+        migrated.version = current_version;
+        return migrated;
+    }
+
+    fn ownedDefaults(allocator: std.mem.Allocator) !SettingsConfig {
+        return ownStrings(allocator, .{});
+    }
+
+    fn ownStrings(allocator: std.mem.Allocator, source: SettingsConfig) !SettingsConfig {
+        var result = source;
+        result.theme = try allocator.dupe(u8, source.theme);
+        errdefer allocator.free(result.theme);
+        result.line_numbers = try allocator.dupe(u8, source.line_numbers);
+        errdefer allocator.free(result.line_numbers);
+        result.colorcolumn = try allocator.dupe(u8, source.colorcolumn);
+        errdefer allocator.free(result.colorcolumn);
+        result.split_separator = try allocator.dupe(u8, source.split_separator);
+        errdefer allocator.free(result.split_separator);
+        result.mode = try allocator.dupe(u8, source.mode);
+        errdefer allocator.free(result.mode);
+        result.keybindings.toggle_terminal = try allocator.dupe(u8, source.keybindings.toggle_terminal);
+        errdefer allocator.free(result.keybindings.toggle_terminal);
+        result.keybindings.toggle_explorer = try allocator.dupe(u8, source.keybindings.toggle_explorer);
+        errdefer allocator.free(result.keybindings.toggle_explorer);
+        result.keybindings.toggle_zen = try allocator.dupe(u8, source.keybindings.toggle_zen);
+        errdefer allocator.free(result.keybindings.toggle_zen);
+        result.keybindings.new_file = try allocator.dupe(u8, source.keybindings.new_file);
+        errdefer allocator.free(result.keybindings.new_file);
+        result.keybindings.find_file = try allocator.dupe(u8, source.keybindings.find_file);
+        errdefer allocator.free(result.keybindings.find_file);
+        result.keybindings.quit = try allocator.dupe(u8, source.keybindings.quit);
+        return result;
+    }
 
     pub fn deinit(self: *SettingsConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.theme);
@@ -108,103 +207,172 @@ pub const SettingsConfig = struct {
         const path_z = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(path_z);
 
-        const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0) catch |err| {
             if (err == error.FileNotFound) {
-                var config = SettingsConfig{};
-                config.theme = try allocator.dupe(u8, config.theme);
-                config.line_numbers = try allocator.dupe(u8, config.line_numbers);
-                config.colorcolumn = try allocator.dupe(u8, config.colorcolumn);
-                config.split_separator = try allocator.dupe(u8, config.split_separator);
-                config.keybindings.toggle_terminal = try allocator.dupe(u8, config.keybindings.toggle_terminal);
-                config.keybindings.toggle_explorer = try allocator.dupe(u8, config.keybindings.toggle_explorer);
-                config.keybindings.toggle_zen = try allocator.dupe(u8, config.keybindings.toggle_zen);
-                config.keybindings.new_file = try allocator.dupe(u8, config.keybindings.new_file);
-                config.keybindings.find_file = try allocator.dupe(u8, config.keybindings.find_file);
-                config.keybindings.quit = try allocator.dupe(u8, config.keybindings.quit);
-                config.mode = try allocator.dupe(u8, config.mode);
-                return config;
+                return ownedDefaults(allocator);
             }
             return err;
         };
         defer _ = std.posix.system.close(fd);
 
-        var buf: [4096]u8 = undefined;
-        const read_rc = std.posix.system.read(fd, &buf, buf.len);
-        if (std.posix.errno(read_rc) != .SUCCESS) return error.ReadFailed;
-        const len: usize = @intCast(read_rc);
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(allocator);
+        var chunk: [4096]u8 = undefined;
+        while (true) {
+            const read_rc = std.posix.system.read(fd, &chunk, chunk.len);
+            switch (std.posix.errno(read_rc)) {
+                .SUCCESS => {},
+                .INTR => continue,
+                else => return error.ReadFailed,
+            }
+            const len: usize = @intCast(read_rc);
+            if (len == 0) break;
+            if (bytes.items.len + len > max_document_bytes) return error.SettingsDocumentTooLarge;
+            try bytes.appendSlice(allocator, chunk[0..len]);
+        }
 
-        const parsed = try std.json.parseFromSlice(SettingsConfig, allocator, buf[0..len], .{ .ignore_unknown_fields = true });
+        const header = try std.json.parseFromSlice(VersionHeader, allocator, bytes.items, .{ .ignore_unknown_fields = true });
+        defer header.deinit();
+        const source_version = header.value.version orelse 0;
+        if (source_version > current_version) return error.UnsupportedSettingsVersion;
+
+        const parsed = try std.json.parseFromSlice(SettingsConfig, allocator, bytes.items, .{ .ignore_unknown_fields = true });
         defer parsed.deinit();
 
-        var config = parsed.value;
+        var config = try migrateToCurrent(parsed.value, source_version);
         const valid_colorcolumn = config.colorcolumn.len == 0 or
             std.mem.eql(u8, config.colorcolumn, "80") or
             std.mem.eql(u8, config.colorcolumn, "100") or
             std.mem.eql(u8, config.colorcolumn, "120") or
             std.mem.eql(u8, config.colorcolumn, "80,120");
         if (!valid_colorcolumn) config.colorcolumn = "";
-        // Backward compatibility mapping
-        if (config.zen) {
-            config.mode = "zen";
-        } else if (config.ide) {
-            config.mode = "ide";
-        } else if (std.mem.eql(u8, config.mode, "normal")) {
-            config.zen = false;
-            config.ide = false;
-        } else if (std.mem.eql(u8, config.mode, "zen")) {
-            config.zen = true;
-            config.ide = false;
-        } else if (std.mem.eql(u8, config.mode, "ide")) {
-            config.zen = false;
-            config.ide = true;
-        }
-
-        // Ctrl+Z was Vide's original Zen binding, but it masks the standard
-        // undo shortcut. Migrate that legacy default while preserving every
-        // other user-selected Zen binding.
-        if (std.mem.eql(u8, config.keybindings.toggle_zen, "<C-z>")) {
-            config.keybindings.toggle_zen = "<F11>";
-        }
-
-        config.theme = try allocator.dupe(u8, config.theme);
-        config.line_numbers = try allocator.dupe(u8, config.line_numbers);
-        config.colorcolumn = try allocator.dupe(u8, config.colorcolumn);
-        config.split_separator = try allocator.dupe(u8, config.split_separator);
-        config.keybindings.toggle_terminal = try allocator.dupe(u8, config.keybindings.toggle_terminal);
-        config.keybindings.toggle_explorer = try allocator.dupe(u8, config.keybindings.toggle_explorer);
-        config.keybindings.toggle_zen = try allocator.dupe(u8, config.keybindings.toggle_zen);
-        config.keybindings.new_file = try allocator.dupe(u8, config.keybindings.new_file);
-        config.keybindings.find_file = try allocator.dupe(u8, config.keybindings.find_file);
-        config.keybindings.quit = try allocator.dupe(u8, config.keybindings.quit);
-        config.mode = try allocator.dupe(u8, config.mode);
-        return config;
+        return ownStrings(allocator, config);
     }
 
     pub fn save(self: *const SettingsConfig, path: []const u8) !void {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const alloc = arena.allocator();
+        return self.saveWithFailure(path, .none);
+    }
 
-        const path_z = try alloc.dupeSentinel(u8, path, 0);
-        const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-        defer _ = std.posix.system.close(fd);
-
-        var buf: std.ArrayList(u8) = .empty;
-        defer buf.deinit(alloc);
-
-        var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &buf);
-        try std.json.Stringify.value(self.*, .{}, &aw.writer);
-        var out_buf = aw.toArrayList();
-        defer out_buf.deinit(alloc);
+    fn writeAll(fd: std.posix.fd_t, data: []const u8) !void {
         var written: usize = 0;
-        while (written < out_buf.items.len) {
-            const write_rc = std.posix.system.write(fd, out_buf.items.ptr + written, out_buf.items.len - written);
+        while (written < data.len) {
+            const write_rc = std.posix.system.write(fd, data.ptr + written, data.len - written);
             switch (std.posix.errno(write_rc)) {
                 .SUCCESS => written += @intCast(write_rc),
                 .INTR => continue,
                 else => return error.WriteFailed,
             }
         }
+    }
+
+    fn unlinkBestEffort(path_z: [*:0]const u8) void {
+        _ = std.posix.system.unlink(path_z);
+    }
+
+    fn renameAtomic(old_z: [*:0]const u8, new_z: [*:0]const u8) !void {
+        while (true) switch (std.posix.errno(std.posix.system.rename(old_z, new_z))) {
+            .SUCCESS => return,
+            .INTR => continue,
+            else => return error.AtomicReplaceFailed,
+        };
+    }
+
+    fn syncDirectory(allocator: std.mem.Allocator, path: []const u8) !void {
+        const parent = std.fs.path.dirname(path) orelse ".";
+        const parent_z = try allocator.dupeSentinel(u8, parent, 0);
+        defer allocator.free(parent_z);
+        const dir_fd = try std.posix.openatZ(std.posix.AT.FDCWD, parent_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
+        defer _ = std.posix.system.close(dir_fd);
+        switch (std.posix.errno(std.posix.system.fsync(dir_fd))) {
+            .SUCCESS, .INVAL, .OPNOTSUPP, .ROFS => {}, // unsupported by this filesystem
+            else => return error.DirectorySyncFailed,
+        }
+    }
+
+    /// POSIX policy: reject symlink destinations, use same-directory O_EXCL
+    /// temporaries with mode 0600, validate before rename, fsync data and the
+    /// parent directory, and use atomic last-writer-wins replacement. The
+    /// resulting file is deliberately private and owned by the saving user.
+    fn saveWithFailure(self: *const SettingsConfig, path: []const u8, fail_at: SaveFailurePoint) !void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const path_z = try alloc.dupeSentinel(u8, path, 0);
+
+        // Opening with NOFOLLOW rejects a destination symlink. A missing file
+        // is expected; any other error must abort before creating a temporary.
+        const existing_fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        if (existing_fd) |fd| _ = std.posix.system.close(fd);
+
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(alloc);
+
+        var canonical = self.*;
+        canonical.version = current_version;
+        var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &buf);
+        try std.json.Stringify.value(canonical, .{}, &aw.writer);
+        var out_buf = aw.toArrayList();
+        defer out_buf.deinit(alloc);
+        if (out_buf.items.len > max_document_bytes) return error.SettingsDocumentTooLarge;
+        const validation = try std.json.parseFromSlice(SettingsConfig, alloc, out_buf.items, .{ .ignore_unknown_fields = false });
+        validation.deinit();
+
+        const nonce = @atomicRmw(usize, &save_nonce, .Add, 1, .monotonic);
+        const temp_path = try std.fmt.allocPrint(alloc, "{s}.tmp.{d}.{d}", .{ path, std.posix.system.getpid(), nonce });
+        const temp_z = try alloc.dupeSentinel(u8, temp_path, 0);
+        var temp_exists = false;
+        defer {
+            if (temp_exists) unlinkBestEffort(temp_z);
+        }
+
+        const fd = try std.posix.openatZ(std.posix.AT.FDCWD, temp_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true }, 0o600);
+        temp_exists = true;
+        var open = true;
+        defer {
+            if (open) _ = std.posix.system.close(fd);
+        }
+        if (fail_at == .after_create) return error.InjectedSaveFailure;
+        try writeAll(fd, out_buf.items);
+        if (fail_at == .after_write) return error.InjectedSaveFailure;
+        try std.posix.fdatasync(fd);
+        if (fail_at == .after_sync) return error.InjectedSaveFailure;
+        _ = std.posix.system.close(fd);
+        open = false;
+        if (fail_at == .before_replace) return error.InjectedSaveFailure;
+
+        try renameAtomic(temp_z, path_z);
+        temp_exists = false;
+        if (fail_at == .after_replace) return error.InjectedSaveFailure;
+        try syncDirectory(alloc, path);
+
+        // A backup is a separate best-effort transaction after the new primary
+        // is known to parse. Failure here can never invalidate the primary.
+        const backup_path = try std.fmt.allocPrint(alloc, "{s}.bak", .{path});
+        self.writeBackupBestEffort(alloc, backup_path, out_buf.items);
+    }
+
+    fn writeBackupBestEffort(self: *const SettingsConfig, allocator: std.mem.Allocator, path: []const u8, data: []const u8) void {
+        _ = self;
+        const nonce = @atomicRmw(usize, &save_nonce, .Add, 1, .monotonic);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ path, std.posix.system.getpid(), nonce }) catch return;
+        const temp_z = allocator.dupeSentinel(u8, temp_path, 0) catch return;
+        const path_z = allocator.dupeSentinel(u8, path, 0) catch return;
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, temp_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true }, 0o600) catch return;
+        var exists = true;
+        defer {
+            if (exists) unlinkBestEffort(temp_z);
+        }
+        defer _ = std.posix.system.close(fd);
+        writeAll(fd, data) catch return;
+        std.posix.fdatasync(fd) catch return;
+        const parsed = std.json.parseFromSlice(SettingsConfig, allocator, data, .{ .ignore_unknown_fields = false }) catch return;
+        parsed.deinit();
+        renameAtomic(temp_z, path_z) catch return;
+        exists = false;
     }
 };
 
@@ -1829,6 +1997,113 @@ test "legacy Ctrl+Z Zen binding migrates to F11" {
     var loaded = try SettingsConfig.load(std.testing.allocator, path);
     defer loaded.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("<F11>", loaded.keybindings.toggle_zen);
+}
+
+test "settings migrations are deterministic and idempotent" {
+    var legacy = SettingsConfig{ .version = 0, .zen = true, .ide = true, .mode = "normal" };
+    legacy.keybindings.toggle_zen = "<C-z>";
+
+    const first = try SettingsConfig.migrateToCurrent(legacy, 0);
+    const second = try SettingsConfig.migrateToCurrent(first, first.version);
+    const repeated = try SettingsConfig.migrateToCurrent(legacy, 0);
+
+    try std.testing.expectEqual(SettingsConfig.current_version, first.version);
+    try std.testing.expectEqualStrings("zen", first.mode);
+    try std.testing.expect(first.zen);
+    try std.testing.expect(!first.ide);
+    try std.testing.expectEqualStrings("<F11>", first.keybindings.toggle_zen);
+    try std.testing.expectEqualDeep(first, second);
+    try std.testing.expectEqualDeep(first, repeated);
+}
+
+test "legacy ide boolean migrates to canonical mode" {
+    const migrated = try SettingsConfig.migrateToCurrent(.{ .version = 0, .ide = true }, 0);
+    try std.testing.expectEqualStrings("ide", migrated.mode);
+    try std.testing.expect(migrated.ide);
+    try std.testing.expect(!migrated.zen);
+}
+
+test "corrupt and truncated settings preserve source and widget uses defaults" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(data_dir);
+    const path = try std.fs.path.join(std.testing.allocator, &.{ data_dir, "settings.json" });
+    defer std.testing.allocator.free(path);
+
+    for ([_][]const u8{ "not-json", "{\"version\":1,\"theme\":\"broken" }) |invalid| {
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = invalid });
+        try std.testing.expectError(error.SyntaxError, SettingsConfig.load(std.testing.allocator, path));
+
+        var widget = SettingsWidget.init(std.testing.allocator, path, std.testing.io, data_dir);
+        defer widget.deinit();
+        try std.testing.expect(widget.load_failed);
+        try std.testing.expectEqualStrings("kanagawa", widget.config.theme);
+
+        const preserved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(SettingsConfig.max_document_bytes));
+        defer std.testing.allocator.free(preserved);
+        try std.testing.expectEqualStrings(invalid, preserved);
+    }
+}
+
+test "oversized settings are rejected without modification" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+    const oversized = try std.testing.allocator.alloc(u8, SettingsConfig.max_document_bytes + 1);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized, 'x');
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = oversized });
+
+    try std.testing.expectError(error.SettingsDocumentTooLarge, SettingsConfig.load(std.testing.allocator, path));
+    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, path, .{});
+    try std.testing.expectEqual(@as(u64, oversized.len), stat.size);
+}
+
+test "unknown fields load but future schemas are left intact" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+
+    const with_unknown = "{\"version\":1,\"theme\":\"nord\",\"ui_v2_future_field\":{\"kept\":true}}";
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = with_unknown });
+    var loaded = try SettingsConfig.load(std.testing.allocator, path);
+    defer loaded.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("nord", loaded.theme);
+
+    const future = "{\"version\":2,\"ui_v2_future_field\":true}";
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = future });
+    try std.testing.expectError(error.UnsupportedSettingsVersion, SettingsConfig.load(std.testing.allocator, path));
+    const preserved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(SettingsConfig.max_document_bytes));
+    defer std.testing.allocator.free(preserved);
+    try std.testing.expectEqualStrings(future, preserved);
+}
+
+test "atomic save failure leaves old or new valid primary and cleans temporaries" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+
+    var old = SettingsConfig{ .theme = "kanagawa" };
+    try old.save(path);
+    var replacement = SettingsConfig{ .theme = "nord" };
+    const failure_points = [_]SettingsConfig.SaveFailurePoint{ .after_create, .after_write, .after_sync, .before_replace, .after_replace };
+    for (failure_points) |point| {
+        try std.testing.expectError(error.InjectedSaveFailure, replacement.saveWithFailure(path, point));
+        var loaded = try SettingsConfig.load(std.testing.allocator, path);
+        defer loaded.deinit(std.testing.allocator);
+        try std.testing.expect(std.mem.eql(u8, loaded.theme, "kanagawa") or std.mem.eql(u8, loaded.theme, "nord"));
+        old.theme = loaded.theme;
+    }
+
+    var dir = try std.Io.Dir.cwd().openDir(std.testing.io, std.fs.path.dirname(path).?, .{ .iterate = true });
+    defer dir.close(std.testing.io);
+    var iterator = dir.iterate();
+    while (try iterator.next(std.testing.io)) |entry|
+        try std.testing.expect(std.mem.indexOf(u8, entry.name, ".tmp.") == null);
 }
 
 test "software updater uses the official release installer" {
