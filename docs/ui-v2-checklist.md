@@ -13,8 +13,8 @@ Use this checklist alongside `docs/ui-v2-implementation-playbook.md`.
 - [ ] **01B — Prototypes — 👤 UX INPUT**
 - [ ] **01C — Validation and product decision — 👤 UX INPUT**
 - [X] 02 — Make settings versioned, durable, and reversible
-- [ ] 03 — Add performance observability and deterministic fixtures
-- [ ] 03B — Introduce the interactive reactor seam
+- [X] 03 — Add performance observability and deterministic fixtures
+- [X] 03B — Introduce the interactive reactor seam
 
 ## Responsiveness foundation
 
