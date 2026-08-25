@@ -79,13 +79,15 @@ owned payload. Every mutation also carries a monotonic operation ID. Canceling
 queued work removes and deinitializes it. Canceling running refresh/read work
 marks its result stale. The runner does not admit an operation that can enter
 an arbitrarily blocking in-process syscall: every operation kind must either
-use bounded I/O with a declared worst-case cancellation latency of at most 1.5
-seconds, or be `terminable` and perform the potentially blocking work in a
-child process. This rule applies equally to reads and mutations.
+use APIs designed for a cancellation latency of at most 1.5 seconds, or be
+`terminable` and perform the potentially blocking work in a child process. This
+rule applies equally to reads and mutations, but is a design bound rather than
+a promise that the kernel can always interrupt I/O.
 
 Workers register a spawned child's PID/handle in their own active-child slot
 before waiting. For a terminable task, cancellation sends graceful termination,
-waits up to 500 ms, then force-terminates and reaps it. Mutation requests carry
+waits up to 500 ms, then force-terminates it; the worker subsequently waits to
+reap the child before exiting. Mutation requests carry
 their operation ID through the backend boundary. If shutdown begins after a
 mutation was accepted, Vide records its outcome as unknown until its bounded
 call returns or its terminable child is reaped; it never reports such a mutation
@@ -119,27 +121,30 @@ drains the pipe to `EAGAIN`, then rechecks the queue before sleeping. If work
 arrived across that boundary it processes it or rearms the byte, preventing a
 lost wakeup. Bytes carry no payload.
 
-Shutdown closes completion admission before the read descriptor is
-unregistered. The reactor then wakes workers, joins them, drains and
-deinitializes remaining completions, removes the reactor token, and finally
-closes both descriptors. Workers observe closed admission before attempting a
-write and treat `EPIPE`/closed descriptors as shutdown, never as a reason to
-retain a result.
+Shutdown leaves completion admission and both notifier descriptors open while
+workers can publish. After every worker has exited and been joined, the reactor
+closes completion admission, drains and deinitializes all remaining
+completions, drains the pipe, unregisters the reactor token, and finally closes
+both descriptors. Publication is nonblocking and transfers ownership to the
+completion queue before notification; notification failure leaves no result in
+the worker. Because descriptors remain open until after join, `EPIPE` is an
+invariant violation rather than a normal shutdown ownership path.
 
 ## Shutdown and partial initialization
 
-Normal shutdown completes within two seconds under the operation admission
-contract above. Zig 0.16 has no timed thread join, so the deadline is enforced
-by making worker exit bounded before calling `Thread.join`; a join is never used
-as the timeout mechanism:
+Normal shutdown targets two seconds under ordinary OS scheduling and the
+operation-admission contract above. It is not an absolute deadline: an
+uninterruptible kernel operation can delay child reaping or worker exit. Zig
+0.16 has no timed thread join, and the runner neither detaches workers nor frees
+resources they may still access:
 
 1. Stop command admission and mark queued commands canceled.
 2. Broadcast to all command waiters and request cancellation of terminable
    active children.
 3. Keep draining completions while workers exit; workers never wait to publish.
-4. After bounded operations have returned and terminable children have been
-   reaped, join workers. A worker that could still block here is an invariant
-   violation in its operation adapter, not a shutdown-timeout path.
+4. Reap terminable children and join workers. If the two-second target expires,
+   record a shutdown-delay diagnostic and continue waiting; ownership remains
+   intact until all joins complete.
 5. Close completion admission, drain/deinitialize all queue entries, unregister
    the notifier, and release the runner allocation.
 

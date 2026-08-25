@@ -736,6 +736,9 @@ fn runNvimSession(
         const ready = reactor.collect(timeout) catch |err| {
             poll_timer.stop();
             if (err == error.BlockedBySignal) {
+                try phases.enter(.transport_progress);
+                try phases.enter(.normalized_event_dispatch);
+                try phases.enter(.state_update);
                 if (input.sigwinch_received.swap(false, .monotonic)) {
                     var ws: posix.winsize = undefined;
                     const rc = posix.system.ioctl(term.tty_fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
@@ -744,9 +747,6 @@ fn runNvimSession(
                         app.needs_resize = true;
                     }
                 }
-                try phases.enter(.transport_progress);
-                try phases.enter(.normalized_event_dispatch);
-                try phases.enter(.state_update);
                 tracked_cycle = true;
                 continue;
             }
