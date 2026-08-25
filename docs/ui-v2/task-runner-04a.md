@@ -173,11 +173,13 @@ no wakeups.
 
 ## Rollout and rollback
 
-04A changes documentation only. 04B will add the dormant runner and notifier
-without migrating production widgets, so its rollback is a direct code revert
-with no persisted-state migration. 04C is the first runtime consumer and must
-remain separately revertible to synchronous Git refresh. No task-runner state
-is persisted across process restarts.
+04A changes documentation only. Its history starts at `7252773`, with later
+edits in mixed reactor-review commits `098ed75` and `a9c83a2`; rollback therefore
+removes the 04A document and its status entry as a content-level change rather
+than reverting those mixed commits wholesale. 04B will add the dormant runner
+and notifier without migrating production widgets. 04C is the first runtime
+consumer and must remain separately revertible to synchronous Git refresh. No
+task-runner state is persisted across process restarts.
 
 ## Review decisions required before acceptance
 
@@ -186,6 +188,6 @@ is persisted across process restarts.
 - Approve per-worker `std.Io.Threaded` ownership for Zig 0.16.0.
 - Approve the pipe notifier and its close/rearm ordering on Linux and macOS.
 - Approve monotonic identity exhaustion, cancellation semantics, the 500 ms
-  child grace period, and the two-second total shutdown deadline.
+  child grace period, and the non-absolute two-second shutdown target.
 - Approve ownership transfer, exactly-once destruction, test obligations, and
   the 04B/04C rollback boundary.

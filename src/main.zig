@@ -769,7 +769,19 @@ fn runNvimSession(
             }
         }
         try phases.enter(.normalized_event_dispatch);
+        var normalized_input: ?input.Event = null;
+        if (readiness.terminal_input) {
+            var input_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.input_decode);
+            normalized_input = try input.readEvent(term.tty_fd, &seq_buf, alloc);
+            input_timer.stop();
+        }
+        defer if (normalized_input) |event| switch (event) {
+            .paste => |paste| alloc.free(paste),
+            else => {},
+        };
         try phases.enter(.state_update);
+        // From here, every loop continuation must enter composition next.
+        tracked_cycle = true;
 
         if (ready.len > 0) {
             if (readiness.resize_signal) {
@@ -950,17 +962,13 @@ fn runNvimSession(
                 alloc.free(cmd_p);
             }
 
-            if (readiness.terminal_input) {
-                var input_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.input_decode);
-                const event = try input.readEvent(term.tty_fd, &seq_buf, alloc);
-                input_timer.stop();
+            if (normalized_input) |event| {
                 switch (event) {
                     .key => |k| {
                         _ = try events.handleKey(&app, k, layout);
                         if (app.quit_requested) return error.QuitApplication;
                     },
                     .paste => |p| {
-                        defer alloc.free(p);
                         if (app.bug_report.handlePaste(p)) {
                             app.needs_resize = true;
                             continue;
@@ -986,6 +994,5 @@ fn runNvimSession(
                 }
             }
         }
-        tracked_cycle = true;
     }
 }
