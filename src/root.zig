@@ -1,5 +1,6 @@
 test "all core modules compile and register their tests" {
     _ = @import("metrics.zig");
+    _ = @import("reactor.zig");
     _ = @import("nvim/msgpack.zig");
     _ = @import("nvim/process.zig");
     _ = @import("nvim/rpc.zig");

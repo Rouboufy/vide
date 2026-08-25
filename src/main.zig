@@ -31,9 +31,33 @@ const views = @import("tui/views.zig");
 const events = @import("tui/events.zig");
 const Capabilities = @import("tui/capabilities.zig").Capabilities;
 const metrics = @import("metrics.zig");
+const reactor_mod = @import("reactor.zig");
 
 var global_term: ?*Terminal = null;
 var log_path: ?[]const u8 = null;
+
+const ReactorReadiness = struct {
+    terminal_input: bool = false,
+    resize_signal: bool = false,
+    editor_transport: bool = false,
+    terminal_transport: bool = false,
+    editor_write: bool = false,
+    terminal_write: bool = false,
+    task_completion: bool = false,
+
+    fn accept(self: *ReactorReadiness, ready: reactor_mod.Ready) !void {
+        const read_or_closed = ready.readable or ready.hung_up or ready.failed;
+        switch (ready.source) {
+            .terminal_input => self.terminal_input = ready.readable,
+            .resize_signal => self.resize_signal = ready.readable,
+            .nvim_editor_read => self.editor_transport = read_or_closed,
+            .nvim_terminal_read => self.terminal_transport = read_or_closed,
+            .nvim_editor_write => self.editor_write = ready.writable,
+            .nvim_terminal_write => self.terminal_write = ready.writable,
+            .task_completion => self.task_completion = ready.readable,
+        }
+    }
+};
 
 pub const std_options: std.Options = .{ .logFn = log };
 
@@ -607,8 +631,17 @@ fn runNvimSession(
     }
 
     std.log.info("Entering application event loop", .{});
+    var reactor = reactor_mod.Reactor{};
+    _ = try reactor.add(term.tty_fd, .terminal_input, .{ .read = true });
+    _ = try reactor.add(sigwinch_read_fd, .resize_signal, .{ .read = true });
+    _ = try reactor.add(rpc.process.stdout.handle, .nvim_editor_read, .{ .read = true });
+    _ = try reactor.add(rpc_term.process.stdout.handle, .nvim_terminal_read, .{ .read = true });
+    var phases = reactor_mod.PhaseTracker{};
+    defer phases.enter(.shutdown) catch @panic("invalid reactor shutdown transition");
+    var tracked_cycle = false;
     var first_frame = true;
     while (true) {
+        if (tracked_cycle) try phases.enter(.state_update);
         var ts: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         const now = ts.sec;
@@ -657,15 +690,18 @@ fn runNvimSession(
             }
         }
 
-        if (first_frame) std.log.info("Processing initial editor events", .{});
-        const nvim_alive = try nvim_helpers.processNvimEvents(rpc);
-        if (!nvim_alive) {
-            return error.QuitApplication;
+        // Bootstrap transport progress precedes the first tracked cycle. Once
+        // polling starts, transport progress happens only in the reactor phase.
+        if (first_frame) {
+            std.log.info("Processing initial editor events", .{});
+            const nvim_alive = try nvim_helpers.processNvimEvents(rpc);
+            if (!nvim_alive) return error.QuitApplication;
+            std.log.info("Processing initial terminal events", .{});
+            _ = try nvim_helpers.processNvimEvents(rpc_term);
         }
-        if (first_frame) std.log.info("Processing initial terminal events", .{});
-        _ = try nvim_helpers.processNvimEvents(rpc_term);
 
         if (first_frame) std.log.info("Drawing first frame", .{});
+        if (tracked_cycle) try phases.enter(.composition);
         var composition_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.composition);
         views.drawWorkspace(&app, layout);
 
@@ -688,22 +724,17 @@ fn runNvimSession(
         } else @as(u16, @intCast(@max(0, @as(i32, @intCast(layout.editor.y)) + cursor_pos.y)));
         ren.drawCursor(final_cursor_x, final_cursor_y);
         composition_timer.stop();
+        if (tracked_cycle) try phases.enter(.flush);
         try ren.flush();
         if (first_frame) {
             std.log.info("First frame flushed", .{});
             first_frame = false;
         }
 
-        var fds = [4]std.posix.pollfd{
-            .{ .fd = term.tty_fd, .events = std.posix.POLL.IN, .revents = 0 },
-            .{ .fd = rpc.process.stdout.handle, .events = std.posix.POLL.IN, .revents = 0 },
-            .{ .fd = rpc_term.process.stdout.handle, .events = std.posix.POLL.IN, .revents = 0 },
-            .{ .fd = sigwinch_read_fd, .events = std.posix.POLL.IN, .revents = 0 },
-        };
-
         const timeout: i32 = if (input.sigwinch_received.load(.monotonic)) 0 else 1000;
+        try phases.enter(.readiness_collection);
         var poll_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.poll_wakeup);
-        const poll_num = std.posix.poll(&fds, timeout) catch |err| {
+        const ready = reactor.collect(timeout) catch |err| {
             poll_timer.stop();
             if (err == error.BlockedBySignal) {
                 if (input.sigwinch_received.swap(false, .monotonic)) {
@@ -714,33 +745,40 @@ fn runNvimSession(
                         app.needs_resize = true;
                     }
                 }
+                try phases.enter(.transport_progress);
+                try phases.enter(.normalized_event_dispatch);
+                tracked_cycle = true;
                 continue;
             }
             return err;
         };
         poll_timer.stop();
 
-        if (poll_num > 0) {
-            if ((fds[3].revents & std.posix.POLL.IN) != 0) {
+        var readiness = ReactorReadiness{};
+        try ready.dispatch(&readiness, ReactorReadiness.accept);
+        try phases.enter(.transport_progress);
+        if (readiness.editor_transport) {
+            const alive = try nvim_helpers.processNvimEvents(rpc);
+            if (!alive) return error.QuitApplication;
+        }
+        if (readiness.terminal_transport) {
+            const alive_term = try nvim_helpers.processNvimEvents(rpc_term);
+            if (!alive_term) {
+                if (app.quit_requested) return error.QuitApplication;
+                return;
+            }
+        }
+        try phases.enter(.normalized_event_dispatch);
+        tracked_cycle = true;
+
+        if (ready.len > 0) {
+            if (readiness.resize_signal) {
                 var discard: [32]u8 = undefined;
                 _ = std.posix.read(sigwinch_read_fd, &discard) catch 0;
                 if (input.sigwinch_received.swap(false, .monotonic)) {
                     const resized = try term.getSize();
                     try ren.resize(alloc, resized[0], resized[1]);
                     app.needs_resize = true;
-                }
-            }
-            if ((fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
-                const alive = try nvim_helpers.processNvimEvents(rpc);
-                if (!alive) {
-                    return error.QuitApplication;
-                }
-            }
-            if ((fds[2].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
-                const alive_term = try nvim_helpers.processNvimEvents(rpc_term);
-                if (!alive_term) {
-                    if (app.quit_requested) return error.QuitApplication;
-                    return;
                 }
             }
 
@@ -912,7 +950,7 @@ fn runNvimSession(
                 alloc.free(cmd_p);
             }
 
-            if ((fds[0].revents & posix.POLL.IN) != 0) {
+            if (readiness.terminal_input) {
                 var input_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.input_decode);
                 const event = try input.readEvent(term.tty_fd, &seq_buf, alloc);
                 input_timer.stop();
