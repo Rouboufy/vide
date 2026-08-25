@@ -1,8 +1,9 @@
 # UI v2 low-fidelity shell alternatives (Prompt 01B)
 
-Status: proposed for UX review. These are non-interactive cell-level shells,
-not runtime UI changes. They deliberately do not select or rank an alternative.
-Prompt 01C must evaluate all three with the fixed 01A script.
+Status: accepted for the provisional study; UX/accessibility and terminal-layout
+expert reviews passed. These are non-interactive cell-level shells, not runtime
+UI changes. They deliberately do not select or rank an alternative. Prompt 01C remains pending
+and must evaluate all three with the fixed 01A script.
 
 ## Assets and reading rules
 
@@ -75,16 +76,16 @@ the deterministic fixture and task wording remain those in
 | T8, T15 | `settings.open` opens a modal. Dirty close opens nested Save/Discard/Cancel confirmation; Cancel preserves the edit, Discard restores the invoker. |
 | T9 | Emergency shell keeps editor, unclipped resize guidance, `help.open`, `palette.open`, and searchable `app.quit`; closing Help restores editor. |
 | T10 | Resizing suspends or restores regions without discarding Explorer selection or terminal session; invalid hidden focus falls back to editor. |
-| T11 | `mode.zen` hides shell surfaces, retains selection, and focuses editor; leaving Zen restores Explorer focus and selection. |
+| T11 | From the shared `focus-auxiliary` Explorer fixture, `mode.zen` hides shell surfaces, retains selection, and focuses editor; leaving Zen restores Explorer/Auxiliary focus and the same row selection for A/B/C. |
 | T12 | Help is non-modal. Supplied nested confirmation is modal; each authorized Escape dismisses one level. A non-dismissible state says `Choose an action`; input never leaks behind it. |
-| T13 | Disabled commit exposes `Missing author identity` through `? why`; resolving fixture identity enables and retries the same command ID. |
+| T13 | Start at `default`; only after the participant discovers disabled Commit through `disabled [? why]` or a valid palette route does the facilitator show `disabled-reason`. Resolving fixture identity enables and retries the same command ID. |
 | T14 | Every grid exposes focus, selection, error, unread, loading, and disabled states through the textual markers defined above. Emergency legitimately suspends auxiliary states; Help names retained hidden states. |
 | T16 | Search/File or palette `search.files` opens fixed results; result activation opens `events.zig`; tab return restores editor. |
 | T17 | Search/Text or palette `search.text` opens fixed `FocusTarget` results; query/results remain after opening and return. |
 | T18 | Supplied editor-owned Telescope overlay receives movement and Escape unchanged; shell does not consume them and Neovim restores editor focus. |
 | T19 | Palette registered split actions dispatch Neovim split commands; Neovim owns grids and selected editor focus. |
 | T20 | `focus.next_region`/reverse traverse editor, visible navigation (if present), active auxiliary, and terminal in that order, skipping hidden/disabled targets. |
-| T21, T22 | Explorer Actions/context menu requests deletion; identical modal warning and safe Cancel default are used for keyboard and pointer routes; cancel restores Explorer. |
+| T21, T22 | Both start at the shared `focus-auxiliary` Explorer fixture. Explorer Actions/context menu requests deletion; identical modal warning and safe Cancel default are used for keyboard and pointer routes; cancel restores Explorer/Auxiliary focus, row selection, and tree. |
 
 The deck state names are `default`, `action-menu`, `problems`, `terminal`,
 `git`, `settings-dirty`, `nested-confirmation`, `help`, `command-palette`, `zen`,
