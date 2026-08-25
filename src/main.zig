@@ -641,7 +641,6 @@ fn runNvimSession(
     var tracked_cycle = false;
     var first_frame = true;
     while (true) {
-        if (tracked_cycle) try phases.enter(.state_update);
         var ts: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         const now = ts.sec;
@@ -747,6 +746,7 @@ fn runNvimSession(
                 }
                 try phases.enter(.transport_progress);
                 try phases.enter(.normalized_event_dispatch);
+                try phases.enter(.state_update);
                 tracked_cycle = true;
                 continue;
             }
@@ -769,7 +769,7 @@ fn runNvimSession(
             }
         }
         try phases.enter(.normalized_event_dispatch);
-        tracked_cycle = true;
+        try phases.enter(.state_update);
 
         if (ready.len > 0) {
             if (readiness.resize_signal) {
@@ -986,5 +986,6 @@ fn runNvimSession(
                 }
             }
         }
+        tracked_cycle = true;
     }
 }

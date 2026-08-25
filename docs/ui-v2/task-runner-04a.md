@@ -77,16 +77,20 @@ later completion stale.
 Every task carries operation kind, owner ID, generation, and an independently
 owned payload. Every mutation also carries a monotonic operation ID. Canceling
 queued work removes and deinitializes it. Canceling running refresh/read work
-marks it stale; it does not promise to interrupt an arbitrary blocking syscall.
-Only operation kinds explicitly declared `terminable` may own a child process
-that shutdown or cancellation terminates.
+marks its result stale. The runner does not admit an operation that can enter
+an arbitrarily blocking in-process syscall: every operation kind must either
+use bounded I/O with a declared worst-case cancellation latency of at most 1.5
+seconds, or be `terminable` and perform the potentially blocking work in a
+child process. This rule applies equally to reads and mutations.
 
 Workers register a spawned child's PID/handle in their own active-child slot
 before waiting. For a terminable task, cancellation sends graceful termination,
-waits up to 500 ms, then force-terminates and reaps it. Non-terminable mutations
-are allowed to reach the global shutdown deadline and then produce a recorded
-shutdown-timeout error; Vide never reports them as canceled when their external
-outcome is unknown.
+waits up to 500 ms, then force-terminates and reaps it. Mutation requests carry
+their operation ID through the backend boundary. If shutdown begins after a
+mutation was accepted, Vide records its outcome as unknown until its bounded
+call returns or its terminable child is reaped; it never reports such a mutation
+as canceled. A later reconciliation read uses the operation ID to resolve an
+unknown outcome without blindly repeating the mutation.
 
 ## Payload, result, and allocator ownership
 
@@ -124,14 +128,18 @@ retain a result.
 
 ## Shutdown and partial initialization
 
-Normal shutdown has a two-second overall deadline:
+Normal shutdown completes within two seconds under the operation admission
+contract above. Zig 0.16 has no timed thread join, so the deadline is enforced
+by making worker exit bounded before calling `Thread.join`; a join is never used
+as the timeout mechanism:
 
 1. Stop command admission and mark queued commands canceled.
 2. Broadcast to all command waiters and request cancellation of terminable
    active children.
 3. Keep draining completions while workers exit; workers never wait to publish.
-4. Join workers within the remaining deadline, escalating only terminable
-   children as described above.
+4. After bounded operations have returned and terminable children have been
+   reaped, join workers. A worker that could still block here is an invariant
+   violation in its operation adapter, not a shutdown-timeout path.
 5. Close completion admission, drain/deinitialize all queue entries, unregister
    the notifier, and release the runner allocation.
 
@@ -139,6 +147,9 @@ Initialization records each completed stage. Failure unwinds only initialized
 workers, synchronization primitives, descriptors, queues, and backend values in
 reverse order. A partially spawned pool follows the same wake/join procedure.
 No runner resource may outlive the reactor that owns it.
+04B tests each operation adapter's declared cancellation bound with fake clocks
+and blocking points; later prompts may not add an adapter without the same
+evidence.
 
 ## Deterministic 04B verification contract
 
