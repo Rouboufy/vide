@@ -50,7 +50,12 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
     const app = rpc_ctx.app;
 
     if (std.mem.eql(u8, method, "redraw") and params == .array) {
-        try ui_state.handleRedraw(params.array);
+        const damage = try ui_state.handleRedraw(params.array);
+        if (damage.grid or damage.lifecycle or damage.composition_uncertain) {
+            // Mapping happens after handleRedraw has applied the whole batch.
+            app.invalidations.damage(if (ui_state == app.ui_state) .editor else .drawer);
+        }
+        if (damage.cursor) app.invalidations.cursor = true;
     } else if (std.mem.eql(u8, method, "vide_buffers") and ui_state == app.ui_state and params == .array and params.array.len >= 2 and params.array[0] == .array) {
         for (app.tabs.items) |tab| {
             app.allocator.free(tab.name);
@@ -88,7 +93,7 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             if (bufnr == active_bufnr) app.active_tab = app.tabs.items.len - 1;
         }
         if (app.tabs.items.len == 0) app.active_tab = 0;
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_telescope_rect")) {
         if (params == .array and params.array.len >= 2) {
             for (params.array[0..2], 0..) |p, i| {
@@ -136,7 +141,7 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
         params.array[0] == .string and params.array[1] == .string)
     {
         app.ai_panel.updateSession(params.array[0].string, params.array[1].string);
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_settings_changed")) {
         var old_cfg = app.settings_widget.config;
         if (settings.SettingsConfig.load(app.settings_widget.allocator, app.settings_widget.settings_path)) |new_cfg| {
@@ -162,11 +167,11 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             app.notify(.failure, "Settings reload failed; keeping the current settings.", .{});
             std.log.err("Settings reload failed: {}", .{err});
         }
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_win_count") and params == .array and params.array.len > 0) {
         if (params.array[0] == .integer) {
             app.editor_win_count = @as(usize, @intCast(@max(1, params.array[0].integer)));
-            app.needs_resize = true;
+            app.invalidations.damageAll();
         }
     } else if (std.mem.eql(u8, method, "vide_win_positions") and params == .array and params.array.len > 0) {
         const wins = if (ui_state == app.ui_state) &app.editor_wins else &app.terminal_wins;
@@ -212,24 +217,24 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             app.terminal_win_count = app.terminal_wins.items.len;
         }
 
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_boundary_hit") and params == .array and params.array.len > 0) {
         if (params.array[0] == .string) {
             const dir = params.array[0].string;
             if (std.mem.eql(u8, dir, "j")) {
                 if (app.show_terminal_panel and app.panel_position == .bottom) {
                     app.terminal_focus = true;
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 }
             } else if (std.mem.eql(u8, dir, "l")) {
                 if (app.show_terminal_panel and app.panel_position == .right) {
                     app.terminal_focus = true;
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 }
             } else if (std.mem.eql(u8, dir, "h")) {
                 if (app.show_file_tree) {
                     app.sidebar_focus = true;
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 }
             }
         }

@@ -157,7 +157,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             defer a.allocator.free(cmd_p);
             cmd_p[0] = .{ .string = "vnew | terminal | startinsert" };
             _ = try a.rpc_term.requestAsyncWithHandler("nvim_command", cmd_p, a, terminalAdded);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return true;
         }
         if (std.mem.eql(u8, k.raw, "\x1bs")) { // Alt+s -> Horizontal Split
@@ -165,7 +165,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             defer a.allocator.free(cmd_p);
             cmd_p[0] = .{ .string = "new | terminal | startinsert" };
             _ = try a.rpc_term.requestAsyncWithHandler("nvim_command", cmd_p, a, terminalAdded);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return true;
         }
         if (std.mem.eql(u8, k.raw, "\x1bc")) { // Alt+c -> Close Split
@@ -179,7 +179,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.terminal_focus = false;
                 a.terminal_win_count = 1;
                 a.updateLayoutTree();
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             return true;
         }
@@ -197,14 +197,14 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1bk")) { // Alt+k -> Focus Up (to Editor)
             if (a.panel_position == .bottom) {
                 a.terminal_focus = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             }
         }
         if (std.mem.eql(u8, k.raw, "\x1bh")) { // Alt+h -> Focus Left (to Editor if on right)
             if (a.panel_position == .right) {
                 a.terminal_focus = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             } else {
                 var cmd_p = try a.allocator.alloc(Value, 1);
@@ -314,7 +314,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     if (layout.total.h > 4 and a.terminal_panel_height < layout.total.h - 4) {
                         a.terminal_panel_height +|= 1;
                         a.updateLayoutTree();
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                     }
                 }
             }
@@ -326,7 +326,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     if (a.terminal_panel_height > 2) {
                         a.terminal_panel_height -= 1;
                         a.updateLayoutTree();
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                     }
                 }
             }
@@ -337,12 +337,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 if (layout.total.w > 10 and a.terminal_panel_width > 10) {
                     a.terminal_panel_width -= 1;
                     a.updateLayoutTree();
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             } else if (a.show_file_tree) {
                 if (layout.total.w > layout.activity_bar.w + 10 and a.file_tree_width < layout.total.w - layout.activity_bar.w - 10) {
                     a.file_tree_width += 1;
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             }
             break :get_key "";
@@ -352,12 +352,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 if (layout.total.w > 10 and a.terminal_panel_width < layout.total.w - 10) {
                     a.terminal_panel_width += 1;
                     a.updateLayoutTree();
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             } else if (a.show_file_tree) {
                 if (a.file_tree_width > 5) {
                     a.file_tree_width -= 1;
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             }
             break :get_key "";
@@ -365,7 +365,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1bp")) { // Alt+P
             a.panel_position = if (a.panel_position == .bottom) .right else .bottom;
             a.updateLayoutTree();
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             break :get_key "";
         }
         break :get_key k.raw;
@@ -374,31 +374,31 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     if (nk.len > 0) {
         if (!a.bug_report.is_open and std.mem.eql(u8, nk, "<F12>")) {
             a.bug_report.open();
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return true;
         }
         if (a.bug_report.is_open) {
             _ = a.bug_report.handleKey(nk);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return true;
         }
         switch (a.editor_context_menu.handleKey(nk)) {
             .action => |action| {
                 executeEditorAction(a, action);
                 a.term.setHoverMouse(false);
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             },
             .handled => {
                 if (!a.editor_context_menu.is_open) a.term.setHoverMouse(false);
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             },
             .ignored => {},
         }
         if (a.settings_widget.is_open) {
             if (a.settings_widget.handleKey(nk)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 startRequestedSoftwareUpdate(a);
                 if (a.settings_widget.open_mason) {
                     a.settings_widget.open_mason = false;
@@ -413,38 +413,38 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 }
             } else if (std.mem.eql(u8, nk, "<Esc>")) {
                 a.settings_widget.is_open = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             if (a.settings_widget.edit_config_path) |path| {
                 @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
                 a.settings_widget.allocator.free(path);
                 a.settings_widget.edit_config_path = null;
                 a.sidebar_focus = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             return true;
         }
         if (a.mason_widget.is_open) {
             if (a.mason_widget.handleKey(nk, a.rpc)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             return true;
         }
         if (a.lazy_widget.is_open) {
             if (a.lazy_widget.handleKey(nk, a.rpc)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             return true;
         }
         if (a.git_detailed_widget.is_open) {
             if (a.git_detailed_widget.handleKey(nk)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             return true;
         }
         if (a.extension_shop.is_popup_open) {
             if (try a.extension_shop.handlePopupKey(nk, a.ren.height)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
             return true;
         }
@@ -518,7 +518,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
             }
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return true;
         }
     } else if (toggle_explorer) {
@@ -529,7 +529,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         } else {
             a.sidebar_focus = false;
         }
-        a.needs_resize = true;
+        a.invalidations.damageAll();
         return true;
     } else if (toggle_terminal_panel) {
         a.show_terminal_panel = !a.show_terminal_panel;
@@ -547,7 +547,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             a.terminal_focus = false;
         }
         a.updateLayoutTree();
-        a.needs_resize = true;
+        a.invalidations.damageAll();
         return true;
     } else if (new_file) {
         const cmd_p = [1]Value{.{ .string = "_G.vide_close_floating_windows(); vim.cmd('enew')" }};
@@ -579,7 +579,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 if (a.activity_bar.active_idx == 4) {
                     a.extension_shop.triggerSearch() catch {};
                 }
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             }
             if (std.mem.eql(u8, nk, "<S-Tab>")) {
@@ -587,7 +587,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 if (a.activity_bar.active_idx == 4) {
                     a.extension_shop.triggerSearch() catch {};
                 }
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             }
             if (std.mem.eql(u8, nk, "<C-s>")) {
@@ -599,12 +599,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.settings_widget.refreshThemes(a.rpc);
                 a.settings_widget.refreshPlugins();
                 a.settings_widget.is_open = true;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             }
             if (std.mem.eql(u8, nk, "<Esc>") or std.mem.eql(u8, nk, "<M-l>")) {
                 a.sidebar_focus = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return true;
             }
             if (a.show_file_tree and a.activity_bar.active_idx == 0) {
@@ -617,7 +617,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     if ((std.mem.eql(u8, nk, "<Enter>") or std.mem.eql(u8, nk, "o")) and !was_dir) {
                         a.sidebar_focus = false;
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             } else if (a.show_file_tree and a.activity_bar.active_idx == 1) {
@@ -629,10 +629,10 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                         a.rpc.notify("nvim_command", cmd_p) catch {};
                         a.sidebar_focus = false;
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 } else if (std.mem.eql(u8, nk, "j") or std.mem.eql(u8, nk, "k") or std.mem.eql(u8, nk, "<Down>") or std.mem.eql(u8, nk, "<Up>")) {
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             } else if (a.show_file_tree and a.activity_bar.active_idx == 2) {
@@ -642,7 +642,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     break :blk false;
                 };
                 if (handled) {
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             } else if (a.show_file_tree and a.activity_bar.active_idx == 3) {
@@ -654,22 +654,22 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                         a.rpc.notify("nvim_command", cmd_p) catch {};
                         if (aiCommandMovesFocus(cmd)) a.sidebar_focus = false;
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 } else if (std.mem.eql(u8, nk, "j") or std.mem.eql(u8, nk, "k") or std.mem.eql(u8, nk, "<Down>") or std.mem.eql(u8, nk, "<Up>")) {
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             } else if (a.show_file_tree and a.activity_bar.active_idx == 4) {
                 if (try a.extension_shop.handleKey(nk)) {
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             }
         } else {
             if (a.show_file_tree and a.activity_bar.active_idx == 0 and a.explorer.action_state != .none) {
                 if (a.explorer.handleKey(nk, a.rpc) catch false) {
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             }
@@ -680,7 +680,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     break :blk false;
                 };
                 if (handled) {
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return true;
                 }
             }
@@ -702,7 +702,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     if (a.bug_report.is_open) {
         if (m.action == .press or m.button == .wheel_up or m.button == .wheel_down) {
             _ = a.bug_report.handleMouse(m, a.ren.width, a.ren.height);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         }
         return;
     }
@@ -718,12 +718,12 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 a.editor_context_menu.close();
                 a.term.setHoverMouse(false);
             }
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
         if (a.editor_context_menu.handleMouse(m)) |action| executeEditorAction(a, action);
         if (!a.editor_context_menu.is_open) a.term.setHoverMouse(false);
-        a.needs_resize = true;
+        a.invalidations.damageAll();
         return;
     }
 
@@ -733,7 +733,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         const report_x = layout.status_bar.x + layout.status_bar.w -| help_w -| report_w;
         if (m.col >= report_x and m.col < report_x + report_w) {
             a.bug_report.open();
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
     }
@@ -752,11 +752,11 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 const action = ideMenuAction(menu, row) orelse return;
                 executeEditorAction(a, action);
                 a.ide_menu = null;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 return;
             }
             a.ide_menu = null;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         }
     }
 
@@ -764,7 +764,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         const relative_x = m.col -| layout.status_bar.x;
         if (ideMenuAt(relative_x)) |menu| {
             a.ide_menu = menu;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
     }
@@ -835,7 +835,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             }
         }
         a.show_split_menu = false;
-        a.needs_resize = true;
+        a.invalidations.damageAll();
         return;
     }
     // Handle Telescope close click
@@ -853,7 +853,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.rpc.notify("nvim_command", cmd_p) catch {};
                     a.ui_state.telescope_rects[0] = null;
                     a.ui_state.telescope_rects[1] = null;
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                     return;
                 }
             }
@@ -890,59 +890,59 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             a.split_menu_dir = .right;
             a.split_menu_x = right_edge - 26;
             a.split_menu_y = layout.tab_bar.y + 1;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         } else if (m.col >= right_edge - 6 and m.col <= right_edge - 2) { // Split Horizontally
             a.show_split_menu = true;
             a.split_menu_dir = .bottom;
             a.split_menu_x = right_edge - 26;
             a.split_menu_y = layout.tab_bar.y + 1;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
     }
 
     if (a.explorer.show_menu and m.action == .press) {
         if (try a.explorer.handleMenuClick(m.col, m.row)) {
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
         a.explorer.show_menu = false;
-        a.needs_resize = true;
+        a.invalidations.damageAll();
     }
 
     if (a.mason_widget.is_open) {
         if (a.mason_widget.handleMouse(m, a.ren.width, a.ren.height, a.rpc)) {
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         } else if (m.action == .press) {
             a.mason_widget.is_open = false;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
     }
     if (a.lazy_widget.is_open) {
         if (a.lazy_widget.handleMouse(m, a.ren.width, a.ren.height)) {
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         } else if (m.action == .press) {
             a.lazy_widget.is_open = false;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         }
     }
     if (a.git_detailed_widget.is_open) {
         if (a.git_detailed_widget.handleMouse(m, a.ren.width, a.ren.height)) {
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         } else if (m.action == .press) {
             a.git_detailed_widget.is_open = false;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         }
     }
     if (a.extension_shop.is_popup_open) {
         if (m.action == .press or m.button == .wheel_up or m.button == .wheel_down) {
             if (try a.extension_shop.handlePopupMouse(m, a.ren.width, a.ren.height)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 if (a.extension_shop.edit_config_path) |path| {
                     @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
                     a.extension_shop.allocator.free(path);
@@ -953,7 +953,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 }
             } else if (m.action == .press) {
                 a.extension_shop.is_popup_open = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
         }
         return;
@@ -962,7 +962,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     if (a.settings_widget.is_open) {
         if (m.action == .press) {
             if (a.settings_widget.handleMouse(m, a.ren.width, a.ren.height)) {
-                a.needs_resize = true;
+                a.invalidations.damageAll();
                 startRequestedSoftwareUpdate(a);
                 if (a.settings_widget.save_failed) {
                     a.settings_widget.save_failed = false;
@@ -985,11 +985,11 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.settings_widget.allocator.free(path);
                     a.settings_widget.edit_config_path = null;
                     a.sidebar_focus = false;
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             } else {
                 a.settings_widget.is_open = false;
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             }
         }
         return;
@@ -1010,7 +1010,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         a.settings_widget.hover_dropdown_idx = 2;
         a.settings_widget.dropdown_scroll_offset = 0;
         a.settings_widget.is_open = true;
-        a.needs_resize = true;
+        a.invalidations.damageAll();
         return;
     }
 
@@ -1018,23 +1018,23 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         if (m.action == .press) {
             if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 0 and m.button == .wheel_up) {
                 a.explorer.handleScroll(-1);
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 0 and m.button == .wheel_down) {
                 a.explorer.handleScroll(1);
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 2 and m.button == .wheel_up) {
                 a.git_panel.handleScroll(-1);
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 2 and m.button == .wheel_down) {
                 a.git_panel.handleScroll(1);
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 4 and m.button == .wheel_up) {
                 if (a.extension_shop.selected_idx > 0) {
                     a.extension_shop.selected_idx -= 1;
                     if (a.extension_shop.selected_idx < a.extension_shop.scroll_offset) {
                         a.extension_shop.scroll_offset = a.extension_shop.selected_idx;
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and a.activity_bar.active_idx == 4 and m.button == .wheel_down) {
                 if (a.extension_shop.plugins.items.len > 0 and a.extension_shop.selected_idx + 1 < a.extension_shop.plugins.items.len) {
@@ -1042,7 +1042,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     if (a.extension_shop.selected_idx >= a.extension_shop.scroll_offset + 5) {
                         a.extension_shop.scroll_offset = a.extension_shop.selected_idx - 4;
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             } else if (a.show_file_tree and m.col >= layout.file_tree.x + layout.file_tree.w - 2 and m.col <= layout.file_tree.x + layout.file_tree.w) {
                 a.is_resizing_sidebar = true;
@@ -1083,7 +1083,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         }
                         a.explorer.menu_y = my;
 
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                     } else if (m.button == .left) {
                         const selected_path = a.explorer.handleMouse(m.col, m.row, layout.file_tree) catch |err| blk: {
                             a.notify(.failure, "Explorer action failed: {}", .{err});
@@ -1096,7 +1096,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             a.sidebar_focus = false;
                         }
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 } else if (a.activity_bar.active_idx == 1) {
                     if (a.search_panel.handleMouse(m.col, m.row, layout.file_tree)) |cmd| {
                         if (std.mem.startsWith(u8, cmd, "__CMD__:Telescope")) {
@@ -1108,7 +1108,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             a.sidebar_focus = false;
                         }
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 } else if (a.activity_bar.active_idx == 2) {
                     const git_path = a.git_panel.handleMouse(m.col, m.row, layout.file_tree) catch |err| blk: {
                         a.notify(.failure, "Git action failed: {}", .{err});
@@ -1119,7 +1119,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         if (std.mem.startsWith(u8, path, "__CMD__:GitWidget")) {
                             a.git_detailed_widget.is_open = true;
                             a.git_detailed_widget.refresh();
-                            a.needs_resize = true;
+                            a.invalidations.damageAll();
                         } else {
                             nvim_helpers.openFile(a.rpc, a.allocator, path) catch |err| {
                                 a.notify(.failure, "Unable to open file: {}", .{err});
@@ -1127,7 +1127,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             a.sidebar_focus = false;
                         }
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 } else if (a.activity_bar.active_idx == 3) {
                     if (a.ai_panel.handleMouse(m, layout.file_tree)) |cmd| {
                         if (std.mem.startsWith(u8, cmd, "__CMD__:lua ")) {
@@ -1139,10 +1139,10 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             if (aiCommandMovesFocus(actual_cmd)) a.sidebar_focus = false;
                         }
                     }
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 } else if (a.activity_bar.active_idx == 4) {
                     if (try a.extension_shop.handleMouse(m.col, m.row, layout.file_tree)) {
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                     }
                 }
             } else if (layout.panel != null and m.row == layout.panel.?.y) {
@@ -1165,7 +1165,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 } else {
                     a.is_resizing_panel = true;
                 }
-                a.needs_resize = true;
+                a.invalidations.damageAll();
             } else if (layout.panel != null and a.panel_position == .bottom and layout.panel.?.y > 0 and (m.row == layout.panel.?.y - 1 or m.row == layout.panel.?.y + 1)) {
                 a.is_resizing_panel = true;
             } else if (layout.panel != null and a.panel_position == .right and layout.panel.?.x > 0 and (m.col == layout.panel.?.x - 1 or m.col == layout.panel.?.x)) {
@@ -1179,7 +1179,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     if (new_idx == 4 and prev_idx != 4) {
                         a.extension_shop.triggerSearch() catch {};
                     }
-                    if (prev_idx != new_idx) a.needs_resize = true;
+                    if (prev_idx != new_idx) a.invalidations.damageAll();
                     if (new_idx == 99) {
                         var old_cfg = a.settings_widget.config;
                         if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
@@ -1189,14 +1189,14 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         a.settings_widget.refreshThemes(a.rpc);
                         a.settings_widget.refreshPlugins();
                         a.settings_widget.is_open = true;
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                         a.activity_bar.active_idx = prev_idx; // Revert active idx visually
                     } else if (a.show_file_tree and prev_idx == new_idx) {
                         a.show_file_tree = false;
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                     } else if (!a.show_file_tree) {
                         a.show_file_tree = true;
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                     }
                 }
 
@@ -1220,7 +1220,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         };
                         a.settings_widget.dropdown_scroll_offset = 0;
                         a.settings_widget.is_open = true;
-                        a.needs_resize = true;
+                        a.invalidations.damageAll();
                         return;
                     }
                     const help_btn_len: u16 = if (a.settings_widget.config.nerd_fonts) 8 else 10;
@@ -1314,7 +1314,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         new_w = max_w;
                     }
                     a.file_tree_width = new_w;
-                    a.needs_resize = true;
+                    a.invalidations.damageAll();
                 }
             } else if (a.is_resizing_panel) {
                 if (a.panel_position == .bottom) {
@@ -1323,7 +1323,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         if (new_h >= 2 and new_h < layout.total.h - 2) {
                             a.terminal_panel_height = new_h;
                             a.updateLayoutTree();
-                            a.needs_resize = true;
+                            a.invalidations.damageAll();
                         }
                     }
                 } else {
@@ -1332,7 +1332,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         if (new_w >= 10 and new_w < layout.total.w - 10) {
                             a.terminal_panel_width = new_w;
                             a.updateLayoutTree();
-                            a.needs_resize = true;
+                            a.invalidations.damageAll();
                         }
                     }
                 }
@@ -1343,7 +1343,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         if (m.action == .release) {
             a.is_resizing_sidebar = false;
             a.is_resizing_panel = false;
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         }
         if (was_resizing) return;
     }
@@ -1361,11 +1361,11 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         } else if (a.active_terminal_panel_idx == 1) {
             if (m.action == .press and m.button == .wheel_up) a.debug_console.handleScroll(-1);
             if (m.action == .press and m.button == .wheel_down) a.debug_console.handleScroll(1);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         } else if (a.active_terminal_panel_idx == 2) {
             if (m.action == .press and m.button == .wheel_up) a.output_panel.handleScroll(-1);
             if (m.action == .press and m.button == .wheel_down) a.output_panel.handleScroll(1);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
         }
     } else if (m.col >= layout.editor.x and m.col < layout.editor.x + layout.editor.w and
         m.row >= layout.editor.y and m.row < layout.editor.y + layout.editor.h)
@@ -1376,7 +1376,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             a.show_split_menu = false;
             a.editor_context_menu.open(m.col, m.row, a.ren.width, a.ren.height);
             a.term.setHoverMouse(true);
-            a.needs_resize = true;
+            a.invalidations.damageAll();
             return;
         }
         nvim_helpers.sendMouseEvent(a.rpc, a.allocator, m, m.col - layout.editor.x, m.row - layout.editor.y);

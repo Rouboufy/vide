@@ -70,6 +70,7 @@ pub const Renderer = struct {
     height: u16,
     writer: *std.Io.Writer,
     true_color: bool = true,
+    force_full_redraw: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, width: u16, height: u16, writer: *std.Io.Writer) !Renderer {
         const size = @as(usize, width) * @as(usize, height);
@@ -114,6 +115,10 @@ pub const Renderer = struct {
             cell.fg = .{ .rgb = .{ .r = 30, .g = 30, .b = 30 } };
             cell.bg = .{ .rgb = .{ .r = 220, .g = 220, .b = 220 } };
         }
+    }
+
+    pub fn forceFullRedraw(self: *Renderer) void {
+        self.force_full_redraw = true;
     }
 
     pub fn drawRect(self: *Renderer, rect: @import("layout.zig").Rect, char: []const u8, fg: Color, bg: Color) void {
@@ -227,7 +232,7 @@ pub const Renderer = struct {
                 const cell = self.buf[idx];
                 const prev_cell = self.prev[idx];
 
-                if (std.meta.eql(cell, prev_cell)) {
+                if (!self.force_full_redraw and std.meta.eql(cell, prev_cell)) {
                     in_region = false;
                     continue;
                 }
@@ -296,6 +301,7 @@ pub const Renderer = struct {
         // Reset attributes on finish
         try self.writer.writeAll("\x1b[0m");
         @memcpy(self.prev, self.buf);
+        self.force_full_redraw = false;
         if (metrics.global.enabled) {
             metrics.global.dirty_cells +|= dirty_count;
             metrics.global.dirty_regions +|= dirty_regions;
@@ -328,6 +334,26 @@ test "renderer emits indexed fallback when true color is unavailable" {
     try renderer.flush();
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[38;5;196m") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[38;2;") == null);
+}
+
+test "forced full redraw re-emits unchanged cells" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 1, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    var cell = Cell{};
+    cell.setChar("X");
+    renderer.setCell(0, 0, cell);
+
+    try renderer.flush();
+    const after_first = output.written().len;
+    try renderer.flush();
+    const unchanged_bytes = output.written().len - after_first;
+    renderer.forceFullRedraw();
+    try renderer.flush();
+    const forced_bytes = output.written().len - after_first - unchanged_bytes;
+
+    try std.testing.expect(forced_bytes > unchanged_bytes);
 }
 
 test "terminal cell width covers variation selectors nerd font symbols and double-width continuation cases" {

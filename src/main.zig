@@ -4,6 +4,7 @@ const posix = std.posix;
 const Terminal = @import("tui/terminal.zig").Terminal;
 const Renderer = @import("tui/renderer.zig").Renderer;
 const Layout = @import("tui/layout.zig").Layout;
+const invalidation = @import("tui/invalidation.zig");
 const input = @import("tui/input.zig");
 const ActivityBar = @import("tui/widgets/activity_bar.zig").ActivityBar;
 const Explorer = @import("tui/widgets/explorer.zig").Explorer;
@@ -388,12 +389,7 @@ fn innerMain(init: std.process.Init) !void {
             if (err == error.EndOfStream) continue :app_loop;
             if (err == error.QuitApplication) break :app_loop;
             if (err == error.ReloadApplication) {
-                for (renderer.prev) |*cell| {
-                    cell.char[0] = ' ';
-                    cell.len = 1;
-                    cell.fg = .none;
-                    cell.bg = .none;
-                }
+                renderer.forceFullRedraw();
                 is_resuming = true;
                 continue :app_loop;
             }
@@ -422,12 +418,7 @@ fn innerMain(init: std.process.Init) !void {
 
                 term = try Terminal.init(capabilities);
                 renderer.writer = term.writer();
-                for (renderer.prev) |*cell| {
-                    cell.char[0] = ' ';
-                    cell.len = 1;
-                    cell.fg = .none;
-                    cell.bg = .none;
-                }
+                renderer.forceFullRedraw();
                 is_resuming = true;
                 continue :app_loop;
             }
@@ -728,6 +719,9 @@ fn runNvimSession(
     defer phases.enter(.shutdown) catch @panic("invalid reactor shutdown transition");
     var tracked_cycle = false;
     var first_frame = true;
+    var last_layout: ?Layout = null;
+    var last_editor_dimensions: ?invalidation.Dimensions = null;
+    var last_terminal_dimensions: ?invalidation.Dimensions = null;
     while (true) {
         var ts: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
@@ -738,7 +732,7 @@ fn runNvimSession(
             if (app.activity_bar.active_idx == 2) {
                 if (git_snapshot.compatibility.periodic_synchronous_refresh) {
                     app.git_panel.refresh() catch |err| std.log.warn("Git panel refresh failed: {}", .{err});
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 } else submitGitRefresh(alloc, background.?, &git_owners, git_owner.?, true) catch |err| switch (err) {
                     error.RunnerBusy => {},
                     else => std.log.warn("Git refresh admission failed: {}", .{err}),
@@ -754,31 +748,66 @@ fn runNvimSession(
             }
         }
 
-        if (bug_report.poll()) app.needs_resize = true;
+        if (bug_report.poll()) app.invalidations.damageAll();
 
         const cols = ren.width;
         const rows = ren.height;
         var layout_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.layout);
         const layout = Layout.compute(cols, rows, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
         layout_timer.stop();
+        if (last_layout == null or !std.meta.eql(last_layout.?, layout)) {
+            app.invalidations.invalidateLayout();
+            last_layout = layout;
+        }
 
-        if (app.needs_resize) {
-            app.needs_resize = false;
+        const editor_dimensions = invalidation.Dimensions{
+            .cols = @max(1, layout.editor.w),
+            .rows = @max(1, layout.editor.h),
+        };
+        if (invalidation.dimensionsChanged(last_editor_dimensions, editor_dimensions)) {
             var rp = try alloc.alloc(Value, 2);
             defer alloc.free(rp);
-            rp[0] = .{ .integer = @max(1, layout.editor.w) };
-            rp[1] = .{ .integer = @max(1, layout.editor.h) };
-            rpc.notify("nvim_ui_try_resize", rp) catch {};
-            if (metrics.global.enabled) metrics.global.editor_resize_requests +|= 1;
-            if (layout.panel) |panel| {
-                var tp = try alloc.alloc(Value, 2);
-                defer alloc.free(tp);
-                tp[0] = .{ .integer = @max(1, panel.w) };
-                tp[1] = .{ .integer = if (panel.h > 0) @max(1, panel.h - 1) else 1 };
-                rpc_term.notify("nvim_ui_try_resize", tp) catch {};
-                if (metrics.global.enabled) metrics.global.terminal_resize_requests +|= 1;
+            rp[0] = .{ .integer = editor_dimensions.cols };
+            rp[1] = .{ .integer = editor_dimensions.rows };
+            const queued = queue: {
+                rpc.notify("nvim_ui_try_resize", rp) catch |err| {
+                    std.log.warn("Failed to queue editor resize: {}", .{err});
+                    break :queue false;
+                };
+                break :queue true;
+            };
+            if (queued) {
+                last_editor_dimensions = editor_dimensions;
+                if (metrics.global.enabled) metrics.global.editor_resize_requests +|= 1;
             }
         }
+        if (layout.panel) |panel| {
+            const terminal_dimensions = invalidation.Dimensions{
+                .cols = @max(1, panel.w),
+                .rows = if (panel.h > 0) @max(1, panel.h - 1) else 1,
+            };
+            if (invalidation.dimensionsChanged(last_terminal_dimensions, terminal_dimensions)) {
+                var tp = try alloc.alloc(Value, 2);
+                defer alloc.free(tp);
+                tp[0] = .{ .integer = terminal_dimensions.cols };
+                tp[1] = .{ .integer = terminal_dimensions.rows };
+                const queued = queue: {
+                    rpc_term.notify("nvim_ui_try_resize", tp) catch |err| {
+                        std.log.warn("Failed to queue terminal resize: {}", .{err});
+                        break :queue false;
+                    };
+                    break :queue true;
+                };
+                if (queued) {
+                    last_terminal_dimensions = terminal_dimensions;
+                    if (metrics.global.enabled) metrics.global.terminal_resize_requests +|= 1;
+                }
+            }
+        }
+        app.invalidations.layout = false;
+        app.invalidations.physical_terminal_size = false;
+        app.invalidations.editor_nvim_size = false;
+        app.invalidations.terminal_nvim_size = false;
 
         // Bootstrap transport progress precedes the first tracked cycle. Once
         // polling starts, transport progress happens only in the reactor phase.
@@ -794,6 +823,8 @@ fn runNvimSession(
         if (tracked_cycle) try phases.enter(.composition);
         var composition_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.composition);
         views.drawWorkspace(&app, layout);
+        if (app.invalidations.forced_full_redraw != null) ren.forceFullRedraw();
+        _ = app.invalidations.consumePaint();
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
             if (alloc.dupeSentinel(u8, preview_path, 0)) |p| {
@@ -837,7 +868,7 @@ fn runNvimSession(
                     const rc = posix.system.ioctl(term.tty_fd, posix.T.IOCGWINSZ, @intFromPtr(&ws));
                     if (posix.errno(rc) == .SUCCESS) {
                         try ren.resize(alloc, ws.col, ws.row);
-                        app.needs_resize = true;
+                        app.invalidations.forceFull(.terminal_resize);
                     }
                 }
                 tracked_cycle = true;
@@ -884,7 +915,7 @@ fn runNvimSession(
         if (app.deferred_exit == .zen_handoff) return error.ZenModeHandoff;
         if (app.deferred_exit == .reload) return error.ReloadApplication;
         try phases.enter(.normalized_event_dispatch);
-        if (readiness.task_completion and drainGitRefreshes(alloc, background.?, &git_owners, &git_panel)) app.needs_resize = true;
+        if (readiness.task_completion and drainGitRefreshes(alloc, background.?, &git_owners, &git_panel)) app.invalidations.damageAll();
         var normalized_input: ?input.Event = null;
         if (readiness.terminal_input) {
             var input_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.input_decode);
@@ -906,7 +937,7 @@ fn runNvimSession(
                 if (input.sigwinch_received.swap(false, .monotonic)) {
                     const resized = try term.getSize();
                     try ren.resize(alloc, resized[0], resized[1]);
-                    app.needs_resize = true;
+                    app.invalidations.forceFull(.terminal_resize);
                 }
             }
 
@@ -972,11 +1003,11 @@ fn runNvimSession(
                     rpc.notify("nvim_command", ls_p) catch {};
                     alloc.free(ls_p);
                 }
-                app.needs_resize = true;
+                app.invalidations.invalidateLayout();
             }
             if (ui_state.theme_changed) {
                 ui_state.theme_changed = false;
-                app.needs_resize = true;
+                app.invalidations.forceFull(.theme_change);
             }
 
             if (app.settings_widget.needs_apply) {
@@ -988,7 +1019,7 @@ fn runNvimSession(
                 };
                 settings_save_timer.stop();
 
-                app.needs_resize = true; // force redraw
+                app.invalidations.forceFull(.recovery);
 
                 if (std.mem.eql(u8, app.settings_widget.config.mode, "zen")) {
                     app.mode = .zen;
@@ -1087,7 +1118,7 @@ fn runNvimSession(
                     },
                     .paste => |p| {
                         if (app.bug_report.handlePaste(p)) {
-                            app.needs_resize = true;
+                            app.invalidations.damageAll();
                             continue;
                         }
                         var params = try alloc.alloc(Value, 3);
@@ -1107,7 +1138,7 @@ fn runNvimSession(
                     },
                     .resize => |r| {
                         try ren.resize(alloc, r.cols, r.rows);
-                        app.needs_resize = true;
+                        app.invalidations.forceFull(.terminal_resize);
                     },
                     .quit => return error.QuitApplication,
                     .none => {},

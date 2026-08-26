@@ -458,7 +458,18 @@ pub const UiState = struct {
         }
     }
 
-    pub fn handleRedraw(self: *UiState, events: []const Value) !void {
+    pub const RedrawDamage = struct {
+        grid: bool = false,
+        cursor: bool = false,
+        lifecycle: bool = false,
+        composition_uncertain: bool = false,
+    };
+
+    /// Applies a complete redraw batch and reports conservative grid-space
+    /// damage. The caller maps it to a screen region only after all positions
+    /// and z-order changes in the batch have landed.
+    pub fn handleRedraw(self: *UiState, events: []const Value) !RedrawDamage {
+        var damage = RedrawDamage{};
         for (events) |ev| {
             if (ev != .array or ev.array.len < 2) continue;
             const name = ev.array[0].string;
@@ -466,32 +477,54 @@ pub const UiState = struct {
 
             if (std.mem.eql(u8, name, "default_colors_set")) {
                 self.handleDefaultColorsSet(args);
+                damage.grid = true;
             } else if (std.mem.eql(u8, name, "hl_attr_define")) {
                 try self.handleHlAttrDefine(args);
+                damage.grid = true;
             } else if (std.mem.eql(u8, name, "grid_resize")) {
                 try self.handleGridResize(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "grid_clear")) {
                 self.handleGridClear(args);
+                damage.grid = true;
             } else if (std.mem.eql(u8, name, "grid_destroy")) {
                 self.handleGridDestroy(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_pos")) {
                 try self.handleWinPos(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "msg_set_pos")) {
                 try self.handleMsgSetPos(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_float_pos")) {
                 try self.handleWinFloatPos(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_hide")) {
                 self.handleWinHide(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_close")) {
                 self.handleWinClose(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "grid_cursor_goto")) {
                 self.handleGridCursorGoto(args);
+                damage.cursor = true;
             } else if (std.mem.eql(u8, name, "grid_scroll")) {
                 self.handleGridScroll(args);
+                damage.grid = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "grid_line")) {
                 try self.handleGridLine(args);
+                damage.grid = true;
             }
         }
+        return damage;
     }
 };
 
@@ -499,6 +532,33 @@ test "grid cell repeat distinguishes omitted and explicit zero" {
     try std.testing.expectEqual(@as(usize, 1), gridCellRepeat(false, 0));
     try std.testing.expectEqual(@as(usize, 0), gridCellRepeat(true, 0));
     try std.testing.expectEqual(@as(usize, 3), gridCellRepeat(true, 3));
+}
+
+test "redraw damage separates cursor updates from grid lifecycle" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const cursor_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_cursor_goto" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 2 }, .{ .integer = 3 } }) },
+        }) },
+    };
+    const cursor_damage = try state.handleRedraw(&cursor_events);
+    try std.testing.expect(cursor_damage.cursor);
+    try std.testing.expect(!cursor_damage.grid);
+    try std.testing.expect(!cursor_damage.lifecycle);
+
+    const lifecycle_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 80 }, .{ .integer = 24 } }) },
+        }) },
+    };
+    const lifecycle_damage = try state.handleRedraw(&lifecycle_events);
+    try std.testing.expect(lifecycle_damage.lifecycle);
+    try std.testing.expect(lifecycle_damage.composition_uncertain);
+    try std.testing.expect(!lifecycle_damage.cursor);
 }
 
 test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" {
@@ -513,7 +573,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             .{ .array = values(&[_]Value{ .{ .integer = 3 }, .{ .integer = 4 }, .{ .integer = 2 } }) },
         }) },
     };
-    try state.handleRedraw(&resize_events);
+    _ = try state.handleRedraw(&resize_events);
 
     const hl_events = [_]Value{
         .{ .array = values(&[_]Value{
@@ -533,7 +593,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             }) },
         }) },
     };
-    try state.handleRedraw(&hl_events);
+    _ = try state.handleRedraw(&hl_events);
 
     const line_events = [_]Value{
         .{ .array = values(&[_]Value{
@@ -558,7 +618,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             }) },
         }) },
     };
-    try state.handleRedraw(&line_events);
+    _ = try state.handleRedraw(&line_events);
 
     const live_grid = state.get(2).?;
     try std.testing.expectEqualStrings("A", live_grid.cells[0].char[0..live_grid.cells[0].len]);
@@ -605,7 +665,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             .{ .array = values(&[_]Value{.{ .integer = 2 }}) },
         }) },
     };
-    try state.handleRedraw(&lifecycle_events);
+    _ = try state.handleRedraw(&lifecycle_events);
     try std.testing.expectEqual(@as(i64, 2), state.cursor_grid);
     const cursor_pos = state.cursorScreenPos();
     try std.testing.expectEqual(@as(i32, 2), cursor_pos.x);
@@ -638,7 +698,7 @@ test "ui protocol resolves legacy float positions without absolute coordinates" 
             }) },
         }) },
     };
-    try state.handleRedraw(&events);
+    _ = try state.handleRedraw(&events);
 
     const float = state.get(3).?;
     try std.testing.expectEqual(@as(i32, 8), float.row);
@@ -653,7 +713,7 @@ test "ui protocol resolves legacy float positions without absolute coordinates" 
             }) },
         }) },
     };
-    try state.handleRedraw(&anchored_events);
+    _ = try state.handleRedraw(&anchored_events);
     try std.testing.expectEqual(@as(i32, 8), float.row);
     try std.testing.expectEqual(@as(i32, 17), float.col);
 }
@@ -683,7 +743,7 @@ test "ui protocol preserves width after scrolling and keeps explicit zero repeat
             }) },
         }) },
     };
-    try state.handleRedraw(&events);
+    _ = try state.handleRedraw(&events);
 
     try std.testing.expectEqualStrings("1", state.grid.cells[0].char[0..state.grid.cells[0].len]);
     try std.testing.expectEqualStrings("3", state.grid.cells[1].char[0..state.grid.cells[1].len]);
@@ -761,7 +821,7 @@ test "deterministic msgpack redraw replay produces canonical styled unicode cell
 
     var state = UiState.init(std.testing.allocator);
     defer state.deinit();
-    try state.handleRedraw(decoded.array);
+    _ = try state.handleRedraw(decoded.array);
 
     // Canonical final grid after the one-row scroll. Every cell is asserted.
     const expected = [_][]const u8{ "á", "s", "s", "s", "s", "s", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " " };
@@ -780,7 +840,7 @@ test "deterministic msgpack redraw replay produces canonical styled unicode cell
     // wide-cell continuations from Neovim's empty-string cells.
     var unicode_state = UiState.init(std.testing.allocator);
     defer unicode_state.deinit();
-    try unicode_state.handleRedraw(decoded.array[0..3]);
+    _ = try unicode_state.handleRedraw(decoded.array[0..3]);
     try std.testing.expectEqualStrings("A", unicode_state.grid.cells[0].char[0..unicode_state.grid.cells[0].len]);
     try std.testing.expectEqualStrings("界", unicode_state.grid.cells[1].char[0..unicode_state.grid.cells[1].len]);
     try std.testing.expect(unicode_state.grid.cells[2].continuation and unicode_state.grid.cells[2].len == 0);

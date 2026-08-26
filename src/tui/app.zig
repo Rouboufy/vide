@@ -22,6 +22,7 @@ const GitDetailedWidget = @import("widgets/git_detailed.zig").GitDetailedWidget;
 const ExtensionShop = @import("widgets/extension_shop.zig").ExtensionShop;
 const BugReportWidget = @import("widgets/bug_report.zig").BugReportWidget;
 const EditorContextMenu = @import("widgets/editor_context_menu.zig").EditorContextMenu;
+const Invalidations = @import("invalidation.zig").Invalidations;
 
 pub const Mode = enum { ide, zen, normal };
 pub const PanelPosition = enum { bottom, right };
@@ -75,7 +76,7 @@ pub const App = struct {
     show_file_tree: bool,
     show_terminal_panel: bool,
 
-    needs_resize: bool,
+    invalidations: Invalidations,
     terminal_panel_height: u16,
     terminal_panel_width: u16, // For right-side panel
     active_terminal_panel_idx: u8, // 0=Terminal, 1=Debug, 2=Output
@@ -155,7 +156,7 @@ pub const App = struct {
             .sidebar_focus = false,
             .show_file_tree = true,
             .show_terminal_panel = false,
-            .needs_resize = true,
+            .invalidations = .{},
             .terminal_panel_height = 8,
             .terminal_panel_width = 50,
             .active_terminal_panel_idx = 0,
@@ -199,7 +200,7 @@ pub const App = struct {
         var ts: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         self.notice_deadline = ts.sec + 5;
-        self.needs_resize = true;
+        self.invalidations.damage(.overlay);
     }
 
     pub fn activeNotice(self: *App) ?[]const u8 {
