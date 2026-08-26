@@ -24,7 +24,7 @@ Use this checklist alongside `docs/ui-v2-implementation-playbook.md`.
 - [X] 05A — RPC framing and decoder
 - [X] 05B — Asynchronous RPC transport
 - [X] 05C — RPC call-site migration
-- [ ] 05D — Dual-session and shutdown hardening
+- [X] 05D — Dual-session and shutdown hardening
 - [ ] 06 — Separate invalidation and Neovim sizing
 - [ ] 07A — Row-run ANSI encoder
 - [ ] 07B — Retained coarse-region composition

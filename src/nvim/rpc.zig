@@ -15,6 +15,7 @@ pub const compatibility = struct {
 };
 
 pub const RpcClient = struct {
+    pub const default_request_timeout_ns = 30 * std.time.ns_per_s;
     pub const AsyncHandler = *const fn (?*anyopaque, *async_transport.Completion) anyerror!void;
     const HandlerEntry = struct { id: async_transport.RequestId, context: ?*anyopaque, callback: AsyncHandler };
     process: NvimProcess,
@@ -297,8 +298,12 @@ pub const RpcClient = struct {
     }
 
     pub fn requestAsync(self: *RpcClient, method: []const u8, params: []const Value) !async_transport.RequestId {
+        return self.requestAsyncWithDeadline(method, params, monotonicNanoseconds() + default_request_timeout_ns);
+    }
+
+    pub fn requestAsyncWithDeadline(self: *RpcClient, method: []const u8, params: []const Value, deadline_ns: ?i128) !async_transport.RequestId {
         if (!self.async_enabled) return error.AsyncTransportDisabled;
-        return self.transport.queueRequest(method, params);
+        return self.transport.queueRequestWithDeadline(method, params, deadline_ns);
     }
 
     pub fn requestAsyncWithHandler(self: *RpcClient, method: []const u8, params: []const Value, context: ?*anyopaque, callback: AsyncHandler) !async_transport.RequestId {
@@ -311,6 +316,50 @@ pub const RpcClient = struct {
 
     pub fn takeAsyncCompletion(self: *RpcClient) ?async_transport.Completion {
         return self.transport.takeCompletion();
+    }
+
+    pub fn cancelAsync(self: *RpcClient, id: async_transport.RequestId) bool {
+        return self.transport.cancel(id);
+    }
+
+    pub fn progressAsyncDeadlines(self: *RpcClient, now_ns: i128) !void {
+        _ = self.transport.expire(now_ns);
+        try self.dispatchQueuedCompletions();
+    }
+
+    pub fn progressAsyncDeadlinesNow(self: *RpcClient) !void {
+        try self.progressAsyncDeadlines(monotonicNanoseconds());
+    }
+
+    pub fn finishAsync(self: *RpcClient, reason: async_transport.FailureReason) !void {
+        self.transport.finishWithReason(reason);
+        var first_error: ?anyerror = null;
+        while (!self.transport.isEofDrained()) {
+            var inbound = self.transport.nextInbound() catch |err| {
+                if (first_error == null) first_error = err;
+                break;
+            } orelse continue;
+            defer inbound.deinit(self.allocator);
+            switch (inbound) {
+                .notification => |message| self.dispatchNotificationOrRequest(message) catch |err| if (first_error == null) {
+                    first_error = err;
+                },
+                .request => {},
+                .unknown_response => {},
+                .response_completed => self.dispatchQueuedCompletions() catch |err| if (first_error == null) {
+                    first_error = err;
+                },
+            }
+        }
+        self.dispatchQueuedCompletions() catch |err| if (first_error == null) {
+            first_error = err;
+        };
+        if (first_error) |err| return err;
+    }
+
+    pub fn shutdownAsync(self: *RpcClient) !void {
+        self.transport.shutdown();
+        try self.dispatchQueuedCompletions();
     }
 
     pub fn progressAsyncWrite(self: *RpcClient) !void {
@@ -356,22 +405,23 @@ pub const RpcClient = struct {
                     }
                 },
                 .unknown_response => {},
-                .response_completed => |id| try self.dispatchAsyncCompletion(id),
+                .response_completed => try self.dispatchQueuedCompletions(),
             }
         }
-        if (self.transport.isEofDrained()) while (self.transport.takeCompletion()) |value| {
-            var completion = value;
-            defer completion.deinit(self.allocator);
-            try self.dispatchCompletionToHandler(&completion);
-        };
+        if (self.transport.isEofDrained()) try self.dispatchQueuedCompletions();
         return !self.transport.isEofDrained();
     }
 
-    fn dispatchAsyncCompletion(self: *RpcClient, id: async_transport.RequestId) !void {
-        var completion = self.transport.takeCompletion() orelse return error.MissingCompletion;
-        defer completion.deinit(self.allocator);
-        if (completion.id != id) return error.CompletionOrderMismatch;
-        try self.dispatchCompletionToHandler(&completion);
+    fn dispatchQueuedCompletions(self: *RpcClient) !void {
+        var first_error: ?anyerror = null;
+        while (self.transport.takeCompletion()) |value| {
+            var completion = value;
+            defer completion.deinit(self.allocator);
+            self.dispatchCompletionToHandler(&completion) catch |err| if (first_error == null) {
+                first_error = err;
+            };
+        }
+        if (first_error) |err| return err;
     }
 
     fn dispatchCompletionToHandler(self: *RpcClient, completion: *async_transport.Completion) !void {

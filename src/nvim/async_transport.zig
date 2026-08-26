@@ -24,13 +24,18 @@ const Envelope = struct {
     }
 };
 
-const Pending = struct { id: RequestId };
+const Pending = struct {
+    id: RequestId,
+    deadline_ns: ?i128,
+};
+
+pub const FailureReason = enum { eof, shutdown, timeout, canceled, child_failed };
 
 pub const Completion = struct {
     id: RequestId,
     outcome: union(enum) {
         response: struct { error_value: msgpack.Value, result: msgpack.Value },
-        failed: enum { eof, shutdown },
+        failed: FailureReason,
     },
     pub fn deinit(self: *Completion, allocator: std.mem.Allocator) void {
         switch (self.outcome) {
@@ -72,6 +77,7 @@ pub const Transport = struct {
     accepting: bool = true,
     eof: bool = false,
     eof_drained: bool = false,
+    terminal_failure: FailureReason = .eof,
 
     pub fn init(allocator: std.mem.Allocator) Transport {
         return .{ .allocator = allocator, .decoder = .init(allocator) };
@@ -115,12 +121,18 @@ pub const Transport = struct {
     }
 
     pub fn queueRequest(self: *Transport, method: []const u8, params: []const msgpack.Value) !RequestId {
+        return self.queueRequestWithDeadline(method, params, null);
+    }
+
+    /// The deadline is an absolute value from the caller's monotonic clock.
+    /// Null means that the request has no transport-enforced deadline.
+    pub fn queueRequestWithDeadline(self: *Transport, method: []const u8, params: []const msgpack.Value, deadline_ns: ?i128) !RequestId {
         if (self.pending_len + self.completion_len == max_pending_requests) return error.PendingFull;
         if (self.next_request_id == 0) return error.RequestIdExhausted;
         const id: RequestId = @enumFromInt(self.next_request_id);
         var items = [_]msgpack.Value{ .{ .integer = 0 }, .{ .integer = self.next_request_id }, .{ .string = method }, .{ .array = @constCast(params) } };
         try self.queueEncoded(.{ .array = &items }, id, .normal);
-        self.pending[self.pending_len] = .{ .id = id };
+        self.pending[self.pending_len] = .{ .id = id, .deadline_ns = deadline_ns };
         self.pending_len += 1;
         self.next_request_id +%= 1;
         return id;
@@ -161,21 +173,39 @@ pub const Transport = struct {
         try self.decoder.feed(bytes);
     }
     pub fn finish(self: *Transport) void {
+        self.finishWithReason(.eof);
+    }
+
+    /// Stop admission, preserve already-buffered complete frames, and fail any
+    /// still-unresolved requests exactly once after that input is drained.
+    pub fn finishWithReason(self: *Transport, reason: FailureReason) void {
+        if (self.eof) {
+            if (!self.eof_drained and reason != .eof) self.terminal_failure = reason;
+            return;
+        }
         self.eof = true;
         self.accepting = false;
+        self.terminal_failure = reason;
         self.decoder.finish();
+    }
+
+    pub fn shutdown(self: *Transport) void {
+        self.finishWithReason(.shutdown);
+        self.dropOutbound();
+        self.failAllPending(.shutdown);
+        self.eof_drained = true;
     }
 
     pub fn nextInbound(self: *Transport) !?Inbound {
         const value = self.decoder.next() catch |err| {
             if (self.eof) {
-                self.failAllPending(.eof);
+                self.failAllPending(self.terminal_failure);
                 self.eof_drained = true;
             }
             return err;
         } orelse {
             if (self.eof) {
-                self.failAllPending(.eof);
+                self.failAllPending(self.terminal_failure);
                 self.eof_drained = true;
             }
             return null;
@@ -217,7 +247,26 @@ pub const Transport = struct {
             envelope.deinit(self.allocator);
             break;
         }
+        self.pushFailure(id, .canceled);
         return true;
+    }
+
+    /// Expire all deadlines at or before `now_ns`. Returns the number expired.
+    pub fn expire(self: *Transport, now_ns: i128) usize {
+        var expired: usize = 0;
+        var index: usize = 0;
+        while (index < self.pending_len) {
+            const entry = self.pending[index].?;
+            if (entry.deadline_ns == null or entry.deadline_ns.? > now_ns) {
+                index += 1;
+                continue;
+            }
+            self.removePending(index);
+            self.removeUnsentEnvelope(entry.id);
+            self.pushFailure(entry.id, .timeout);
+            expired += 1;
+        }
+        return expired;
     }
 
     fn findPending(self: *Transport, id: RequestId) ?usize {
@@ -237,11 +286,30 @@ pub const Transport = struct {
         self.outbound_bytes -= result.bytes.len;
         return result;
     }
-    fn failAllPending(self: *Transport, reason: @TypeOf(@as(Completion, undefined).outcome.failed)) void {
+    fn removeUnsentEnvelope(self: *Transport, id: RequestId) void {
+        var index: usize = 0;
+        while (index < self.outbound_len) : (index += 1) {
+            const envelope = self.outbound[index].?;
+            if (envelope.request_id != id or envelope.offset != 0) continue;
+            var removed = self.removeOutbound(index);
+            removed.deinit(self.allocator);
+            return;
+        }
+    }
+    fn dropOutbound(self: *Transport) void {
+        while (self.outbound_len != 0) {
+            var envelope = self.removeOutbound(0);
+            envelope.deinit(self.allocator);
+        }
+    }
+    fn pushFailure(self: *Transport, id: RequestId, reason: FailureReason) void {
+        std.debug.assert(self.completion_len < max_completions);
+        self.completions[self.completion_len] = .{ .id = id, .outcome = .{ .failed = reason } };
+        self.completion_len += 1;
+    }
+    fn failAllPending(self: *Transport, reason: FailureReason) void {
         for (self.pending[0..self.pending_len]) |entry| {
-            std.debug.assert(self.completion_len < max_completions);
-            self.completions[self.completion_len] = .{ .id = entry.?.id, .outcome = .{ .failed = reason } };
-            self.completion_len += 1;
+            self.pushFailure(entry.?.id, reason);
         }
         self.pending = [_]?Pending{null} ** max_pending_requests;
         self.pending_len = 0;
@@ -361,6 +429,10 @@ test "cancel removes an unsent request envelope" {
     try std.testing.expect(transport.cancel(id));
     try std.testing.expect(!transport.wantsWrite());
     try std.testing.expectEqual(@as(usize, 0), transport.pendingCount());
+    var completion = transport.takeCompletion().?;
+    defer completion.deinit(std.testing.allocator);
+    try std.testing.expectEqual(.canceled, completion.outcome.failed);
+    try std.testing.expect(!transport.cancel(id));
 }
 
 test "cancel never removes a partially written envelope" {
@@ -376,6 +448,136 @@ test "cancel never removes a partially written envelope" {
     try std.testing.expect(transport.cancel(id));
     try std.testing.expect(transport.wantsWrite());
     try std.testing.expectEqual(@as(usize, 0), transport.pendingCount());
+    var completion = transport.takeCompletion().?;
+    defer completion.deinit(std.testing.allocator);
+    try std.testing.expectEqual(.canceled, completion.outcome.failed);
+}
+
+test "deadlines remove unsent requests and retain partially written envelopes" {
+    var transport = Transport.init(std.testing.allocator);
+    defer transport.deinit();
+    const unsent = try transport.queueRequestWithDeadline("unsent", &.{}, 10);
+    try std.testing.expectEqual(@as(usize, 0), transport.expire(9));
+    try std.testing.expectEqual(@as(usize, 1), transport.expire(10));
+    try std.testing.expect(!transport.wantsWrite());
+    var unsent_completion = transport.takeCompletion().?;
+    defer unsent_completion.deinit(std.testing.allocator);
+    try std.testing.expectEqual(unsent, unsent_completion.id);
+    try std.testing.expectEqual(.timeout, unsent_completion.outcome.failed);
+
+    const partial = try transport.queueRequestWithDeadline("partial", &.{}, 20);
+    const One = struct {
+        fn write(_: void, bytes: []const u8) !usize {
+            return @min(bytes.len, 1);
+        }
+    };
+    _ = try transport.flushOne({}, One.write);
+    try std.testing.expectEqual(@as(usize, 1), transport.expire(20));
+    try std.testing.expect(transport.wantsWrite());
+    var partial_completion = transport.takeCompletion().?;
+    defer partial_completion.deinit(std.testing.allocator);
+    try std.testing.expectEqual(partial, partial_completion.id);
+    try std.testing.expectEqual(.timeout, partial_completion.outcome.failed);
+}
+
+test "terminal failure drains complete responses before failing unresolved requests" {
+    var transport = Transport.init(std.testing.allocator);
+    defer transport.deinit();
+    const resolved_id = try transport.queueRequest("resolved", &.{});
+    const failed_id = try transport.queueRequest("failed", &.{});
+    var response = [_]msgpack.Value{ .{ .integer = 1 }, .{ .integer = @intFromEnum(resolved_id) }, .nil, .{ .integer = 7 } };
+    var encoded = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer encoded.deinit();
+    try msgpack.encode(&encoded.writer, .{ .array = &response });
+    try transport.feed(encoded.written());
+    transport.finishWithReason(.child_failed);
+    var inbound = (try transport.nextInbound()).?;
+    defer inbound.deinit(std.testing.allocator);
+    try std.testing.expectEqual(resolved_id, inbound.response_completed);
+    try std.testing.expect(try transport.nextInbound() == null);
+    var resolved = transport.takeCompletion().?;
+    defer resolved.deinit(std.testing.allocator);
+    var failed = transport.takeCompletion().?;
+    defer failed.deinit(std.testing.allocator);
+    try std.testing.expectEqual(resolved_id, resolved.id);
+    try std.testing.expectEqual(failed_id, failed.id);
+    try std.testing.expectEqual(.child_failed, failed.outcome.failed);
+}
+
+test "cancellation completion remains ordered before a later response" {
+    var transport = Transport.init(std.testing.allocator);
+    defer transport.deinit();
+    const canceled_id = try transport.queueRequest("canceled", &.{});
+    const response_id = try transport.queueRequest("response", &.{});
+    try std.testing.expect(transport.cancel(canceled_id));
+    var response = [_]msgpack.Value{ .{ .integer = 1 }, .{ .integer = @intFromEnum(response_id) }, .nil, .{ .integer = 11 } };
+    var encoded = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer encoded.deinit();
+    try msgpack.encode(&encoded.writer, .{ .array = &response });
+    try transport.feed(encoded.written());
+    var inbound = (try transport.nextInbound()).?;
+    defer inbound.deinit(std.testing.allocator);
+    var canceled = transport.takeCompletion().?;
+    defer canceled.deinit(std.testing.allocator);
+    var resolved = transport.takeCompletion().?;
+    defer resolved.deinit(std.testing.allocator);
+    try std.testing.expectEqual(canceled_id, canceled.id);
+    try std.testing.expectEqual(.canceled, canceled.outcome.failed);
+    try std.testing.expectEqual(response_id, resolved.id);
+    try std.testing.expectEqual(@as(i64, 11), resolved.outcome.response.result.integer);
+}
+
+test "shutdown disposes queued traffic and completes every pending state once" {
+    var transport = Transport.init(std.testing.allocator);
+    defer transport.deinit();
+    const resolved_id = try transport.queueRequest("resolved", &.{});
+    var response = [_]msgpack.Value{ .{ .integer = 1 }, .{ .integer = @intFromEnum(resolved_id) }, .nil, .{ .integer = 8 } };
+    var encoded = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer encoded.deinit();
+    try msgpack.encode(&encoded.writer, .{ .array = &response });
+    try transport.feed(encoded.written());
+    var inbound = (try transport.nextInbound()).?;
+    defer inbound.deinit(std.testing.allocator);
+    try transport.queueNotification("notification", &.{});
+    const first = try transport.queueRequest("first", &.{});
+    const second = try transport.queueRequest("second", &.{});
+    const One = struct {
+        fn write(_: void, bytes: []const u8) !usize {
+            return @min(bytes.len, 1);
+        }
+    };
+    _ = try transport.flushOne({}, One.write);
+    transport.shutdown();
+    try std.testing.expect(!transport.wantsWrite());
+    try std.testing.expectEqual(@as(usize, 0), transport.queuedBytes());
+    try std.testing.expectEqual(@as(usize, 0), transport.pendingCount());
+    try std.testing.expectError(error.Closed, transport.queueNotification("closed", &.{}));
+    var resolved = transport.takeCompletion().?;
+    defer resolved.deinit(std.testing.allocator);
+    var one = transport.takeCompletion().?;
+    defer one.deinit(std.testing.allocator);
+    var two = transport.takeCompletion().?;
+    defer two.deinit(std.testing.allocator);
+    try std.testing.expectEqual(resolved_id, resolved.id);
+    try std.testing.expectEqual(@as(i64, 8), resolved.outcome.response.result.integer);
+    try std.testing.expectEqual(first, one.id);
+    try std.testing.expectEqual(second, two.id);
+    try std.testing.expectEqual(.shutdown, one.outcome.failed);
+    try std.testing.expectEqual(.shutdown, two.outcome.failed);
+    try std.testing.expect(transport.takeCompletion() == null);
+}
+
+test "deadline cancellation and shutdown are allocation-failure safe" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var transport = Transport.init(allocator);
+            defer transport.deinit();
+            const id = try transport.queueRequestWithDeadline("bounded", &.{.{ .string = "payload" }}, 1);
+            try std.testing.expectEqual(@as(usize, 1), transport.expire(1));
+            try std.testing.expect(!transport.cancel(id));
+            transport.shutdown();
+        }
+    }.run, .{});
 }
 
 test "protocol reply reserve survives saturated normal traffic" {

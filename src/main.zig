@@ -64,6 +64,8 @@ const ReactorReadiness = struct {
     terminal_transport: bool = false,
     editor_write: bool = false,
     terminal_write: bool = false,
+    editor_failed: bool = false,
+    terminal_failed: bool = false,
     task_completion: bool = false,
 
     fn accept(self: *ReactorReadiness, ready: reactor_mod.Ready) !void {
@@ -71,8 +73,14 @@ const ReactorReadiness = struct {
         switch (ready.source) {
             .terminal_input => self.terminal_input = ready.readable,
             .resize_signal => self.resize_signal = ready.readable,
-            .nvim_editor_read => self.editor_transport = read_or_closed,
-            .nvim_terminal_read => self.terminal_transport = read_or_closed,
+            .nvim_editor_read => {
+                self.editor_transport = read_or_closed;
+                self.editor_failed = ready.failed;
+            },
+            .nvim_terminal_read => {
+                self.terminal_transport = read_or_closed;
+                self.terminal_failed = ready.failed;
+            },
             .nvim_editor_write => self.editor_write = ready.writable,
             .nvim_terminal_write => self.terminal_write = ready.writable,
             .task_completion => self.task_completion = ready.readable,
@@ -707,6 +715,8 @@ fn runNvimSession(
         editor_write_token = try reactor.add(rpc.process.stdin.handle, .nvim_editor_write, .{});
         terminal_write_token = try reactor.add(rpc_term.process.stdin.handle, .nvim_terminal_write, .{});
     }
+    defer if (rpc.isAsyncEnabled()) rpc.shutdownAsync() catch |err| std.log.warn("Editor RPC shutdown callback failed: {}", .{err});
+    defer if (rpc_term.isAsyncEnabled()) rpc_term.shutdownAsync() catch |err| std.log.warn("Terminal RPC shutdown callback failed: {}", .{err});
     var task_token: ?reactor_mod.Token = null;
     if (background) |runner| task_token = try reactor.add(runner.notifierFd(), .task_completion, .{ .read = true });
     defer {
@@ -841,18 +851,36 @@ fn runNvimSession(
         try ready.dispatch(&readiness, ReactorReadiness.accept);
         try phases.enter(.transport_progress);
         if (readiness.editor_transport) {
-            const alive = try nvim_helpers.processNvimEvents(rpc);
+            const alive = nvim_helpers.processNvimEvents(rpc) catch |err| {
+                if (!readiness.editor_failed) return err;
+                try rpc.finishAsync(.child_failed);
+                return error.QuitApplication;
+            };
             if (!alive) return error.QuitApplication;
+            if (readiness.editor_failed) {
+                try rpc.finishAsync(.child_failed);
+                return error.QuitApplication;
+            }
         }
         if (readiness.terminal_transport) {
-            const alive_term = try nvim_helpers.processNvimEvents(rpc_term);
+            const alive_term = nvim_helpers.processNvimEvents(rpc_term) catch |err| {
+                if (!readiness.terminal_failed) return err;
+                try rpc_term.finishAsync(.child_failed);
+                return;
+            };
             if (!alive_term) {
                 if (app.quit_requested) return error.QuitApplication;
+                return;
+            }
+            if (readiness.terminal_failed) {
+                try rpc_term.finishAsync(.child_failed);
                 return;
             }
         }
         if (readiness.editor_write) try rpc.progressAsyncWrite();
         if (readiness.terminal_write) try rpc_term.progressAsyncWrite();
+        try rpc.progressAsyncDeadlinesNow();
+        try rpc_term.progressAsyncDeadlinesNow();
         if (app.deferred_exit == .zen_handoff) return error.ZenModeHandoff;
         if (app.deferred_exit == .reload) return error.ReloadApplication;
         try phases.enter(.normalized_event_dispatch);
