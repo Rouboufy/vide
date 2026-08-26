@@ -27,7 +27,7 @@ Use this checklist alongside `docs/ui-v2-implementation-playbook.md`.
 - [X] 05D — Dual-session and shutdown hardening
 - [X] 06 — Separate invalidation and Neovim sizing
 - [X] 07A — Row-run ANSI encoder
-- [ ] 07B — Retained coarse-region composition
+- [X] 07B — Retained coarse-region composition
 - [ ] 07C — Optional fine-grained damage optimization
 
 ## Shared application architecture
