@@ -34,9 +34,28 @@ const metrics = @import("metrics.zig");
 const reactor_mod = @import("reactor.zig");
 const git_snapshot = @import("git_snapshot.zig");
 const task_runner = @import("task_runner.zig");
+const Completion = @import("nvim/async_transport.zig").Completion;
+const async_effects = @import("nvim/call_sites_05c.zig");
 
 var global_term: ?*Terminal = null;
 var log_path: ?[]const u8 = null;
+
+fn zenSessionSaved(context: ?*anyopaque, completion: *Completion) anyerror!void {
+    const app: *App = @ptrCast(@alignCast(context.?));
+    if (!async_effects.applyDeferredExit(&app.deferred_exit, .zen_handoff, completion)) app.notify(.failure, "Unable to save the Zen handoff session.", .{});
+}
+
+fn reloadSessionSaved(context: ?*anyopaque, completion: *Completion) anyerror!void {
+    const app: *App = @ptrCast(@alignCast(context.?));
+    if (!async_effects.applyDeferredExit(&app.deferred_exit, .reload, completion)) app.notify(.failure, "Unable to save the reload session.", .{});
+}
+
+fn queueSessionSave(allocator: std.mem.Allocator, rpc: *RpcClient, app: *App, session_path: []const u8, callback: RpcClient.AsyncHandler) !void {
+    const script = try std.fmt.allocPrint(allocator, "vim.cmd('silent! wa'); vim.cmd('mksession! {s}')", .{session_path});
+    defer allocator.free(script);
+    var params = [_]Value{ .{ .string = script }, .{ .array = &.{} } };
+    _ = try rpc.requestAsyncWithHandler("nvim_exec_lua", &params, app, callback);
+}
 
 const ReactorReadiness = struct {
     terminal_input: bool = false,
@@ -361,14 +380,6 @@ fn innerMain(init: std.process.Init) !void {
             if (err == error.EndOfStream) continue :app_loop;
             if (err == error.QuitApplication) break :app_loop;
             if (err == error.ReloadApplication) {
-                var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
-                _ = rpc.call("nvim_command", &wa_cmd) catch {};
-
-                const mks_cmd_str = std.fmt.allocPrint(alloc, "mksession! {s}", .{session_path}) catch "/tmp/vide_session.vim";
-                defer if (!std.mem.eql(u8, mks_cmd_str, "/tmp/vide_session.vim")) alloc.free(mks_cmd_str);
-                var mks_cmd = [_]Value{.{ .string = mks_cmd_str }};
-                _ = rpc.call("nvim_command", &mks_cmd) catch {};
-
                 for (renderer.prev) |*cell| {
                     cell.char[0] = ' ';
                     cell.len = 1;
@@ -842,6 +853,8 @@ fn runNvimSession(
         }
         if (readiness.editor_write) try rpc.progressAsyncWrite();
         if (readiness.terminal_write) try rpc_term.progressAsyncWrite();
+        if (app.deferred_exit == .zen_handoff) return error.ZenModeHandoff;
+        if (app.deferred_exit == .reload) return error.ReloadApplication;
         try phases.enter(.normalized_event_dispatch);
         if (readiness.task_completion and drainGitRefreshes(alloc, background.?, &git_owners, &git_panel)) app.needs_resize = true;
         var normalized_input: ?input.Event = null;
@@ -872,14 +885,6 @@ fn runNvimSession(
             if (ui_state.toggle_zen_requested) {
                 ui_state.toggle_zen_requested = false;
                 if (app.settings_widget.config.zen_handoff) {
-                    var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
-                    _ = rpc.call("nvim_command", &wa_cmd) catch {};
-
-                    const mks_cmd_str = try std.fmt.allocPrint(alloc, "mksession! {s}", .{session_path});
-                    defer alloc.free(mks_cmd_str);
-                    var mks_cmd = [_]Value{.{ .string = mks_cmd_str }};
-                    _ = rpc.call("nvim_command", &mks_cmd) catch {};
-
                     // Write handoff init with same plugins + retoggle keybind
                     const zen_key = app.settings_widget.config.keybindings.toggle_zen;
                     const vide_init_lua = @embedFile("nvim/vide_init.lua");
@@ -904,7 +909,10 @@ fn runNvimSession(
                         }
                     } else |_| {}
 
-                    return error.ZenModeHandoff;
+                    const save_script = try std.fmt.allocPrint(alloc, "vim.cmd('silent! wa'); vim.cmd('mksession! {s}')", .{session_path});
+                    defer alloc.free(save_script);
+                    var save_params = [_]Value{ .{ .string = save_script }, .{ .array = &.{} } };
+                    _ = try rpc.requestAsyncWithHandler("nvim_exec_lua", &save_params, &app, zenSessionSaved);
                 } else {
                     if (app.mode != .zen) app.prev_mode = app.mode;
                     app.mode = .zen;
@@ -1040,7 +1048,13 @@ fn runNvimSession(
             if (normalized_input) |event| {
                 switch (event) {
                     .key => |k| {
-                        _ = try events.handleKey(&app, k, layout);
+                        _ = events.handleKey(&app, k, layout) catch |err| switch (err) {
+                            error.ReloadApplication => blk: {
+                                try queueSessionSave(alloc, rpc, &app, session_path, reloadSessionSaved);
+                                break :blk true;
+                            },
+                            else => return err,
+                        };
                         if (app.quit_requested) return error.QuitApplication;
                     },
                     .paste => |p| {
@@ -1058,7 +1072,10 @@ fn runNvimSession(
                         }
                     },
                     .mouse => |m| {
-                        try events.handleMouse(&app, m, layout);
+                        events.handleMouse(&app, m, layout) catch |err| switch (err) {
+                            error.ReloadApplication => try queueSessionSave(alloc, rpc, &app, session_path, reloadSessionSaved),
+                            else => return err,
+                        };
                     },
                     .resize => |r| {
                         try ren.resize(alloc, r.cols, r.rows);

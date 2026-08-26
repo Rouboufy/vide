@@ -683,19 +683,31 @@ pub const SettingsWidget = struct {
         params[0] = .{ .string = "return vim.fn.getcompletion('', 'color')" };
         params[1] = .{ .array = &[_]Value{} };
 
+        if (rpc.isAsyncEnabled()) {
+            _ = rpc.requestAsyncWithHandler("nvim_exec_lua", params, self, asyncThemesComplete) catch return;
+            return;
+        }
+
         if (rpc.call("nvim_exec_lua", params) catch null) |res| {
             defer msgpack.freeValue(res, self.allocator);
-            if (res == .array and res.array.len > 0) {
-                var raw_list = std.array_list.Managed([]const u8).init(self.allocator);
-                defer raw_list.deinit();
-                for (res.array) |item| {
-                    if (item == .string) {
-                        raw_list.append(item.string) catch {};
-                    }
-                }
-                self.setThemesAndGroup(raw_list.items) catch {};
-            }
+            self.applyThemesResult(res);
         }
+    }
+
+    fn asyncThemesComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+        const self: *SettingsWidget = @ptrCast(@alignCast(context.?));
+        switch (completion.outcome) {
+            .response => |response| if (response.error_value == .nil) self.applyThemesResult(response.result),
+            .failed => {},
+        }
+    }
+
+    fn applyThemesResult(self: *SettingsWidget, res: @import("../../nvim/msgpack.zig").Value) void {
+        if (res != .array or res.array.len == 0) return;
+        var raw_list = std.array_list.Managed([]const u8).init(self.allocator);
+        defer raw_list.deinit();
+        for (res.array) |item| if (item == .string) raw_list.append(item.string) catch {};
+        self.setThemesAndGroup(raw_list.items) catch {};
     }
 
     fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

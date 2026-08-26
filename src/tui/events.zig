@@ -4,6 +4,23 @@ const App = app.App;
 const input = @import("input.zig");
 const nvim_helpers = @import("../nvim/helpers.zig");
 const Value = @import("../nvim/msgpack.zig").Value;
+const Completion = @import("../nvim/async_transport.zig").Completion;
+const async_effects = @import("../nvim/call_sites_05c.zig");
+
+fn terminalAdded(context: ?*anyopaque, completion: *Completion) anyerror!void {
+    const application: *App = @ptrCast(@alignCast(context.?));
+    _ = async_effects.applyTerminalDelta(&application.terminal_win_count, 1, completion);
+}
+
+fn terminalRemoved(context: ?*anyopaque, completion: *Completion) anyerror!void {
+    const application: *App = @ptrCast(@alignCast(context.?));
+    _ = async_effects.applyTerminalDelta(&application.terminal_win_count, -1, completion);
+}
+
+fn zenSessionSaved(context: ?*anyopaque, completion: *Completion) anyerror!void {
+    const application: *App = @ptrCast(@alignCast(context.?));
+    if (!async_effects.applyDeferredExit(&application.deferred_exit, .zen_handoff, completion)) application.notify(.failure, "Unable to save the Zen handoff session.", .{});
+}
 const Layout = @import("layout.zig").Layout;
 const settings = @import("widgets/settings.zig");
 
@@ -138,39 +155,25 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1bv") or std.mem.eql(u8, k.raw, "\x1c")) { // Alt+v or Ctrl+\ -> Vertical Split
             var cmd_p = try a.allocator.alloc(Value, 1);
             defer a.allocator.free(cmd_p);
-            cmd_p[0] = .{ .string = "vnew | terminal" };
-            var res = try a.rpc_term.call("nvim_command", cmd_p);
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-            cmd_p[0] = .{ .string = "startinsert" };
-            res = try a.rpc_term.call("nvim_command", cmd_p);
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-            a.terminal_win_count += 1;
+            cmd_p[0] = .{ .string = "vnew | terminal | startinsert" };
+            _ = try a.rpc_term.requestAsyncWithHandler("nvim_command", cmd_p, a, terminalAdded);
             a.needs_resize = true;
             return true;
         }
         if (std.mem.eql(u8, k.raw, "\x1bs")) { // Alt+s -> Horizontal Split
             var cmd_p = try a.allocator.alloc(Value, 1);
             defer a.allocator.free(cmd_p);
-            cmd_p[0] = .{ .string = "new | terminal" };
-            var res = try a.rpc_term.call("nvim_command", cmd_p);
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-            cmd_p[0] = .{ .string = "startinsert" };
-            res = try a.rpc_term.call("nvim_command", cmd_p);
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-            a.terminal_win_count += 1;
+            cmd_p[0] = .{ .string = "new | terminal | startinsert" };
+            _ = try a.rpc_term.requestAsyncWithHandler("nvim_command", cmd_p, a, terminalAdded);
             a.needs_resize = true;
             return true;
         }
         if (std.mem.eql(u8, k.raw, "\x1bc")) { // Alt+c -> Close Split
-            const win_list = try a.rpc_term.call("nvim_list_wins", &[_]Value{});
-            defer @import("../nvim/msgpack.zig").freeValue(win_list, a.allocator);
-            if (win_list == .array and win_list.array.len > 1) {
+            if (a.terminal_win_count > 1) {
                 var cmd_p = try a.allocator.alloc(Value, 1);
                 defer a.allocator.free(cmd_p);
                 cmd_p[0] = .{ .string = "close" };
-                const res = try a.rpc_term.call("nvim_command", cmd_p);
-                @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-                a.terminal_win_count = win_list.array.len - 1;
+                _ = try a.rpc_term.requestAsyncWithHandler("nvim_command", cmd_p, a, terminalRemoved);
             } else {
                 a.show_terminal_panel = false;
                 a.terminal_focus = false;
@@ -470,15 +473,6 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             const handoff_path = try std.fs.path.join(a.allocator, &[_][]const u8{ dir_path, "vide_handoff_init.lua" });
             defer a.allocator.free(handoff_path);
 
-            // Handoff to native nvim: save session first
-            var wa_cmd = [_]Value{.{ .string = "silent! wa" }};
-            _ = a.rpc.call("nvim_command", &wa_cmd) catch {};
-
-            const mks_cmd_str = try std.fmt.allocPrint(a.allocator, "mksession! {s}", .{session_path});
-            defer a.allocator.free(mks_cmd_str);
-            var mks_cmd = [_]Value{.{ .string = mks_cmd_str }};
-            _ = a.rpc.call("nvim_command", &mks_cmd) catch {};
-
             // Write handoff init: same plugins + retoggle keybind
             const zen_key = a.settings_widget.config.keybindings.toggle_zen;
             const vide_init_lua = @embedFile("../nvim/vide_init.lua");
@@ -489,8 +483,11 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 "  vim.keymap.set({{'n','v','i','t'}}, '{s}', back, {{silent=true, desc='Return to vide'}})\nend)\n", .{ vide_init_lua, session_path, zen_key }) catch vide_init_lua;
 
             writeHandoffInit(handoff_path, handoff_script);
-
-            return error.ZenModeHandoff;
+            const save_script = try std.fmt.allocPrint(a.allocator, "vim.cmd('silent! wa'); vim.cmd('mksession! {s}')", .{session_path});
+            defer a.allocator.free(save_script);
+            var save_params = [_]Value{ .{ .string = save_script }, .{ .array = &.{} } };
+            _ = try a.rpc.requestAsyncWithHandler("nvim_exec_lua", &save_params, a, zenSessionSaved);
+            return true;
         } else {
             if (a.mode != .zen) {
                 a.prev_mode = a.mode;
@@ -819,14 +816,13 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
 
             if (is_split) {
                 if (a.terminal_focus) {
-                    var res = try a.rpc_term.call("nvim_command", cmd_p);
-                    @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
                     if (run_term) {
-                        cmd_p[0] = .{ .string = "startinsert" };
-                        res = try a.rpc_term.call("nvim_command", cmd_p);
-                        @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                        const base = cmd_p[0].string;
+                        const combined = try std.fmt.allocPrint(a.allocator, "{s} | startinsert", .{base});
+                        defer a.allocator.free(combined);
+                        cmd_p[0] = .{ .string = combined };
                     }
-                    a.terminal_win_count += 1;
+                    _ = try a.rpc_term.requestAsyncWithHandler("nvim_command", cmd_p, a, terminalAdded);
                 } else {
                     var res = try a.rpc.call("nvim_command", cmd_p);
                     @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
@@ -877,8 +873,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                             defer a.allocator.free(params);
                             params[0] = .{ .integer = win.id };
                             params[1] = .{ .bool = true };
-                            const res = try a.rpc_term.call("nvim_win_close", params);
-                            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
+                            _ = try a.rpc_term.requestAsyncWithHandler("nvim_win_close", params, a, terminalRemoved);
                             return;
                         }
                     }

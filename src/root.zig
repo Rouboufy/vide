@@ -6,6 +6,7 @@ test "all core modules compile and register their tests" {
     _ = @import("nvim/msgpack.zig");
     _ = @import("nvim/incremental_decoder.zig");
     _ = @import("nvim/async_transport.zig");
+    _ = @import("nvim/call_sites_05c.zig");
     _ = @import("nvim/process.zig");
     _ = @import("nvim/rpc.zig");
     _ = @import("nvim/ui_protocol.zig");

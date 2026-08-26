@@ -11,10 +11,12 @@ pub const compatibility = struct {
     /// Prompt 05A rollback seam. Prompt 05B will make this the transport's
     /// sole decoder after reactor integration is accepted.
     pub const incremental_decoder = false;
-    pub const async_transport_enabled = false;
+    pub const async_transport_enabled = true;
 };
 
 pub const RpcClient = struct {
+    pub const AsyncHandler = *const fn (?*anyopaque, *async_transport.Completion) anyerror!void;
+    const HandlerEntry = struct { id: async_transport.RequestId, context: ?*anyopaque, callback: AsyncHandler };
     process: NvimProcess,
     msg_id: u32 = 0,
     allocator: std.mem.Allocator,
@@ -25,6 +27,8 @@ pub const RpcClient = struct {
     incremental_reader: incremental.Decoder,
     transport: async_transport.Transport,
     async_enabled: bool = false,
+    handlers: [async_transport.max_pending_requests]?HandlerEntry = [_]?HandlerEntry{null} ** async_transport.max_pending_requests,
+    handler_len: usize = 0,
 
     pub fn init(process: NvimProcess, allocator: std.mem.Allocator, io: std.Io) RpcClient {
         return .{
@@ -84,7 +88,10 @@ pub const RpcClient = struct {
     }
 
     pub fn call(self: *RpcClient, method: []const u8, params: []const Value) !Value {
-        if (self.async_enabled) return error.AsyncCallRequired;
+        if (self.async_enabled) {
+            _ = try self.requestAsync(method, params);
+            return .nil;
+        }
         var timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_rpc);
         defer timer.stop();
         const id = self.nextId();
@@ -281,6 +288,10 @@ pub const RpcClient = struct {
         self.async_enabled = true;
     }
 
+    pub fn isAsyncEnabled(self: *const RpcClient) bool {
+        return self.async_enabled;
+    }
+
     pub fn wantsAsyncWrite(self: *const RpcClient) bool {
         return self.async_enabled and self.transport.wantsWrite();
     }
@@ -288,6 +299,14 @@ pub const RpcClient = struct {
     pub fn requestAsync(self: *RpcClient, method: []const u8, params: []const Value) !async_transport.RequestId {
         if (!self.async_enabled) return error.AsyncTransportDisabled;
         return self.transport.queueRequest(method, params);
+    }
+
+    pub fn requestAsyncWithHandler(self: *RpcClient, method: []const u8, params: []const Value, context: ?*anyopaque, callback: AsyncHandler) !async_transport.RequestId {
+        if (self.handler_len == self.handlers.len) return error.HandlerRegistryFull;
+        const id = try self.requestAsync(method, params);
+        self.handlers[self.handler_len] = .{ .id = id, .context = context, .callback = callback };
+        self.handler_len += 1;
+        return id;
     }
 
     pub fn takeAsyncCompletion(self: *RpcClient) ?async_transport.Completion {
@@ -337,10 +356,36 @@ pub const RpcClient = struct {
                     }
                 },
                 .unknown_response => {},
-                .response_completed => {},
+                .response_completed => |id| try self.dispatchAsyncCompletion(id),
             }
         }
+        if (self.transport.isEofDrained()) while (self.transport.takeCompletion()) |value| {
+            var completion = value;
+            defer completion.deinit(self.allocator);
+            try self.dispatchCompletionToHandler(&completion);
+        };
         return !self.transport.isEofDrained();
+    }
+
+    fn dispatchAsyncCompletion(self: *RpcClient, id: async_transport.RequestId) !void {
+        var completion = self.transport.takeCompletion() orelse return error.MissingCompletion;
+        defer completion.deinit(self.allocator);
+        if (completion.id != id) return error.CompletionOrderMismatch;
+        try self.dispatchCompletionToHandler(&completion);
+    }
+
+    fn dispatchCompletionToHandler(self: *RpcClient, completion: *async_transport.Completion) !void {
+        const id = completion.id;
+        for (self.handlers[0..self.handler_len], 0..) |entry, index| {
+            if (entry.?.id != id) continue;
+            const handler = entry.?;
+            std.mem.copyForwards(?HandlerEntry, self.handlers[index .. self.handler_len - 1], self.handlers[index + 1 .. self.handler_len]);
+            self.handler_len -= 1;
+            self.handlers[self.handler_len] = null;
+            try handler.callback(handler.context, completion);
+            return;
+        }
+        // Unobserved completions are intentionally disposed here.
     }
 
     fn processOneMessage(self: *RpcClient) !bool {

@@ -106,6 +106,12 @@ pub const MasonWidget = struct {
         params[0] = .{ .string = script };
         params[1] = .{ .array = &[_]Value{} };
 
+        if (rpc.isAsyncEnabled()) {
+            _ = rpc.requestAsyncWithHandler("nvim_exec_lua", params, self, asyncRefreshComplete) catch return;
+            self.refreshHealth(rpc);
+            return;
+        }
+
         if (rpc.call("nvim_exec_lua", params) catch null) |res| {
             defer msgpack.freeValue(res, self.allocator);
             if (res == .array) {
@@ -154,6 +160,38 @@ pub const MasonWidget = struct {
         self.refreshHealth(rpc);
     }
 
+    fn asyncRefreshComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+        const self: *MasonWidget = @ptrCast(@alignCast(context.?));
+        switch (completion.outcome) {
+            .response => |response| if (response.error_value == .nil) self.applyPackageResult(response.result),
+            .failed => {},
+        }
+    }
+
+    fn applyPackageResult(self: *MasonWidget, res: Value) void {
+        if (res != .array) return;
+        _ = self.arena.reset(.retain_capacity);
+        self.packages.clearRetainingCapacity();
+        for (res.array) |item| {
+            if (item != .map) continue;
+            var pkg: MasonPackage = .{ .name = "", .tabs = std.EnumSet(MasonTab).empty };
+            for (item.map) |kv| {
+                if (kv.key != .string) continue;
+                if (std.mem.eql(u8, kv.key.string, "name") and kv.value == .string) pkg.name = self.arena.allocator().dupe(u8, kv.value.string) catch "" else if (std.mem.eql(u8, kv.key.string, "installed") and kv.value == .bool) {
+                    pkg.is_installed = kv.value.bool;
+                    pkg.selected = pkg.is_installed;
+                } else if (std.mem.eql(u8, kv.key.string, "categories") and kv.value == .array) for (kv.value.array) |category| if (category == .string) if (MasonTab.fromString(category.string)) |tab| pkg.tabs.insert(tab);
+            }
+            if (pkg.name.len > 0) self.packages.append(pkg) catch {};
+        }
+        std.sort.block(MasonPackage, self.packages.items, {}, struct {
+            fn lessThan(_: void, a: MasonPackage, b: MasonPackage) bool {
+                return std.mem.lessThan(u8, a.name, b.name);
+            }
+        }.lessThan);
+        self.ensureSelectionValid();
+    }
+
     fn refreshHealth(self: *MasonWidget, rpc: *RpcClient) void {
         const script =
             \\local active = {}
@@ -165,6 +203,10 @@ pub const MasonWidget = struct {
             \\return string.format('Active: %s | Recommended: %s | Missing: %s', #active>0 and table.concat(active, ',') or 'none', #recommended>0 and table.concat(recommended, ',') or 'manual', #missing>0 and table.concat(missing, ',') or 'none')
         ;
         var params = [_]Value{ .{ .string = script }, .{ .array = &[_]Value{} } };
+        if (rpc.isAsyncEnabled()) {
+            _ = rpc.requestAsyncWithHandler("nvim_exec_lua", &params, self, asyncHealthComplete) catch return;
+            return;
+        }
         if (rpc.call("nvim_exec_lua", &params) catch null) |res| {
             defer msgpack.freeValue(res, self.allocator);
             if (res == .string) {
@@ -172,6 +214,18 @@ pub const MasonWidget = struct {
                 @memcpy(self.health_summary[0..len], res.string[0..len]);
                 self.health_len = len;
             }
+        }
+    }
+
+    fn asyncHealthComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+        const self: *MasonWidget = @ptrCast(@alignCast(context.?));
+        switch (completion.outcome) {
+            .response => |response| if (response.error_value == .nil and response.result == .string) {
+                const len = @min(response.result.string.len, self.health_summary.len);
+                @memcpy(self.health_summary[0..len], response.result.string[0..len]);
+                self.health_len = len;
+            },
+            .failed => {},
         }
     }
 
@@ -698,6 +752,14 @@ pub const MasonWidget = struct {
         cmd_p[0] = .{ .string = buf[0..offset] };
         cmd_p[1] = .{ .array = &[_]Value{} };
 
+        if (rpc.isAsyncEnabled()) {
+            _ = rpc.requestAsyncWithHandler("nvim_exec_lua", cmd_p, self, asyncInstallComplete) catch {
+                self.setStatus(.err, "RPC queue is full");
+                return;
+            };
+            return;
+        }
+
         if (rpc.call("nvim_exec_lua", cmd_p) catch null) |res| {
             defer msgpack.freeValue(res, self.allocator);
             if (res == .string) {
@@ -726,5 +788,33 @@ pub const MasonWidget = struct {
         } else {
             self.setStatus(.err, "RPC call failed");
         }
+    }
+
+    fn asyncInstallComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+        const self: *MasonWidget = @ptrCast(@alignCast(context.?));
+        const response = switch (completion.outcome) {
+            .response => |value| value,
+            .failed => {
+                self.setStatus(.err, "RPC channel closed");
+                return;
+            },
+        };
+        if (response.error_value != .nil) {
+            self.setStatus(.err, "Neovim RPC error");
+            return;
+        }
+        if (response.result != .string) return;
+        if (std.mem.startsWith(u8, response.result.string, "error:")) {
+            const message = if (response.result.string.len > 6) response.result.string[6..] else "unknown error";
+            self.setStatus(.err, message[0..@min(message.len, 80)]);
+            return;
+        }
+        var count: usize = 0;
+        for (self.packages.items) |*pkg| if (pkg.is_installed != pkg.selected) {
+            pkg.is_installed = pkg.selected;
+            count += 1;
+        };
+        var buffer: [64]u8 = undefined;
+        self.setStatus(.success, std.fmt.bufPrint(&buffer, "{d} package(s) processed.", .{count}) catch "Completed");
     }
 };

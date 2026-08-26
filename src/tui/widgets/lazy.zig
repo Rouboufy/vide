@@ -81,6 +81,11 @@ pub const LazyWidget = struct {
         params[0] = .{ .string = script };
         params[1] = .{ .array = &[_]Value{} };
 
+        if (rpc.isAsyncEnabled()) {
+            _ = rpc.requestAsyncWithHandler("nvim_exec_lua", params, self, asyncRefreshComplete) catch return;
+            return;
+        }
+
         if (rpc.call("nvim_exec_lua", params) catch null) |res| {
             defer msgpack.freeValue(res, self.allocator);
             if (res == .array) {
@@ -121,6 +126,33 @@ pub const LazyWidget = struct {
                 self.ensureSelectionValid();
             }
         }
+    }
+
+    fn asyncRefreshComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+        const self: *LazyWidget = @ptrCast(@alignCast(context.?));
+        const response = switch (completion.outcome) {
+            .response => |value| value,
+            .failed => return,
+        };
+        if (response.error_value != .nil) return;
+        const res = response.result;
+        if (res != .array) return;
+        _ = self.arena.reset(.retain_capacity);
+        self.plugins.clearRetainingCapacity();
+        for (res.array) |item| {
+            if (item != .map) continue;
+            var plugin: PluginInfo = .{ .name = "", .full_name = "" };
+            for (item.map) |kv| {
+                if (kv.key != .string) continue;
+                if (std.mem.eql(u8, kv.key.string, "name") and kv.value == .string) plugin.name = self.arena.allocator().dupe(u8, kv.value.string) catch "" else if (std.mem.eql(u8, kv.key.string, "full_name") and kv.value == .string) plugin.full_name = self.arena.allocator().dupe(u8, kv.value.string) catch "" else if (std.mem.eql(u8, kv.key.string, "loaded") and kv.value == .bool) plugin.is_loaded = kv.value.bool else if (std.mem.eql(u8, kv.key.string, "commit") and kv.value == .string) plugin.commit = self.arena.allocator().dupe(u8, kv.value.string) catch "" else if (std.mem.eql(u8, kv.key.string, "description") and kv.value == .string) plugin.description = self.arena.allocator().dupe(u8, kv.value.string) catch "";
+            }
+            if (plugin.name.len > 0) self.plugins.append(plugin) catch {};
+        }
+        std.sort.block(PluginInfo, self.plugins.items, {}, struct {
+            fn lessThan(_: void, a: PluginInfo, b: PluginInfo) bool {
+                return std.mem.lessThan(u8, a.name, b.name);
+            }
+        }.lessThan);
     }
 
     fn matchesSearch(self: *const LazyWidget, p: PluginInfo) bool {
