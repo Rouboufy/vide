@@ -64,6 +64,8 @@ pub fn rgbToAnsi256(r: u8, g: u8, b: u8) u8 {
 }
 
 pub const Renderer = struct {
+    const CursorPosition = struct { x: u16, y: u16 };
+
     buf: []Cell,
     prev: []Cell,
     width: u16,
@@ -71,6 +73,7 @@ pub const Renderer = struct {
     writer: *std.Io.Writer,
     true_color: bool = true,
     force_full_redraw: bool = true,
+    cursor_position: ?CursorPosition = null,
 
     pub fn init(allocator: std.mem.Allocator, width: u16, height: u16, writer: *std.Io.Writer) !Renderer {
         const size = @as(usize, width) * @as(usize, height);
@@ -107,6 +110,7 @@ pub const Renderer = struct {
 
     pub fn drawCursor(self: *Renderer, x: u16, y: u16) void {
         if (x >= self.width or y >= self.height) return;
+        self.cursor_position = .{ .x = x, .y = y };
         const cell = &self.buf[@as(usize, y) * @as(usize, self.width) + x];
         const old_fg = cell.fg;
         cell.fg = cell.bg;
@@ -119,6 +123,51 @@ pub const Renderer = struct {
 
     pub fn forceFullRedraw(self: *Renderer) void {
         self.force_full_redraw = true;
+    }
+
+    fn emitStyle(self: *Renderer, cell: Cell, cur_fg: *Color, cur_bg: *Color, cur_bold: *bool, cur_italic: *bool) !void {
+        var style_reset = false;
+        if (cell.bold != cur_bold.* or cell.italic != cur_italic.*) {
+            if ((cur_bold.* and !cell.bold) or (cur_italic.* and !cell.italic)) {
+                try self.writer.writeAll("\x1b[0m");
+                cur_fg.* = .none;
+                cur_bg.* = .none;
+                cur_bold.* = false;
+                cur_italic.* = false;
+                style_reset = true;
+            }
+            if (cell.bold and !cur_bold.*) {
+                try self.writer.writeAll("\x1b[1m");
+                cur_bold.* = true;
+            }
+            if (cell.italic and !cur_italic.*) {
+                try self.writer.writeAll("\x1b[3m");
+                cur_italic.* = true;
+            }
+        }
+
+        if (!std.meta.eql(cell.fg, cur_fg.*) or style_reset) {
+            cur_fg.* = cell.fg;
+            switch (cur_fg.*) {
+                .none => try self.writer.writeAll("\x1b[39m"),
+                .index => |i| try self.writer.print("\x1b[38;5;{d}m", .{i}),
+                .rgb => |rgb| if (self.true_color)
+                    try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b })
+                else
+                    try self.writer.print("\x1b[38;5;{d}m", .{rgbToAnsi256(rgb.r, rgb.g, rgb.b)}),
+            }
+        }
+        if (!std.meta.eql(cell.bg, cur_bg.*) or style_reset) {
+            cur_bg.* = cell.bg;
+            switch (cur_bg.*) {
+                .none => try self.writer.writeAll("\x1b[49m"),
+                .index => |i| try self.writer.print("\x1b[48;5;{d}m", .{i}),
+                .rgb => |rgb| if (self.true_color)
+                    try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b })
+                else
+                    try self.writer.print("\x1b[48;5;{d}m", .{rgbToAnsi256(rgb.r, rgb.g, rgb.b)}),
+            }
+        }
     }
 
     pub fn drawRect(self: *Renderer, rect: @import("layout.zig").Rect, char: []const u8, fg: Color, bg: Color) void {
@@ -206,6 +255,7 @@ pub const Renderer = struct {
         self.prev = new_prev;
         self.width = new_width;
         self.height = new_height;
+        self.cursor_position = null;
     }
 
     pub fn flush(self: *Renderer) !void {
@@ -215,6 +265,17 @@ pub const Renderer = struct {
             metrics.global.frame_count +|= 1;
             metrics.global.rendered_cells +|= @as(u64, self.width) * @as(u64, self.height);
         }
+        var has_damage = self.force_full_redraw and self.buf.len > 0;
+        if (!has_damage) {
+            for (self.buf, self.prev) |cell, previous| {
+                if (!std.meta.eql(cell, previous)) {
+                    has_damage = true;
+                    break;
+                }
+            }
+        }
+        if (!has_damage) return;
+
         var cur_fg: Color = .none;
         var cur_bg: Color = .none;
         var cur_bold: bool = false;
@@ -226,80 +287,47 @@ pub const Renderer = struct {
         var dirty_count: u64 = 0;
         var dirty_regions: u64 = 0;
         for (0..self.height) |y| {
-            var in_region = false;
-            for (0..self.width) |x| {
+            var x: usize = 0;
+            while (x < self.width) {
                 const idx = y * self.width + x;
-                const cell = self.buf[idx];
-                const prev_cell = self.prev[idx];
-
-                if (!self.force_full_redraw and std.meta.eql(cell, prev_cell)) {
-                    in_region = false;
+                if (!self.force_full_redraw and std.meta.eql(self.buf[idx], self.prev[idx])) {
+                    x += 1;
                     continue;
                 }
-                dirty_count +|= 1;
-                if (!in_region) dirty_regions +|= 1;
-                in_region = true;
-                if (cell.continuation) continue;
 
-                // Move cursor to 1-indexed console coordinates
-                try self.writer.print("\x1b[{d};{d}H", .{ y + 1, x + 1 });
-
-                var style_reset = false;
-
-                // Handle bold/italic modifications
-                if (cell.bold != cur_bold or cell.italic != cur_italic) {
-                    if ((cur_bold and !cell.bold) or (cur_italic and !cell.italic)) {
-                        // Reset all attributes if we need to remove bold or italic
-                        try self.writer.writeAll("\x1b[0m");
-                        cur_fg = .none;
-                        cur_bg = .none;
-                        cur_bold = false;
-                        cur_italic = false;
-                        style_reset = true;
-                    }
-
-                    if (cell.bold and !cur_bold) {
-                        try self.writer.writeAll("\x1b[1m");
-                        cur_bold = true;
-                    }
-                    if (cell.italic and !cur_italic) {
-                        try self.writer.writeAll("\x1b[3m");
-                        cur_italic = true;
-                    }
+                var run_start = x;
+                // A changed continuation cannot be painted independently;
+                // replay its wide-cell leader so terminal width stays aligned.
+                if (self.buf[idx].continuation and run_start > 0) run_start -= 1;
+                var run_end = x + 1;
+                while (run_end < self.width) : (run_end += 1) {
+                    const next_idx = y * self.width + run_end;
+                    if (!self.force_full_redraw and std.meta.eql(self.buf[next_idx], self.prev[next_idx])) break;
                 }
 
-                // Handle foreground color changes
-                if (!std.meta.eql(cell.fg, cur_fg) or style_reset) {
-                    cur_fg = cell.fg;
-                    switch (cur_fg) {
-                        .none => try self.writer.writeAll("\x1b[39m"),
-                        .index => |i| try self.writer.print("\x1b[38;5;{d}m", .{i}),
-                        .rgb => |rgb| if (self.true_color)
-                            try self.writer.print("\x1b[38;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b })
-                        else
-                            try self.writer.print("\x1b[38;5;{d}m", .{rgbToAnsi256(rgb.r, rgb.g, rgb.b)}),
-                    }
+                dirty_regions +|= 1;
+                for (x..run_end) |dirty_x| {
+                    const dirty_idx = y * self.width + dirty_x;
+                    if (self.force_full_redraw or !std.meta.eql(self.buf[dirty_idx], self.prev[dirty_idx])) dirty_count +|= 1;
                 }
-
-                // Handle background color changes
-                if (!std.meta.eql(cell.bg, cur_bg) or style_reset) {
-                    cur_bg = cell.bg;
-                    switch (cur_bg) {
-                        .none => try self.writer.writeAll("\x1b[49m"),
-                        .index => |i| try self.writer.print("\x1b[48;5;{d}m", .{i}),
-                        .rgb => |rgb| if (self.true_color)
-                            try self.writer.print("\x1b[48;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b })
-                        else
-                            try self.writer.print("\x1b[48;5;{d}m", .{rgbToAnsi256(rgb.r, rgb.g, rgb.b)}),
-                    }
+                // One absolute move per changed row run. Sequential writes,
+                // including style changes, then advance the terminal cursor.
+                try self.writer.print("\x1b[{d};{d}H", .{ y + 1, run_start + 1 });
+                for (run_start..run_end) |run_x| {
+                    const cell = self.buf[y * self.width + run_x];
+                    if (cell.continuation) continue;
+                    try self.emitStyle(cell, &cur_fg, &cur_bg, &cur_bold, &cur_italic);
+                    try self.writer.writeAll(cell.char[0..cell.len]);
                 }
-
-                try self.writer.writeAll(cell.char[0..cell.len]);
+                x = run_end;
             }
         }
 
         // Reset attributes on finish
         try self.writer.writeAll("\x1b[0m");
+        if (self.cursor_position) |cursor| {
+            try self.writer.print("\x1b[{d};{d}H", .{ cursor.y + 1, cursor.x + 1 });
+        }
         @memcpy(self.prev, self.buf);
         self.force_full_redraw = false;
         if (metrics.global.enabled) {
@@ -354,6 +382,131 @@ test "forced full redraw re-emits unchanged cells" {
     const forced_bytes = output.written().len - after_first - unchanged_bytes;
 
     try std.testing.expect(forced_bytes > unchanged_bytes);
+    try std.testing.expectEqualStrings("\x1b[?25l\x1b[0m\x1b[1;1HX\x1b[0m", output.written()[after_first + unchanged_bytes ..]);
+}
+
+test "row-run encoder golden batches adjacent cells with one cursor move" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 3, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    renderer.drawText(0, 0, "ABC", .none, .none, false, false);
+
+    try renderer.flush();
+    try std.testing.expectEqualStrings("\x1b[?25l\x1b[0m\x1b[1;1HABC\x1b[0m", output.written());
+}
+
+test "row-run encoder golden separates unchanged gaps and preserves right edge" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 5, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    try renderer.flush();
+    const start = output.written().len;
+
+    var left = Cell{};
+    left.setChar("L");
+    var right = Cell{};
+    right.setChar("R");
+    renderer.setCell(0, 0, left);
+    renderer.setCell(4, 0, right);
+    try renderer.flush();
+
+    try std.testing.expectEqualStrings("\x1b[?25l\x1b[0m\x1b[1;1HL\x1b[1;5HR\x1b[0m", output.written()[start..]);
+}
+
+test "row-run encoder emits nothing for an unchanged frame and restores virtual cursor" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 2, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    renderer.drawText(0, 0, "AB", .none, .none, false, false);
+    renderer.drawCursor(1, 0);
+    try renderer.flush();
+    try std.testing.expect(std.mem.endsWith(u8, output.written(), "\x1b[0m\x1b[1;2H"));
+
+    const first_frame_len = output.written().len;
+    try renderer.flush();
+    try std.testing.expectEqual(first_frame_len, output.written().len);
+}
+
+test "row-run encoder golden removes styles inside a run" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 2, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    var styled = Cell{ .fg = .{ .index = 2 }, .bold = true };
+    styled.setChar("A");
+    var plain = Cell{ .fg = .{ .index = 3 } };
+    plain.setChar("B");
+    renderer.setCell(0, 0, styled);
+    renderer.setCell(1, 0, plain);
+    try renderer.flush();
+
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "\x1b[1m\x1b[38;5;2mA\x1b[0m\x1b[38;5;3m\x1b[49mB") != null);
+}
+
+test "row-run encoder replays wide leader for either half of partial damage" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 3, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    renderer.drawText(0, 0, "界X", .none, .none, false, false);
+    try renderer.flush();
+
+    var changed_leader = renderer.buf[0];
+    changed_leader.setChar("語");
+    renderer.setCell(0, 0, changed_leader);
+    const leader_start = output.written().len;
+    try renderer.flush();
+    try std.testing.expect(std.mem.indexOf(u8, output.written()[leader_start..], "\x1b[1;1H語") != null);
+
+    renderer.buf[1].bg = .{ .index = 1 };
+    const continuation_start = output.written().len;
+    try renderer.flush();
+    try std.testing.expect(std.mem.indexOf(u8, output.written()[continuation_start..], "\x1b[1;1H語") != null);
+}
+
+test "row-run encoder golden handles unicode continuation combining style and erasure" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var renderer = try Renderer.init(std.testing.allocator, 4, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    try renderer.flush();
+    const start = output.written().len;
+
+    renderer.drawTextClipped(0, 0, 4, "界á", .{ .index = 2 }, .{ .index = 4 }, true, false);
+    try renderer.flush();
+    const unicode_frame = output.written()[start..];
+    try std.testing.expect(std.mem.indexOf(u8, unicode_frame, "\x1b[1;1H") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unicode_frame, "\x1b[1m\x1b[38;5;2m\x1b[48;5;4m界á") != null);
+
+    const erase_start = output.written().len;
+    renderer.setCell(0, 0, Cell{ .bg = .{ .index = 4 } });
+    renderer.setCell(1, 0, Cell{ .bg = .{ .index = 4 } });
+    try renderer.flush();
+    const erase_frame = output.written()[erase_start..];
+    try std.testing.expect(std.mem.indexOf(u8, erase_frame, "\x1b[1;1H") != null);
+    try std.testing.expect(std.mem.indexOf(u8, erase_frame, " ") != null);
+}
+
+test "row-run encoder reduces a full changed row by more than half versus per-cell moves" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    const width: u16 = 80;
+    var renderer = try Renderer.init(std.testing.allocator, width, 1, &output.writer);
+    defer renderer.deinit(std.testing.allocator);
+    for (0..width) |x| {
+        var cell = Cell{};
+        cell.setChar("X");
+        renderer.setCell(@intCast(x), 0, cell);
+    }
+    try renderer.flush();
+
+    // Legacy emitted at least a six-byte absolute move plus one glyph per
+    // changed cell. Include its common frame prefix/suffix in the comparison.
+    const legacy_lower_bound = 12 + @as(usize, width) * 7;
+    try std.testing.expect(output.written().len * 2 < legacy_lower_bound);
 }
 
 test "terminal cell width covers variation selectors nerd font symbols and double-width continuation cases" {
