@@ -4,6 +4,15 @@ const NvimProcess = @import("process.zig").NvimProcess;
 const msgpack = @import("msgpack.zig");
 const Value = msgpack.Value;
 const metrics = @import("../metrics.zig");
+const incremental = @import("incremental_decoder.zig");
+const async_transport = @import("async_transport.zig");
+
+pub const compatibility = struct {
+    /// Prompt 05A rollback seam. Prompt 05B will make this the transport's
+    /// sole decoder after reactor integration is accepted.
+    pub const incremental_decoder = false;
+    pub const async_transport_enabled = false;
+};
 
 pub const RpcClient = struct {
     process: NvimProcess,
@@ -13,6 +22,9 @@ pub const RpcClient = struct {
     on_notification: ?*const fn (ctx: ?*anyopaque, method: []const u8, params: Value) anyerror!void = null,
     on_notification_ctx: ?*anyopaque = null,
     reader: FdReader,
+    incremental_reader: incremental.Decoder,
+    transport: async_transport.Transport,
+    async_enabled: bool = false,
 
     pub fn init(process: NvimProcess, allocator: std.mem.Allocator, io: std.Io) RpcClient {
         return .{
@@ -20,11 +32,15 @@ pub const RpcClient = struct {
             .allocator = allocator,
             .io = io,
             .reader = FdReader.init(process.stdout.handle, allocator),
+            .incremental_reader = incremental.Decoder.init(allocator),
+            .transport = async_transport.Transport.init(allocator),
         };
     }
 
     pub fn deinit(self: *RpcClient) void {
         self.reader.deinit();
+        self.incremental_reader.deinit();
+        self.transport.deinit();
     }
 
     pub fn nextId(self: *RpcClient) u32 {
@@ -68,6 +84,7 @@ pub const RpcClient = struct {
     }
 
     pub fn call(self: *RpcClient, method: []const u8, params: []const Value) !Value {
+        if (self.async_enabled) return error.AsyncCallRequired;
         var timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_rpc);
         defer timer.stop();
         const id = self.nextId();
@@ -85,6 +102,7 @@ pub const RpcClient = struct {
     }
 
     pub fn notify(self: *RpcClient, method: []const u8, params: []const Value) !void {
+        if (self.async_enabled) return self.transport.queueNotification(method, params);
         var req_arr = try self.allocator.alloc(Value, 3);
         defer self.allocator.free(req_arr);
         req_arr[0] = .{ .integer = 2 };
@@ -131,6 +149,7 @@ pub const RpcClient = struct {
     }
 
     fn waitResponse(self: *RpcClient, id: u32) !Value {
+        if (compatibility.incremental_decoder) return self.waitResponseIncremental(id);
         var retries: usize = 0;
         const max_retries = 100;
         while (true) {
@@ -201,9 +220,54 @@ pub const RpcClient = struct {
         }
     }
 
+    fn waitResponseIncremental(self: *RpcClient, id: u32) !Value {
+        var retries: usize = 0;
+        while (true) {
+            const msg = (try self.incremental_reader.next()) orelse blk: {
+                const pump = try self.pumpIncrementalOnce();
+                if (try self.incremental_reader.next()) |decoded| break :blk decoded;
+                if (pump == .eof) return error.EndOfStream;
+                if (pump == .progress) {
+                    retries = 0;
+                    continue;
+                }
+                if (retries >= 100) return error.Timeout;
+                retries += 1;
+                var fds = [1]posix.pollfd{.{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 }};
+                _ = posix.poll(&fds, 100) catch {};
+                continue;
+            };
+            retries = 0;
+            errdefer msgpack.freeValue(msg, self.allocator);
+            if (msg != .array or msg.array.len < 3 or msg.array[0] != .integer) return error.InvalidRpcMessage;
+            const msg_type = msg.array[0].integer;
+            if (msg_type == 0 and msg.array.len >= 4 and msg.array[1] == .integer) {
+                self.replyError(msg.array[1].integer);
+                msgpack.freeValue(msg, self.allocator);
+            } else if (msg_type == 1 and msg.array.len >= 4 and msg.array[1] == .integer) {
+                if (msg.array[1].integer != id) {
+                    msgpack.freeValue(msg, self.allocator);
+                    continue;
+                }
+                if (msg.array[2] != .nil) return error.NvimRpcError;
+                const result = msg.array[3];
+                for (msg.array, 0..) |item, index| if (index != 3) msgpack.freeValue(item, self.allocator);
+                self.allocator.free(msg.array);
+                return result;
+            } else if (msg_type == 2 and msg.array[1] == .string) {
+                if (self.on_notification) |callback| try callback(self.on_notification_ctx, msg.array[1].string, msg.array[2]);
+                msgpack.freeValue(msg, self.allocator);
+            } else {
+                msgpack.freeValue(msg, self.allocator);
+            }
+        }
+    }
+
     pub fn processNotifications(self: *RpcClient) !bool {
+        if (self.async_enabled) return self.progressAsyncRead();
         var msg_count: usize = 0;
-        while (self.hasData() and msg_count < 250) : (msg_count += 1) {
+        const started = monotonicNanoseconds();
+        while (self.hasData() and msg_count < 250 and monotonicNanoseconds() - started < 2 * std.time.ns_per_ms) : (msg_count += 1) {
             if (!try self.processOneMessage()) return false;
         }
         if (metrics.global.enabled) {
@@ -213,7 +277,74 @@ pub const RpcClient = struct {
         return true;
     }
 
+    pub fn enableAsyncTransport(self: *RpcClient) void {
+        self.async_enabled = true;
+    }
+
+    pub fn wantsAsyncWrite(self: *const RpcClient) bool {
+        return self.async_enabled and self.transport.wantsWrite();
+    }
+
+    pub fn requestAsync(self: *RpcClient, method: []const u8, params: []const Value) !async_transport.RequestId {
+        if (!self.async_enabled) return error.AsyncTransportDisabled;
+        return self.transport.queueRequest(method, params);
+    }
+
+    pub fn takeAsyncCompletion(self: *RpcClient) ?async_transport.Completion {
+        return self.transport.takeCompletion();
+    }
+
+    pub fn progressAsyncWrite(self: *RpcClient) !void {
+        if (!self.async_enabled) return;
+        const Writer = struct {
+            fn write(fd: posix.fd_t, bytes: []const u8) !usize {
+                const rc = posix.system.write(fd, bytes.ptr, bytes.len);
+                return switch (posix.errno(rc)) {
+                    .SUCCESS => if (rc > 0) @intCast(rc) else error.Closed,
+                    .INTR, .AGAIN => 0,
+                    else => error.WriteFailed,
+                };
+            }
+        };
+        _ = try self.transport.flushOne(self.process.stdin.handle, Writer.write);
+    }
+
+    pub fn progressAsyncRead(self: *RpcClient) !bool {
+        if (!self.async_enabled) return error.AsyncTransportDisabled;
+        var bytes: [8192]u8 = undefined;
+        const rc = posix.system.read(self.process.stdout.handle, &bytes, bytes.len);
+        switch (posix.errno(rc)) {
+            .SUCCESS => if (rc == 0) {
+                self.transport.finish();
+            } else try self.transport.feed(bytes[0..@intCast(rc)]),
+            .INTR, .AGAIN => {},
+            else => return error.ReadFailed,
+        }
+        const started = monotonicNanoseconds();
+        var count: usize = 0;
+        while (count < 250 and monotonicNanoseconds() - started < 2 * std.time.ns_per_ms) : (count += 1) {
+            var inbound = try self.transport.nextInbound() orelse break;
+            defer inbound.deinit(self.allocator);
+            switch (inbound) {
+                .notification => |message| try self.dispatchNotificationOrRequest(message),
+                .request => |message| {
+                    if (message.array.len >= 2 and message.array[1] == .integer and message.array[1].integer > 0 and message.array[1].integer <= std.math.maxInt(u32)) {
+                        // A required reply may never be silently dropped. If
+                        // its reserved admission is exhausted, fail this
+                        // transport turn explicitly so the owner can close or
+                        // restart the channel rather than strand Neovim.
+                        try self.transport.queueReply(@enumFromInt(@as(u32, @intCast(message.array[1].integer))), .{ .string = "method not found" }, .nil);
+                    }
+                },
+                .unknown_response => {},
+                .response_completed => {},
+            }
+        }
+        return !self.transport.isEofDrained();
+    }
+
     fn processOneMessage(self: *RpcClient) !bool {
+        if (compatibility.incremental_decoder) return self.processOneIncrementalMessage();
         const checkpoint = self.reader.head;
         var decode_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.rpc_decode);
         const msg = msgpack.decode(&self.reader, self.allocator) catch |err| {
@@ -239,13 +370,69 @@ pub const RpcClient = struct {
         return true;
     }
 
+    fn processOneIncrementalMessage(self: *RpcClient) !bool {
+        const message = (try self.incremental_reader.next()) orelse blk: {
+            const pump = try self.pumpIncrementalOnce();
+            if (try self.incremental_reader.next()) |decoded| break :blk decoded;
+            return pump != .eof;
+        };
+        defer msgpack.freeValue(message, self.allocator);
+        try self.dispatchNotificationOrRequest(message);
+        return true;
+    }
+
+    /// One bounded transport read per dispatch turn. Prompt 05B will move this
+    /// operation into the reactor transport phase.
+    const PumpResult = enum { progress, would_block, eof };
+
+    fn pumpIncrementalOnce(self: *RpcClient) !PumpResult {
+        var temporary: [8192]u8 = undefined;
+        while (true) {
+            const rc = posix.system.read(self.process.stdout.handle, &temporary, temporary.len);
+            switch (posix.errno(rc)) {
+                .SUCCESS => {
+                    if (rc == 0) {
+                        self.incremental_reader.finish();
+                        return .eof;
+                    }
+                    try self.incremental_reader.feed(temporary[0..@intCast(rc)]);
+                    return .progress;
+                },
+                .INTR => continue,
+                .AGAIN => return .would_block,
+                else => return error.ReadFailed,
+            }
+        }
+    }
+
+    fn dispatchNotificationOrRequest(self: *RpcClient, msg: Value) !void {
+        if (msg != .array or msg.array.len < 3 or msg.array[0] != .integer) return;
+        const msg_type = msg.array[0].integer;
+        if (msg_type == 0 and msg.array.len >= 4 and msg.array[1] == .integer) {
+            self.replyError(msg.array[1].integer);
+        } else if (msg_type == 2 and msg.array[1] == .string) {
+            if (self.on_notification) |cb| {
+                var callback_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.callback_dispatch);
+                defer callback_timer.stop();
+                try cb(self.on_notification_ctx, msg.array[1].string, msg.array[2]);
+            }
+        }
+    }
+
     pub fn hasData(self: *RpcClient) bool {
+        if (compatibility.incremental_decoder and self.incremental_reader.bufferedLen() != 0) return true;
         if (self.reader.head < self.reader.buf.items.len) return true;
         var fds = [1]posix.pollfd{.{ .fd = self.process.stdout.handle, .events = posix.POLL.IN, .revents = 0 }};
         const rc = posix.poll(&fds, 0) catch return false;
         return rc > 0 and (fds[0].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR)) != 0;
     }
 };
+
+fn monotonicNanoseconds() i128 {
+    var now: posix.timespec = undefined;
+    _ = posix.system.clock_gettime(posix.CLOCK.MONOTONIC, &now);
+    return @as(i128, now.sec) * std.time.ns_per_s + now.nsec;
+}
 
 pub const FdReader = struct {
     fd: posix.fd_t,

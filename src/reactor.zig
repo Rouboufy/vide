@@ -101,7 +101,6 @@ pub const Reactor = struct {
     registration_count: usize = 0,
 
     pub fn add(self: *Reactor, fd: posix.fd_t, source: Source, interest: Interest) !Token {
-        if (!interest.read and !interest.write) return error.EmptyInterest;
         for (&self.slots) |*slot| {
             if (slot.active and slot.source == source) return error.DuplicateSource;
         }
@@ -142,7 +141,6 @@ pub const Reactor = struct {
     }
 
     pub fn update(self: *Reactor, token: Token, interest: Interest) !void {
-        if (!interest.read and !interest.write) return error.EmptyInterest;
         const slot = self.validSlot(token) orelse return error.StaleToken;
         slot.interest = interest;
     }
@@ -201,6 +199,14 @@ test "phase order is deterministic" {
     try std.testing.expectError(error.InvalidReactorPhase, phases.enter(.composition));
     try phases.enter(.shutdown);
     try std.testing.expectError(error.InvalidReactorPhase, phases.enter(.shutdown));
+}
+
+test "dormant interest can be armed without descriptor churn" {
+    var reactor = Reactor{};
+    const token = try reactor.add(7, .nvim_editor_write, .{});
+    try reactor.update(token, .{ .write = true });
+    try reactor.update(token, .{});
+    try std.testing.expect(reactor.remove(token));
 }
 
 test "shutdown is a validated terminal transition from every runtime phase" {

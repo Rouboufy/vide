@@ -688,10 +688,20 @@ fn runNvimSession(
     _ = try reactor.add(sigwinch_read_fd, .resize_signal, .{ .read = true });
     _ = try reactor.add(rpc.process.stdout.handle, .nvim_editor_read, .{ .read = true });
     _ = try reactor.add(rpc_term.process.stdout.handle, .nvim_terminal_read, .{ .read = true });
+    var editor_write_token: ?reactor_mod.Token = null;
+    var terminal_write_token: ?reactor_mod.Token = null;
+    if (@import("nvim/rpc.zig").compatibility.async_transport_enabled) {
+        rpc.enableAsyncTransport();
+        rpc_term.enableAsyncTransport();
+        editor_write_token = try reactor.add(rpc.process.stdin.handle, .nvim_editor_write, .{});
+        terminal_write_token = try reactor.add(rpc_term.process.stdin.handle, .nvim_terminal_write, .{});
+    }
     var task_token: ?reactor_mod.Token = null;
     if (background) |runner| task_token = try reactor.add(runner.notifierFd(), .task_completion, .{ .read = true });
     defer {
         if (task_token) |token| _ = reactor.remove(token);
+        if (editor_write_token) |token| _ = reactor.remove(token);
+        if (terminal_write_token) |token| _ = reactor.remove(token);
     }
     var phases = reactor_mod.PhaseTracker{};
     defer phases.enter(.shutdown) catch @panic("invalid reactor shutdown transition");
@@ -791,6 +801,8 @@ fn runNvimSession(
         }
 
         const timeout: i32 = if (input.sigwinch_received.load(.monotonic)) 0 else 1000;
+        if (editor_write_token) |token| try reactor.update(token, .{ .write = rpc.wantsAsyncWrite() });
+        if (terminal_write_token) |token| try reactor.update(token, .{ .write = rpc_term.wantsAsyncWrite() });
         try phases.enter(.readiness_collection);
         var poll_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.poll_wakeup);
         const ready = reactor.collect(timeout) catch |err| {
@@ -828,6 +840,8 @@ fn runNvimSession(
                 return;
             }
         }
+        if (readiness.editor_write) try rpc.progressAsyncWrite();
+        if (readiness.terminal_write) try rpc_term.progressAsyncWrite();
         try phases.enter(.normalized_event_dispatch);
         if (readiness.task_completion and drainGitRefreshes(alloc, background.?, &git_owners, &git_panel)) app.needs_resize = true;
         var normalized_input: ?input.Event = null;
