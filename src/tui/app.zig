@@ -209,6 +209,7 @@ pub const App = struct {
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         if (ts.sec >= self.notice_deadline) {
             self.notice_len = 0;
+            self.invalidations.damage(.overlay);
             return null;
         }
         return self.notice_text[0..self.notice_len];

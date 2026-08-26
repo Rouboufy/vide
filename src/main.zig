@@ -822,9 +822,12 @@ fn runNvimSession(
         if (first_frame) std.log.info("Drawing first frame", .{});
         if (tracked_cycle) try phases.enter(.composition);
         var composition_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.composition);
-        views.drawWorkspace(&app, layout);
-        if (app.invalidations.forced_full_redraw != null) ren.forceFullRedraw();
+        const composition_damage = app.invalidations.composition;
+        const cursor_damage = app.invalidations.cursor;
+        const force_full_redraw = app.invalidations.forced_full_redraw != null;
         _ = app.invalidations.consumePaint();
+        views.drawWorkspace(&app, layout, composition_damage, cursor_damage);
+        if (force_full_redraw) ren.forceFullRedraw();
 
         if (!app.settings_widget.is_open and app.was_settings_open) {
             if (alloc.dupeSentinel(u8, preview_path, 0)) |p| {
@@ -843,7 +846,12 @@ fn runNvimSession(
             const panel = layout.panel.?;
             break :panel_info panel.y + 1 + ui_term.cursor_y;
         } else @as(u16, @intCast(@max(0, @as(i32, @intCast(layout.editor.y)) + cursor_pos.y)));
-        ren.drawCursor(final_cursor_x, final_cursor_y);
+        const cursor_region_damaged = cursor_damage or composition_damage.overlay or
+            (if (app.terminal_focus and app.active_terminal_panel_idx == 0)
+                composition_damage.drawer
+            else
+                composition_damage.editor);
+        if (cursor_region_damaged) ren.drawCursor(final_cursor_x, final_cursor_y);
         composition_timer.stop();
         if (tracked_cycle) try phases.enter(.flush);
         try ren.flush();
