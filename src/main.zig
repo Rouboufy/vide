@@ -32,6 +32,8 @@ const events = @import("tui/events.zig");
 const Capabilities = @import("tui/capabilities.zig").Capabilities;
 const metrics = @import("metrics.zig");
 const reactor_mod = @import("reactor.zig");
+const git_snapshot = @import("git_snapshot.zig");
+const task_runner = @import("task_runner.zig");
 
 var global_term: ?*Terminal = null;
 var log_path: ?[]const u8 = null;
@@ -58,6 +60,41 @@ const ReactorReadiness = struct {
         }
     }
 };
+
+fn submitGitRefresh(allocator: std.mem.Allocator, runner: *task_runner.Runner, owners: *task_runner.OwnerRegistry, owner: task_runner.OwnerId, invalidate: bool) !void {
+    const generation = if (invalidate) try owners.invalidate(owner) else owners.generation(owner) orelse return error.UnknownOwner;
+    const task_id = try owners.nextTask(owner);
+    errdefer std.debug.assert(owners.rollbackTask(owner, task_id));
+    var command = try task_runner.Command.init(allocator, .refresh_latest, owner, generation, null, ".");
+    command.task_id = task_id;
+    var caller_owns = true;
+    defer if (caller_owns) command.deinit(allocator);
+    try runner.submit(command);
+    caller_owns = false;
+}
+
+fn drainGitRefreshes(allocator: std.mem.Allocator, runner: *task_runner.Runner, owners: *task_runner.OwnerRegistry, panel: *GitPanel) bool {
+    var changed = false;
+    while (runner.takeCompletion()) |completion_value| {
+        var completion = completion_value;
+        var accepted = owners.validate(allocator, &completion) orelse continue;
+        defer accepted.deinit(allocator);
+        switch (accepted.outcome) {
+            .success => |*result| switch (result.*) {
+                .refresh_latest => |*snapshot| {
+                    panel.applySnapshot(snapshot) catch |err| {
+                        std.log.warn("Git snapshot apply failed: {}", .{err});
+                        continue;
+                    };
+                    changed = true;
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+    return changed;
+}
 
 pub const std_options: std.Options = .{ .logFn = log };
 
@@ -431,10 +468,25 @@ fn runNvimSession(
     var git_panel = GitPanel.init(alloc, init.io);
     defer git_panel.deinit();
     app.git_panel = &git_panel;
-    git_panel.refresh() catch |err| {
-        std.log.err("Git panel initial refresh failed: {}", .{err});
-        app.notify(.warning, "Git integration is unavailable: {}", .{err});
-    };
+    var git_owners = task_runner.OwnerRegistry{};
+    var git_owner: ?task_runner.OwnerId = null;
+    var background: ?*task_runner.Runner = null;
+    defer {
+        if (background) |runner| {
+            if (git_owner) |owner| {
+                runner.cancelOwner(owner);
+                _ = git_owners.close(owner);
+            }
+            runner.deinit();
+        }
+    }
+    if (git_snapshot.compatibility.periodic_synchronous_refresh) {
+        git_panel.refresh() catch |err| std.log.warn("Initial Git refresh failed: {}", .{err});
+    } else {
+        git_owner = try git_owners.create();
+        background = try task_runner.Runner.init(alloc, .{});
+        submitGitRefresh(alloc, background.?, &git_owners, git_owner.?, false) catch |err| std.log.warn("Initial Git refresh admission failed: {}", .{err});
+    }
 
     var search_panel = SearchPanel.init(alloc);
     defer search_panel.deinit();
@@ -636,6 +688,11 @@ fn runNvimSession(
     _ = try reactor.add(sigwinch_read_fd, .resize_signal, .{ .read = true });
     _ = try reactor.add(rpc.process.stdout.handle, .nvim_editor_read, .{ .read = true });
     _ = try reactor.add(rpc_term.process.stdout.handle, .nvim_terminal_read, .{ .read = true });
+    var task_token: ?reactor_mod.Token = null;
+    if (background) |runner| task_token = try reactor.add(runner.notifierFd(), .task_completion, .{ .read = true });
+    defer {
+        if (task_token) |token| _ = reactor.remove(token);
+    }
     var phases = reactor_mod.PhaseTracker{};
     defer phases.enter(.shutdown) catch @panic("invalid reactor shutdown transition");
     var tracked_cycle = false;
@@ -648,10 +705,13 @@ fn runNvimSession(
         if (now - app.last_explorer_refresh >= 2) {
             app.last_explorer_refresh = now;
             if (app.activity_bar.active_idx == 2) {
-                app.git_panel.refresh() catch |err| {
-                    std.log.warn("Git panel refresh failed: {}", .{err});
+                if (git_snapshot.compatibility.periodic_synchronous_refresh) {
+                    app.git_panel.refresh() catch |err| std.log.warn("Git panel refresh failed: {}", .{err});
+                    app.needs_resize = true;
+                } else submitGitRefresh(alloc, background.?, &git_owners, git_owner.?, true) catch |err| switch (err) {
+                    error.RunnerBusy => {},
+                    else => std.log.warn("Git refresh admission failed: {}", .{err}),
                 };
-                app.needs_resize = true;
             }
         }
 
@@ -769,6 +829,7 @@ fn runNvimSession(
             }
         }
         try phases.enter(.normalized_event_dispatch);
+        if (readiness.task_completion and drainGitRefreshes(alloc, background.?, &git_owners, &git_panel)) app.needs_resize = true;
         var normalized_input: ?input.Event = null;
         if (readiness.terminal_input) {
             var input_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.input_decode);

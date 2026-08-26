@@ -1,6 +1,8 @@
 test "all core modules compile and register their tests" {
     _ = @import("metrics.zig");
     _ = @import("reactor.zig");
+    _ = @import("task_runner.zig");
+    _ = @import("git_snapshot.zig");
     _ = @import("nvim/msgpack.zig");
     _ = @import("nvim/process.zig");
     _ = @import("nvim/rpc.zig");
@@ -10,6 +12,7 @@ test "all core modules compile and register their tests" {
     _ = @import("tui/capabilities.zig");
     _ = @import("tui/theme.zig");
     _ = @import("tui/widgets/primitives.zig");
+    _ = @import("tui/widgets/git_panel.zig");
     _ = @import("tui/widgets/bug_report.zig");
     _ = @import("tui/widgets/editor_context_menu.zig");
 }

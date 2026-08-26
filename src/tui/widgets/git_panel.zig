@@ -3,6 +3,7 @@ const renderer = @import("../renderer.zig");
 const Color = renderer.Color;
 const Rect = @import("../layout.zig").Rect;
 const git_utils = @import("git_utils.zig");
+const GitSnapshot = @import("../../git_snapshot.zig").GitSnapshot;
 
 pub const GitItem = struct {
     path: []const u8,
@@ -17,10 +18,10 @@ pub const GitPanel = struct {
     io: std.Io,
     arena: std.heap.ArenaAllocator,
     items: std.array_list.Managed(GitItem),
-    
+
     current_branch: ?[]const u8 = null,
     recent_commits: std.array_list.Managed([]const u8),
-    
+
     scroll_y: usize = 0,
     selected_idx: ?usize = null,
 
@@ -101,12 +102,12 @@ pub const GitPanel = struct {
             if (line.len < 4) continue;
             const status = line[0..2];
             const rel_path = line[3..];
-            
+
             var clean_path = rel_path;
             if (clean_path.len > 0 and clean_path[0] == '"' and clean_path[clean_path.len - 1] == '"') {
                 clean_path = clean_path[1 .. clean_path.len - 1];
             }
-            
+
             // X is index, Y is working tree
             const is_staged = (status[0] != ' ' and status[0] != '?');
             const is_unstaged = (status[1] != ' ');
@@ -135,6 +136,23 @@ pub const GitPanel = struct {
                 return std.mem.lessThan(u8, a.path, b.path);
             }
         }.lessThan);
+    }
+
+    /// Reactor-thread ownership transfer from the background refresh worker.
+    /// Snapshot storage is copied into the panel arena before it is released;
+    /// no worker-owned pointer survives this call.
+    pub fn applySnapshot(self: *GitPanel, snapshot: *const GitSnapshot) !void {
+        self.items.clearRetainingCapacity();
+        self.recent_commits.clearRetainingCapacity();
+        _ = self.arena.reset(.retain_capacity);
+        const owned = self.arena.allocator();
+        self.current_branch = if (snapshot.branch) |branch| try owned.dupe(u8, branch) else null;
+        for (snapshot.commits) |commit_line| try self.recent_commits.append(try owned.dupe(u8, commit_line));
+        for (snapshot.status) |item| try self.items.append(.{
+            .path = try owned.dupe(u8, item.path),
+            .status = item.code,
+            .is_staged = item.staged,
+        });
     }
 
     pub fn handleMouse(self: *GitPanel, m_col: u16, m_row: u16, rect: Rect) !?[]const u8 {
@@ -171,7 +189,7 @@ pub const GitPanel = struct {
 
             // Headers and lists
             var i: usize = self.scroll_y;
-            
+
             var has_staged = false;
             var has_unstaged = false;
             for (self.items.items) |item| {
@@ -186,7 +204,10 @@ pub const GitPanel = struct {
                 }
                 cy += 1;
                 if (self.is_staged_open) {
-                    while (i < self.items.items.len and self.items.items[i].is_staged and cy < rect.h) : ({ i += 1; cy += 1; }) {
+                    while (i < self.items.items.len and self.items.items[i].is_staged and cy < rect.h) : ({
+                        i += 1;
+                        cy += 1;
+                    }) {
                         if (cy == rel_y) {
                             self.selected_idx = i;
                             // check action buttons
@@ -209,7 +230,10 @@ pub const GitPanel = struct {
                 }
                 cy += 1;
                 if (self.is_changes_open) {
-                    while (i < self.items.items.len and !self.items.items[i].is_staged and cy < rect.h) : ({ i += 1; cy += 1; }) {
+                    while (i < self.items.items.len and !self.items.items[i].is_staged and cy < rect.h) : ({
+                        i += 1;
+                        cy += 1;
+                    }) {
                         if (cy == rel_y) {
                             self.selected_idx = i;
                             // check action buttons
@@ -304,7 +328,7 @@ pub const GitPanel = struct {
         if (git_utils.runGitCommand(self.allocator, self.io, &argv)) |res| {
             self.allocator.free(res);
         } else |_| {}
-        
+
         self.commit_len = 0;
         self.is_focus_commit = false;
         try self.refresh();
@@ -333,10 +357,10 @@ pub const GitPanel = struct {
 
     pub fn draw(self: *GitPanel, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
         rend.drawRect(rect, " ", colors.fg_primary, colors.bg_sidebar);
-        
+
         // Draw title
         drawTextClipped(rend, rect.x + 1, rect.y, "SOURCE CONTROL", rect.w - 1, colors.fg_secondary, colors.bg_sidebar, true, false);
-        
+
         // Detailed widget button
         if (rect.w >= 12) {
             rend.drawText(rect.x + rect.w - 10, rect.y, "[ More ]", colors.fg_accent, colors.bg_editor, true, false);
@@ -356,7 +380,7 @@ pub const GitPanel = struct {
         // Commit Box
         const c_bg = if (self.is_focus_commit) colors.bg_editor else colors.bg_sidebar;
         rend.drawRect(Rect{ .x = rect.x + 1, .y = rect.y + cy, .w = rect.w - 2, .h = 1 }, " ", colors.fg_primary, c_bg);
-        const msg = std.fmt.bufPrint(&buf, "{s}{s}", .{self.commit_buf[0..self.commit_len], if (self.is_focus_commit) "_" else ""}) catch "";
+        const msg = std.fmt.bufPrint(&buf, "{s}{s}", .{ self.commit_buf[0..self.commit_len], if (self.is_focus_commit) "_" else "" }) catch "";
         if (msg.len > 0) {
             drawTextClipped(rend, rect.x + 2, rect.y + cy, msg, rect.w - 4, colors.fg_primary, c_bg, false, false);
         } else {
@@ -373,7 +397,7 @@ pub const GitPanel = struct {
         cy += 1;
 
         var i: usize = self.scroll_y;
-        
+
         var has_staged = false;
         var has_unstaged = false;
         for (self.items.items) |item| {
@@ -387,7 +411,10 @@ pub const GitPanel = struct {
             drawTextClipped(rend, rect.x + 1, rect.y + cy, header, rect.w - 1, colors.fg_secondary, colors.bg_sidebar, true, false);
             cy += 1;
             if (self.is_staged_open) {
-                while (i < self.items.items.len and self.items.items[i].is_staged and cy < rect.h) : ({ i += 1; cy += 1; }) {
+                while (i < self.items.items.len and self.items.items[i].is_staged and cy < rect.h) : ({
+                    i += 1;
+                    cy += 1;
+                }) {
                     const item = self.items.items[i];
                     const is_sel = (self.selected_idx != null and self.selected_idx.? == i);
                     const bg = if (is_sel) colors.bg_editor else colors.bg_sidebar;
@@ -409,7 +436,10 @@ pub const GitPanel = struct {
             drawTextClipped(rend, rect.x + 1, rect.y + cy, header, rect.w - 1, colors.fg_secondary, colors.bg_sidebar, true, false);
             cy += 1;
             if (self.is_changes_open) {
-                while (i < self.items.items.len and !self.items.items[i].is_staged and cy < rect.h) : ({ i += 1; cy += 1; }) {
+                while (i < self.items.items.len and !self.items.items[i].is_staged and cy < rect.h) : ({
+                    i += 1;
+                    cy += 1;
+                }) {
                     const item = self.items.items[i];
                     const is_sel = (self.selected_idx != null and self.selected_idx.? == i);
                     const bg = if (is_sel) colors.bg_editor else colors.bg_sidebar;
@@ -444,3 +474,17 @@ pub const GitPanel = struct {
         }
     }
 };
+
+test "applySnapshot copies independently owned Git model state" {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var panel = GitPanel.init(std.testing.allocator, threaded.io());
+    defer panel.deinit();
+    var snapshot = try GitSnapshot.parse(std.testing.allocator, "feature\n", "abc - subject\n", "M  staged.zig\x00 M changed.zig\x00");
+    try panel.applySnapshot(&snapshot);
+    snapshot.deinit();
+    try std.testing.expectEqualStrings("feature", panel.current_branch.?);
+    try std.testing.expectEqualStrings("abc - subject", panel.recent_commits.items[0]);
+    try std.testing.expectEqualStrings("staged.zig", panel.items.items[0].path);
+    try std.testing.expectEqualStrings("changed.zig", panel.items.items[1].path);
+}

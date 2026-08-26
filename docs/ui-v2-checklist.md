@@ -19,8 +19,8 @@ Use this checklist alongside `docs/ui-v2-implementation-playbook.md`.
 ## Responsiveness foundation
 
 - [X] 04A — Task-runner design record
-- [ ] 04B — Deterministic task runner
-- [ ] 04C — Git refresh migration
+- [X] 04B — Deterministic task runner
+- [X] 04C — Git refresh migration
 - [ ] 05A — RPC framing and decoder
 - [ ] 05B — Asynchronous RPC transport
 - [ ] 05C — RPC call-site migration
