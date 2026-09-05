@@ -28,6 +28,7 @@ pub const RpcClient = struct {
     incremental_reader: incremental.Decoder,
     transport: async_transport.Transport,
     async_enabled: bool = false,
+    async_read_pending: bool = false,
     handlers: [async_transport.max_pending_requests]?HandlerEntry = [_]?HandlerEntry{null} ** async_transport.max_pending_requests,
     handler_len: usize = 0,
 
@@ -297,6 +298,13 @@ pub const RpcClient = struct {
         return self.async_enabled and self.transport.wantsWrite();
     }
 
+    /// A bounded read turn may leave complete frames in the userspace decoder
+    /// after the kernel pipe has been drained. Keep the reactor runnable until
+    /// nextInbound() confirms that buffered input is exhausted.
+    pub fn wantsAsyncReadProgress(self: *const RpcClient) bool {
+        return self.async_enabled and self.async_read_pending;
+    }
+
     pub fn requestAsync(self: *RpcClient, method: []const u8, params: []const Value) !async_transport.RequestId {
         return self.requestAsyncWithDeadline(method, params, monotonicNanoseconds() + default_request_timeout_ns);
     }
@@ -307,6 +315,17 @@ pub const RpcClient = struct {
     }
 
     pub fn requestAsyncWithHandler(self: *RpcClient, method: []const u8, params: []const Value, context: ?*anyopaque, callback: AsyncHandler) !async_transport.RequestId {
+        if (!self.async_enabled) {
+            const result = try self.call(method, params);
+            const fallback_id: async_transport.RequestId = @enumFromInt(0);
+            var completion = async_transport.Completion{
+                .id = fallback_id,
+                .outcome = .{ .response = .{ .error_value = .nil, .result = result } },
+            };
+            defer completion.deinit(self.allocator);
+            try callback(context, &completion);
+            return fallback_id;
+        }
         if (self.handler_len == self.handlers.len) return error.HandlerRegistryFull;
         const id = try self.requestAsync(method, params);
         self.handlers[self.handler_len] = .{ .id = id, .context = context, .callback = callback };
@@ -332,6 +351,7 @@ pub const RpcClient = struct {
     }
 
     pub fn finishAsync(self: *RpcClient, reason: async_transport.FailureReason) !void {
+        self.async_read_pending = false;
         self.transport.finishWithReason(reason);
         var first_error: ?anyerror = null;
         while (!self.transport.isEofDrained()) {
@@ -358,6 +378,7 @@ pub const RpcClient = struct {
     }
 
     pub fn shutdownAsync(self: *RpcClient) !void {
+        self.async_read_pending = false;
         self.transport.shutdown();
         try self.dispatchQueuedCompletions();
     }
@@ -379,6 +400,7 @@ pub const RpcClient = struct {
 
     pub fn progressAsyncRead(self: *RpcClient) !bool {
         if (!self.async_enabled) return error.AsyncTransportDisabled;
+        self.async_read_pending = false;
         var bytes: [8192]u8 = undefined;
         const rc = posix.system.read(self.process.stdout.handle, &bytes, bytes.len);
         switch (posix.errno(rc)) {
@@ -390,8 +412,12 @@ pub const RpcClient = struct {
         }
         const started = monotonicNanoseconds();
         var count: usize = 0;
+        var decoder_drained = false;
         while (count < 250 and monotonicNanoseconds() - started < 2 * std.time.ns_per_ms) : (count += 1) {
-            var inbound = try self.transport.nextInbound() orelse break;
+            var inbound = try self.transport.nextInbound() orelse {
+                decoder_drained = true;
+                break;
+            };
             defer inbound.deinit(self.allocator);
             switch (inbound) {
                 .notification => |message| try self.dispatchNotificationOrRequest(message),
@@ -408,6 +434,7 @@ pub const RpcClient = struct {
                 .response_completed => try self.dispatchQueuedCompletions(),
             }
         }
+        self.async_read_pending = !decoder_drained and !self.transport.isEofDrained();
         if (self.transport.isEofDrained()) try self.dispatchQueuedCompletions();
         return !self.transport.isEofDrained();
     }

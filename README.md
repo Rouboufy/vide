@@ -90,6 +90,19 @@ The active mode appears at the left of Vide's bottom mode row. Click that badge
 to open the mode selector. Zen removes all other Vide chrome; press F11 to
 return to the exact Normal or IDE mode that was active before entering Zen.
 
+Normal now uses one compact workspace sidebar for open files and tools, with
+the current file in the editor header. `F1` opens a searchable command menu;
+`F6` and `Shift+F6` move between the editor, sidebar, and terminal. In the
+sidebar, use arrows or `j`/`k` and Enter, or click an item. Escape returns from
+a tool to the workspace list, then to the editor. At widths below 40 columns,
+the sidebar collapses automatically and commands remain available through F1.
+
+Zen hides the sidebar and terminal panel and focuses the editor. Leaving Zen
+restores the previous sidebar/terminal focus and keeps the existing terminal
+session alive. Its quiet footer provides a clickable return action. Normal's
+footer displays Neovim's current editing mode; the separate IDE preset retains
+its existing shell.
+
 ### First Run
 
 On its first launch, Vide opens an offline-capable onboarding guide. Choose
@@ -263,8 +276,10 @@ These keybindings are handled directly by the Vide TUI layer:
 | Action | Keybinding |
 | :--- | :--- |
 | **Toggle Zen / previous mode** | `F11` |
-| **Report a bug** | `F12` or the bottom-right button |
-| **Toggle File Explorer** | `Ctrl + E` |
+| **Search commands** | `F1` or click Commands in the header |
+| **Next / previous region** | `F6` / `Shift + F6` |
+| **Report a bug** | Commands → Report bug (`F12` also in IDE mode) |
+| **Toggle workspace sidebar** | `Ctrl + E` |
 | **Toggle Terminal Panel** | `Ctrl + T` |
 | **Resize Panel Left** | `Alt + ←` |
 | **Resize Panel Right** | `Alt + →` |
@@ -280,7 +295,7 @@ These shipped mappings apply primarily in Normal mode (`Leader = Space`). IDE mo
 | **Save file** | `Ctrl + S` |
 | **Force quit Vide** | `Ctrl + Q` |
 | **Open new buffer** | `Ctrl + N` |
-| **Find files (Telescope)** | `Space f f` or `Ctrl + F` |
+| **Find files (Telescope, with a filename prompt when plugins are unavailable)** | `Space f f` or `Ctrl + P` |
 | **Live grep (Telescope)** | `Space f g` |
 | **Toggle Neo-tree** | `Space e` |
 | **Toggle bottom terminal split** | `Space o t` |
@@ -299,7 +314,36 @@ These shipped mappings apply primarily in Normal mode (`Leader = Space`). IDE mo
 | **Move lines up** | `K` (Visual) |
 
 > [!NOTE]
-> Core TUI keybindings—including Ctrl+E, Ctrl+T, F11, Ctrl+N, Ctrl+F, and Ctrl+Q—can be customized in Vide's native Settings panel. Editor-level mappings can differ between Normal and IDE modes.
+> Core TUI keybindings can be customized in native Settings. Open F1 → Keyboard
+> shortcuts, press Right to enter the list, select an action, and press Enter to
+> record a key. Duplicate bindings are rejected. Press `r` to reset the selected
+> action and `Ctrl+S` to save and close. Existing saved bindings are preserved,
+> including an older Ctrl+F mapping for finding files.
+
+In the F1 command menu, select any command and press `F2`, or click its
+shortcut column, to assign or replace its shortcut. Press a Ctrl/Alt combination
+or function key to save immediately; Escape cancels. Conflicting shortcuts are
+rejected. The **Command menu** entry lets you change the F1 binding itself.
+**Close buffer** closes the current buffer and asks before discarding unsaved
+changes. **Switch buffers** opens a searchable list of open buffers, including
+paths and current/modified indicators. Use arrows and Enter, or click a result;
+Escape returns to the command menu. Both buffer commands start without a
+shortcut so you can assign your preferred keys. The buffer list works without
+plugins, including in Zen and narrow terminals.
+
+The shortcut editor also offers `v` for a Vim-safe preset (Alt+E sidebar,
+Alt+T terminal, Alt+N new file, Alt+P files) and `p` for a familiar IDE preset
+(Ctrl+B sidebar, Ctrl+T terminal, Ctrl+N new file, Ctrl+P files). Both use
+Ctrl+S to save, F1 for commands, F6 for region focus, and F11 for Zen. Presets
+replace the core bindings only when selected; save with Ctrl+S. Neovim's leader
+mappings and editor configuration remain available independently. Shell bindings
+take precedence, so use the Vim-safe preset to keep Neovim's Ctrl-key motions
+and completion commands. While Telescope is open, its local shortcuts take
+precedence: Ctrl+N/P moves through results, Enter opens, Tab marks, Alt+P toggles
+the preview, and Escape closes in one press. The command-menu and Zen shortcuts
+close the picker before changing context. Pickers share a top search prompt,
+filename-first results, thin theme-aware borders, and a preview that hides in
+narrow windows. The footer also exposes mouse actions.
 
 In IDE mode, Shift+Arrow extends the selection, Ctrl/Cmd+Shift+Left or Right
 selects by word, and Ctrl/Cmd+A selects the buffer. Ctrl/Cmd+S, Z, C, X, and V
@@ -320,6 +364,15 @@ The Editor tab in Settings controls the optional column ruler. It defaults to
 Off and provides validated presets for columns 80, 100, 120, and `80,120`.
 Changes apply immediately to current and new file windows. Dashboards,
 terminals, help, settings, and other non-file buffers never show the ruler.
+
+In Settings > Appearance > Theme, **System (follow desktop)** follows the
+current Omarchy palette for editor, syntax, sidebar, and selection colors.
+It reads `omarchy/current/theme/colors.toml` under `XDG_STATE_HOME` (normally
+`~/.local/state`), with the older `XDG_CONFIG_HOME` location as a fallback.
+Changes apply automatically while Vide is open. The option needs no theme
+plugin and keeps `system` as the saved preference. If the palette is missing
+or invalid at startup, Vide reports that it is using default colors and keeps
+watching for a valid palette. Choosing another theme stops following the desktop.
 
 ### Language Tools
 

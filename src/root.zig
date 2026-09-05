@@ -13,6 +13,7 @@ test "all core modules compile and register their tests" {
     _ = @import("tui/layout.zig");
     _ = @import("tui/invalidation.zig");
     _ = @import("tui/views.zig");
+    _ = @import("tui/workspace.zig");
     _ = @import("tui/input.zig");
     _ = @import("tui/capabilities.zig");
     _ = @import("tui/theme.zig");

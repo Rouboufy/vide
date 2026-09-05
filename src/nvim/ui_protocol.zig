@@ -4,6 +4,12 @@ const Value = msgpack.Value;
 const Color = @import("../tui/renderer.zig").Color;
 const Cell = @import("../tui/renderer.zig").Cell;
 
+fn blankCell() Cell {
+    var cell = Cell{};
+    cell.setChar(" ");
+    return cell;
+}
+
 fn gridCellRepeat(has_repeat: bool, repeat_value: i64) usize {
     if (!has_repeat) return 1;
     return if (repeat_value > 0) @as(usize, @intCast(repeat_value)) else 0;
@@ -47,7 +53,7 @@ pub const GridData = struct {
     pub fn resize(self: *GridData, new_w: u16, new_h: u16) !void {
         const size = @as(usize, new_w) * @as(usize, new_h);
         const new_cells = try self.allocator.alloc(Cell, size);
-        @memset(new_cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
+        @memset(new_cells, blankCell());
         const min_h = @min(self.height, new_h);
         const min_w = @min(self.width, new_w);
         for (0..min_h) |y| {
@@ -62,7 +68,7 @@ pub const GridData = struct {
     }
 
     pub fn clear(self: *GridData) void {
-        @memset(self.cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
+        @memset(self.cells, blankCell());
     }
 };
 
@@ -85,8 +91,10 @@ pub const UiState = struct {
     cursor_y: u16 = 0,
     /// Which grid currently has the cursor
     cursor_grid: i64 = 1,
+    editor_mode: u8 = 'n',
     allocator: std.mem.Allocator,
     telescope_rects: [2]?@import("../tui/layout.zig").Rect = .{ null, null },
+    native_picker_chrome: bool = false,
     widget_title: [32]u8 = undefined,
     widget_title_len: usize = 0,
     toggle_zen_requested: bool = false,
@@ -380,32 +388,29 @@ pub const UiState = struct {
             const left: u16 = @as(u16, @intCast(@max(0, arg.array[3].integer)));
             const right: u16 = @as(u16, @intCast(@max(0, arg.array[4].integer)));
             const rows: i64 = arg.array[5].integer;
+            const cols: i64 = arg.array[6].integer;
             if (top >= target.height or bot > target.height or
                 left >= target.width or right > target.width or
                 top >= bot or left >= right) continue;
-            if (rows > 0) {
-                var y = top;
-                const ur = @as(u16, @intCast(rows));
-                if (bot > ur) {
-                    while (y < bot - ur) : (y += 1) {
-                        const src_y = y + ur;
-                        for (left..right) |x| {
-                            target.cells[@as(usize, y) * @as(usize, target.width) + x] =
-                                target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
-                        }
-                    }
-                }
-            } else if (rows < 0) {
-                const abs_rows = @as(u16, @intCast(-rows));
-                if (bot > 0) {
-                    var y = bot;
-                    while (y > top + abs_rows) {
-                        y -= 1;
-                        const src_y = y - abs_rows;
-                        for (left..right) |x| {
-                            target.cells[@as(usize, y) * @as(usize, target.width) + x] =
-                                target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
-                        }
+            const region_h = bot - top;
+            const region_w = right - left;
+            var yi: u16 = 0;
+            while (yi < region_h) : (yi += 1) {
+                const y = if (rows >= 0) top + yi else bot - 1 - yi;
+                var xi: u16 = 0;
+                while (xi < region_w) : (xi += 1) {
+                    const x = if (cols >= 0) left + xi else right - 1 - xi;
+                    const src_y = @as(i128, y) + @as(i128, rows);
+                    const src_x = @as(i128, x) + @as(i128, cols);
+                    const dst_index = @as(usize, y) * @as(usize, target.width) + x;
+                    if (src_y >= @as(i128, top) and src_y < @as(i128, bot) and
+                        src_x >= @as(i128, left) and src_x < @as(i128, right))
+                    {
+                        const sy: usize = @intCast(src_y);
+                        const sx: usize = @intCast(src_x);
+                        target.cells[dst_index] = target.cells[sy * @as(usize, target.width) + sx];
+                    } else {
+                        target.cells[dst_index] = blankCell();
                     }
                 }
             }
@@ -475,7 +480,11 @@ pub const UiState = struct {
             const name = ev.array[0].string;
             const args = ev.array[1..];
 
-            if (std.mem.eql(u8, name, "default_colors_set")) {
+            if (std.mem.eql(u8, name, "mode_change")) {
+                if (args.len > 0 and args[0] == .array and args[0].array.len > 0 and args[0].array[0] == .string and args[0].array[0].string.len > 0) {
+                    self.editor_mode = args[0].array[0].string[0];
+                }
+            } else if (std.mem.eql(u8, name, "default_colors_set")) {
                 self.handleDefaultColorsSet(args);
                 damage.grid = true;
             } else if (std.mem.eql(u8, name, "hl_attr_define")) {
@@ -749,6 +758,56 @@ test "ui protocol preserves width after scrolling and keeps explicit zero repeat
     try std.testing.expectEqualStrings("3", state.grid.cells[1].char[0..state.grid.cells[1].len]);
     try std.testing.expectEqualStrings("4", state.grid.cells[2].char[0..state.grid.cells[2].len]);
     try std.testing.expectEqualStrings("5", state.grid.cells[3].char[0..state.grid.cells[3].len]);
+}
+
+test "grid scroll translates both axes and blanks exposed cells" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+    try state.grid.resize(4, 3);
+    for (state.grid.cells, 0..) |*cell, i| cell.setChar(&[_]u8{@as(u8, @intCast('A' + i))});
+
+    const diagonal = [_]Value{.{ .array = values(&[_]Value{
+        .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 3 }, .{ .integer = 0 },
+        .{ .integer = 4 }, .{ .integer = 1 }, .{ .integer = 1 },
+    }) }};
+    state.handleGridScroll(&diagonal);
+
+    try std.testing.expectEqual(@as(u8, 'F'), state.grid.cells[0].char[0]);
+    try std.testing.expectEqual(@as(u8, 'K'), state.grid.cells[5].char[0]);
+    for ([_]usize{ 3, 7, 8, 9, 10, 11 }) |index| {
+        const cell = state.grid.cells[index];
+        try std.testing.expectEqual(@as(u8, ' '), cell.char[0]);
+        try std.testing.expectEqual(Color.none, cell.fg);
+        try std.testing.expectEqual(Color.none, cell.bg);
+        try std.testing.expect(!cell.continuation);
+    }
+}
+
+test "grid scroll supports negative and oversized displacement in a partial region" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+    try state.grid.resize(4, 3);
+    for (state.grid.cells, 0..) |*cell, i| cell.setChar(&[_]u8{@as(u8, @intCast('A' + i))});
+
+    const negative = [_]Value{.{ .array = values(&[_]Value{
+        .{ .integer = 1 }, .{ .integer = 0 },  .{ .integer = 3 },  .{ .integer = 0 },
+        .{ .integer = 4 }, .{ .integer = -1 }, .{ .integer = -1 },
+    }) }};
+    state.handleGridScroll(&negative);
+    try std.testing.expectEqual(@as(u8, 'A'), state.grid.cells[5].char[0]);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[0].char[0]);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[4].char[0]);
+
+    for (state.grid.cells, 0..) |*cell, i| cell.setChar(&[_]u8{@as(u8, @intCast('A' + i))});
+    const oversized_partial = [_]Value{.{ .array = values(&[_]Value{
+        .{ .integer = 1 }, .{ .integer = 1 },                    .{ .integer = 3 },                    .{ .integer = 1 },
+        .{ .integer = 3 }, .{ .integer = std.math.maxInt(i64) }, .{ .integer = std.math.minInt(i64) },
+    }) }};
+    state.handleGridScroll(&oversized_partial);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[5].char[0]);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[6].char[0]);
+    try std.testing.expectEqual(@as(u8, 'D'), state.grid.cells[3].char[0]);
+    try std.testing.expectEqual(@as(u8, 'L'), state.grid.cells[11].char[0]);
 }
 
 test "deterministic msgpack redraw replay produces canonical styled unicode cell grid" {

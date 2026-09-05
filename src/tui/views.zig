@@ -8,6 +8,7 @@ const Rect = @import("layout.zig").Rect;
 const theme = @import("theme.zig");
 const app = @import("app.zig");
 const App = app.App;
+const workspace = @import("workspace.zig");
 const CompositionDamage = @import("invalidation.zig").CompositionDamage;
 
 pub const CompositionPlan = struct {
@@ -175,7 +176,7 @@ fn overlayVisible(a: *App) bool {
         a.settings_widget.is_open or a.mason_widget.is_open or a.lazy_widget.is_open or
         a.git_detailed_widget.is_open or a.extension_shop.is_popup_open or a.show_split_menu or
         a.ide_menu != null or a.activeNotice() != null or a.editor_context_menu.is_open or
-        a.bug_report.is_open;
+        a.bug_report.is_open or a.workspace.palette;
 }
 
 pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_damage: bool) void {
@@ -260,8 +261,9 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
     }
 
     if (a.mode != .zen) {
-        if (plan.sidebar) {
-            a.activity_bar.draw(a.ren, layout.activity_bar, .{
+        if (plan.sidebar or (plan.chrome and a.mode == .normal)) {
+            if (a.mode == .normal) workspace.drawSidebar(a, layout);
+            if (a.mode == .ide) a.activity_bar.draw(a.ren, layout.activity_bar, .{
                 .bg_sidebar = t.bg_sidebar,
                 .bg_accent = t.bg_accent,
                 .fg_primary = t.fg_primary,
@@ -269,7 +271,7 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
                 .border_color = t.border_color,
                 .nerd_fonts = a.settings_widget.config.nerd_fonts,
             });
-            if (a.show_file_tree) {
+            if (a.show_file_tree and !(a.mode == .normal and a.workspace.overview)) {
                 if (a.activity_bar.active_idx == 0) {
                     a.explorer.draw(a.ren, layout.file_tree, .{
                         .bg_sidebar = t.bg_sidebar,
@@ -338,7 +340,7 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
                 }
             }
         }
-        if (plan.chrome) {
+        if (plan.chrome and a.mode == .ide) {
             drawRect(a.ren, layout.tab_bar, " ", t.fg_secondary, t.bg_sidebar);
             var tx: u16 = layout.tab_bar.x;
             var tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
@@ -554,7 +556,7 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
                 }
             }
         }
-        if (plan.overlays) {
+        if (plan.overlays and !a.ui_state.native_picker_chrome) {
             for (a.ui_state.telescope_rects, 0..) |rect_opt, idx| {
                 if (rect_opt) |rect| {
                     const draw_x = layout.editor.x + rect.x;
@@ -626,14 +628,8 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
             }
         }
     }
-    if (plan.chrome and a.mode == .zen and layout.status_bar.h > 0) {
-        drawRect(a.ren, layout.status_bar, " ", t.fg_statusbar, t.bg_statusbar);
-        const mode_str = if (a.settings_widget.config.nerd_fonts) " V_  ZEN " else " ZEN ";
-        drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
-        if (layout.status_bar.w >= 28) {
-            drawText(a.ren, layout.status_bar.x + layout.status_bar.w - 14, layout.status_bar.y, " Report bug ", t.fg_statusbar, t.bg_statusbar, true, false);
-        }
-    }
+    if (plan.chrome and (a.mode != .ide or a.ui_state.native_picker_chrome)) workspace.drawChrome(a, layout);
+    if (plan.overlays and a.workspace.palette) workspace.drawPalette(a, layout);
     if (plan.overlays and a.settings_widget.is_open) {
         a.settings_widget.draw(a.ren, a.ren.width, a.ren.height, .{
             .bg_editor = t.bg_editor,

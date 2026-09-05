@@ -10,6 +10,10 @@ const ActivityBar = @import("tui/widgets/activity_bar.zig").ActivityBar;
 const Explorer = @import("tui/widgets/explorer.zig").Explorer;
 const GitPanel = @import("tui/widgets/git_panel.zig").GitPanel;
 const SettingsWidget = @import("tui/widgets/settings.zig").SettingsWidget;
+
+test "settings configuration and command shortcuts" {
+    _ = @import("tui/widgets/settings.zig");
+}
 const MasonWidget = @import("tui/widgets/mason.zig").MasonWidget;
 const LazyWidget = @import("tui/widgets/lazy.zig").LazyWidget;
 const GitDetailedWidget = @import("tui/widgets/git_detailed.zig").GitDetailedWidget;
@@ -584,7 +588,7 @@ fn runNvimSession(
     defer git_detailed_widget.deinit();
     app.git_detailed_widget = &git_detailed_widget;
 
-    const initial_layout = Layout.compute(ren.width, ren.height, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
+    const initial_layout = app.layout(ren.width, ren.height);
 
     var opt_kvs = try alloc.alloc(Value.KV, 4);
     defer alloc.free(opt_kvs);
@@ -629,8 +633,8 @@ fn runNvimSession(
         const r1 = try rpc_term.call("nvim_command", cp);
         msgpack.freeValue(r1, alloc);
 
-        // Set editor laststatus based on mode: show in zen/normal, hide in IDE
-        cp[0] = .{ .string = if (app.mode == .ide) "set laststatus=0" else "set laststatus=2" };
+        // Vide owns the one workspace status row in every presentation mode.
+        cp[0] = .{ .string = "set laststatus=0" };
         const r_ls = try rpc.call("nvim_command", cp);
         msgpack.freeValue(r_ls, alloc);
 
@@ -753,7 +757,7 @@ fn runNvimSession(
         const cols = ren.width;
         const rows = ren.height;
         var layout_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.layout);
-        const layout = Layout.compute(cols, rows, app.mode == .zen, app.show_file_tree, app.file_tree_width, app.root_split);
+        const layout = app.layout(cols, rows);
         layout_timer.stop();
         if (last_layout == null or !std.meta.eql(last_layout.?, layout)) {
             app.invalidations.invalidateLayout();
@@ -860,7 +864,9 @@ fn runNvimSession(
             first_frame = false;
         }
 
-        const timeout: i32 = if (input.sigwinch_received.load(.monotonic)) 0 else 1000;
+        const buffered_rpc_work = rpc.wantsAsyncReadProgress() or rpc_term.wantsAsyncReadProgress();
+        const pending_state = app.settings_widget.needs_apply or ui_state.theme_changed;
+        const timeout: i32 = if (input.sigwinch_received.load(.monotonic) or buffered_rpc_work or pending_state) 0 else 1000;
         if (editor_write_token) |token| try reactor.update(token, .{ .write = rpc.wantsAsyncWrite() });
         if (terminal_write_token) |token| try reactor.update(token, .{ .write = rpc_term.wantsAsyncWrite() });
         try phases.enter(.readiness_collection);
@@ -889,7 +895,7 @@ fn runNvimSession(
         var readiness = ReactorReadiness{};
         try ready.dispatch(&readiness, ReactorReadiness.accept);
         try phases.enter(.transport_progress);
-        if (readiness.editor_transport) {
+        if (readiness.editor_transport or rpc.wantsAsyncReadProgress()) {
             const alive = nvim_helpers.processNvimEvents(rpc) catch |err| {
                 if (!readiness.editor_failed) return err;
                 try rpc.finishAsync(.child_failed);
@@ -901,7 +907,7 @@ fn runNvimSession(
                 return error.QuitApplication;
             }
         }
-        if (readiness.terminal_transport) {
+        if (readiness.terminal_transport or rpc_term.wantsAsyncReadProgress()) {
             const alive_term = nvim_helpers.processNvimEvents(rpc_term) catch |err| {
                 if (!readiness.terminal_failed) return err;
                 try rpc_term.finishAsync(.child_failed);
@@ -938,7 +944,9 @@ fn runNvimSession(
         // From here, every loop continuation must enter composition next.
         tracked_cycle = true;
 
-        if (ready.len > 0) {
+        // Input handlers and buffered RPC messages can queue state changes
+        // without another descriptor becoming ready. Apply them while idle too.
+        {
             if (readiness.resize_signal) {
                 var discard: [32]u8 = undefined;
                 _ = std.posix.read(sigwinch_read_fd, &discard) catch 0;
@@ -981,7 +989,13 @@ fn runNvimSession(
                     var save_params = [_]Value{ .{ .string = save_script }, .{ .array = &.{} } };
                     _ = try rpc.requestAsyncWithHandler("nvim_exec_lua", &save_params, &app, zenSessionSaved);
                 } else {
-                    if (app.mode != .zen) app.prev_mode = app.mode;
+                    if (app.mode != .zen) {
+                        app.prev_mode = app.mode;
+                        app.zen_sidebar_focus = app.sidebar_focus;
+                        app.zen_terminal_focus = app.terminal_focus;
+                    }
+                    app.sidebar_focus = false;
+                    app.terminal_focus = false;
                     app.mode = .zen;
                     app.settings_widget.config.zen = true;
                     app.settings_widget.config.ide = false;
@@ -989,7 +1003,7 @@ fn runNvimSession(
                     app.settings_widget.allocator.free(app.settings_widget.config.mode);
                     app.settings_widget.config.mode = new_mode;
 
-                    var cmd_p = [_]Value{.{ .string = "set laststatus=3" }};
+                    var cmd_p = [_]Value{.{ .string = "set laststatus=0" }};
                     _ = rpc.call("nvim_command", &cmd_p) catch {};
                     cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
                     _ = rpc.call("nvim_command", &cmd_p) catch {};
@@ -1029,6 +1043,7 @@ fn runNvimSession(
 
                 app.invalidations.forceFull(.recovery);
 
+                const previous_mode = app.mode;
                 if (std.mem.eql(u8, app.settings_widget.config.mode, "zen")) {
                     app.mode = .zen;
                 } else if (std.mem.eql(u8, app.settings_widget.config.mode, "ide")) {
@@ -1038,6 +1053,15 @@ fn runNvimSession(
                 }
                 if (app.mode != .zen) {
                     app.prev_mode = app.mode;
+                }
+                if (previous_mode != .zen and app.mode == .zen) {
+                    app.zen_sidebar_focus = app.sidebar_focus;
+                    app.zen_terminal_focus = app.terminal_focus;
+                    app.sidebar_focus = false;
+                    app.terminal_focus = false;
+                } else if (previous_mode == .zen and app.mode != .zen) {
+                    app.sidebar_focus = app.zen_sidebar_focus and app.show_file_tree;
+                    app.terminal_focus = app.zen_terminal_focus and app.show_terminal_panel;
                 }
 
                 var cmd_p = try alloc.alloc(Value, 1);
@@ -1057,14 +1081,12 @@ fn runNvimSession(
                     rpc.notify("nvim_command", cmd_p) catch {};
                 } else |_| {}
 
-                // Toggle Neovim statusline: show in zen/normal, hide in IDE
-                cmd_p[0] = .{ .string = if (app.mode == .ide) "set laststatus=0" else "set laststatus=2" };
+                cmd_p[0] = .{ .string = "set laststatus=0" };
                 rpc.notify("nvim_command", cmd_p) catch {};
 
-                if (std.fmt.bufPrint(&cmd_buf, "colorscheme {s}", .{app.settings_widget.config.theme})) |cmd_str| {
-                    cmd_p[0] = .{ .string = cmd_str };
-                    rpc.notify("nvim_command", cmd_p) catch {};
-                } else |_| {}
+                var theme_args = [_]Value{.{ .string = app.settings_widget.config.theme }};
+                const theme_params = [_]Value{ .{ .string = "_G.vide_apply_theme(...)" }, .{ .array = &theme_args } };
+                rpc.notify("nvim_exec_lua", &theme_params) catch {};
 
                 if (std.mem.eql(u8, app.settings_widget.config.line_numbers, "relative")) {
                     cmd_p[0] = .{ .string = "setglobal relativenumber number" };
@@ -1125,6 +1147,10 @@ fn runNvimSession(
                         if (app.quit_requested) return error.QuitApplication;
                     },
                     .paste => |p| {
+                        if (app.workspace.palette) {
+                            @import("tui/workspace.zig").appendQuery(&app, p);
+                            continue;
+                        }
                         if (app.bug_report.handlePaste(p)) {
                             app.invalidations.damageAll();
                             continue;

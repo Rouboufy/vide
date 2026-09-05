@@ -73,6 +73,99 @@ set.incsearch = true
 set.updatetime = 50
 
 local user_plugins_path = vim.fn.stdpath("data") .. "/user_plugins.json"
+
+-- One picker language for files, text, buffers and help. Neovim owns the
+-- thin borders so they resize and stack with the actual floating windows.
+local function configure_pickers()
+    local actions = require("telescope.actions")
+    local layout_actions = require("telescope.actions.layout")
+    local function picker_colors()
+        local function hl(name) return vim.api.nvim_get_hl(0, { name = name, link = false }) end
+        local normal, float = hl("Normal"), hl("NormalFloat")
+        local bg, fg = float.bg or normal.bg or 0x202328, normal.fg or 0xd7dce2
+        local accent = hl("Function").fg or hl("Identifier").fg or fg
+        local function blend(a, b, weight)
+            local value = 0
+            for _, shift in ipairs({ 16, 8, 0 }) do
+                local av, bv = math.floor(a / 2 ^ shift) % 256, math.floor(b / 2 ^ shift) % 256
+                value = value + math.floor(av * weight + bv * (1 - weight)) * 2 ^ shift
+            end
+            return value
+        end
+        local border = blend(fg, bg, 0.3)
+        for _, name in ipairs({ "TelescopeNormal", "TelescopePromptNormal", "TelescopeResultsNormal", "TelescopePreviewNormal" }) do
+            vim.api.nvim_set_hl(0, name, { fg = fg, bg = bg })
+        end
+        for _, name in ipairs({ "TelescopeBorder", "TelescopePromptBorder", "TelescopeResultsBorder", "TelescopePreviewBorder" }) do
+            vim.api.nvim_set_hl(0, name, { fg = border, bg = bg })
+        end
+        for _, name in ipairs({ "TelescopeTitle", "TelescopePromptTitle", "TelescopeResultsTitle", "TelescopePreviewTitle" }) do
+            vim.api.nvim_set_hl(0, name, { fg = fg, bg = bg, bold = true })
+        end
+        vim.api.nvim_set_hl(0, "TelescopeSelection", { fg = fg, bg = blend(accent, bg, 0.15), bold = true })
+        vim.api.nvim_set_hl(0, "TelescopeSelectionCaret", { fg = accent, bg = blend(accent, bg, 0.15), bold = true })
+        vim.api.nvim_set_hl(0, "TelescopeMatching", { fg = accent, bold = true })
+        vim.api.nvim_set_hl(0, "TelescopePromptPrefix", { fg = accent, bg = bg })
+    end
+    require("telescope").setup({
+        defaults = {
+            sorting_strategy = "ascending",
+            layout_strategy = "horizontal",
+            layout_config = {
+                width = function(_, columns) return math.min(140, math.max(1, columns - 4)) end,
+                height = function(_, _, lines) return math.min(26, math.max(1, lines - 4)) end,
+                horizontal = { prompt_position = "top", preview_width = 0.48, preview_cutoff = 110 },
+            },
+            border = true,
+            borderchars = { "─", "│", "─", "│", "╭", "╮", "╯", "╰" },
+            prompt_prefix = " > ",
+            selection_caret = "> ",
+            entry_prefix = "  ",
+            path_display = { "filename_first" },
+            results_title = false,
+            dynamic_preview_title = true,
+            winblend = 0,
+            mappings = {
+                i = { ["<Esc>"] = actions.close, ["<M-p>"] = layout_actions.toggle_preview },
+                n = { ["<Esc>"] = actions.close, ["<M-p>"] = layout_actions.toggle_preview },
+            },
+        },
+        pickers = {
+            find_files = { prompt_title = "Find files", hidden = true },
+            git_files = { prompt_title = "Project files" },
+            oldfiles = { prompt_title = "Recent files", cwd_only = true },
+            buffers = { prompt_title = "Open files", sort_mru = true, ignore_current_buffer = false },
+            live_grep = { prompt_title = "Search project" },
+            grep_string = { prompt_title = "Find text" },
+            current_buffer_fuzzy_find = { prompt_title = "Search this file", previewer = false },
+            help_tags = { prompt_title = "Help" },
+            commands = { prompt_title = "Commands", previewer = false },
+            diagnostics = { prompt_title = "Problems" },
+        },
+    })
+    picker_colors()
+    vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("VidePickerColors", { clear = true }),
+        callback = picker_colors,
+    })
+end
+_G.vide_configure_pickers = configure_pickers
+_G.vide_picker_action = function(action)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.bo[buf].filetype == "TelescopePrompt" then
+            if action == "preview" then
+                require("telescope.actions.layout").toggle_preview(buf)
+            else
+                local names = { open = "select_default", close = "close", mark = "toggle_selection" }
+                local name = names[action]
+                if name then require("telescope.actions")[name](buf) end
+            end
+            return
+        end
+    end
+end
+
 local user_plugins = {}
 local up_f = io.open(user_plugins_path, "r")
 if up_f then
@@ -174,11 +267,11 @@ local plugins_setup = {
                 
                 local kb = state.keybindings or {}
                 local raw_new = kb.new_file or "<C-n>"
-                local raw_find = kb.find_file or "<C-f>"
+                local raw_find = kb.find_file or "<C-p>"
                 local raw_quit = kb.quit or "<C-q>"
                 local raw_recent = "<C-r>"
-                local raw_explorer = "<C-e>"
-                local raw_help = "<C-v>"
+                local raw_explorer = kb.toggle_explorer or "<C-e>"
+                local raw_help = kb.commands or "<F1>"
 
                 local new_file_key = format_key(raw_new)
                 local find_file_key = format_key(raw_find)
@@ -264,6 +357,8 @@ local plugins_setup = {
     {
         "nvim-telescope/telescope.nvim",
         cmd = "Telescope",
+        dependencies = { "nvim-lua/plenary.nvim" },
+        config = configure_pickers,
         keys = {
             { "<leader>ff", "<cmd>Telescope find_files<cr>" },
             { "<leader>fg", "<cmd>Telescope live_grep<cr>" },
@@ -779,6 +874,154 @@ _G.vide_disable_ide_mode = function()
     pcall(vim.api.nvim_del_augroup_by_name, "VideIdeMode")
 end
 
+-- System follows the desktop palette as data; desktop Neovim configs are never
+-- sourced into Vide. Keep the watcher here so embedded and native Zen agree.
+do
+    local enabled, timer, signature, applying = false, nil, nil, false
+    local function stop()
+        enabled, signature = false, nil
+        if timer then timer:stop(); timer:close(); timer = nil end
+        _G.vide_system_palette = nil
+    end
+    local function mix(a, b, amount)
+        local out = '#'
+        for i = 2, 6, 2 do
+            local x, y = tonumber(a:sub(i, i + 1), 16), tonumber(b:sub(i, i + 1), 16)
+            out = out .. string.format('%02x', math.floor(x + (y - x) * amount + 0.5))
+        end
+        return out
+    end
+    local function read_palette()
+        local home = vim.env.HOME or vim.fn.expand('~')
+        local state = vim.env.XDG_STATE_HOME or (home .. '/.local/state')
+        local config = vim.env.XDG_CONFIG_HOME or (home .. '/.config')
+        for _, root in ipairs({ state, config }) do
+            local path = root .. '/omarchy/current/theme/colors.toml'
+            local file = io.open(path, 'r')
+            if file then
+                local content = file:read(65537) or ''
+                file:close()
+                if #content <= 65536 then
+                    local p = {}
+                    for line in content:gmatch('[^\r\n]+') do
+                        local key, value = line:match('^%s*([%w_]+)%s*=%s*["\'](#[%x]+)["\']')
+                        if key and #value == 7 then p[key] = value end
+                        local mode = line:match('^%s*mode%s*=%s*["\'](%a+)["\']')
+                        if mode == 'dark' or mode == 'light' then p.mode = mode end
+                    end
+                    if p.background and p.foreground then return p, path .. '\n' .. content end
+                end
+            end
+        end
+    end
+    local function apply(p)
+        applying = true
+        local bg, fg = p.background, p.foreground
+        local brightness = tonumber(bg:sub(2, 3), 16) * 0.299
+            + tonumber(bg:sub(4, 5), 16) * 0.587 + tonumber(bg:sub(6, 7), 16) * 0.114
+        vim.g.colors_name = nil
+        vim.o.background = p.mode or (brightness > 128 and 'light' or 'dark')
+        vim.cmd('highlight clear')
+        if vim.g.syntax_on then vim.cmd('syntax reset') end
+        local accent = p.accent or p.blue or p.color4 or fg
+        local sidebar = p.dark_background or mix(bg, fg, 0.04)
+        local raised = p.lighter_background or mix(bg, fg, 0.08)
+        local muted = p.light_foreground or mix(bg, fg, 0.6)
+        local border = p.muted or mix(bg, fg, 0.3)
+        local red, green = p.red or p.color1 or accent, p.green or p.color2 or accent
+        local yellow, blue = p.yellow or p.color3 or accent, p.blue or p.color4 or accent
+        local magenta, cyan = p.magenta or p.color5 or accent, p.cyan or p.color6 or accent
+        p.selection_background = p.selection_background or p.selection or mix(bg, accent, 0.35)
+        p.selection_foreground = p.selection_foreground or fg
+        p.terminal_colors = { p.color0 or bg, red, green, yellow, blue, magenta, cyan,
+            p.color7 or fg, p.color8 or muted, p.bright_red or p.color9 or red,
+            p.bright_green or p.color10 or green, p.bright_yellow or p.color11 or yellow,
+            p.bright_blue or p.color12 or blue, p.bright_magenta or p.color13 or magenta,
+            p.bright_cyan or p.color14 or cyan, p.bright_foreground or p.color15 or fg }
+        local highlights = {
+            Normal = { fg = fg, bg = bg }, NormalNC = { fg = fg, bg = bg },
+            NormalFloat = { fg = fg, bg = sidebar }, FloatBorder = { fg = border, bg = sidebar },
+            NeoTreeNormal = { fg = fg, bg = sidebar }, NeoTreeNormalNC = { fg = fg, bg = sidebar },
+            NvimTreeNormal = { fg = fg, bg = sidebar },
+            Comment = { fg = muted, italic = true }, Identifier = { fg = fg },
+            Constant = { fg = p.orange or yellow }, String = { fg = green },
+            Character = { fg = green }, Number = { fg = p.orange or yellow },
+            Boolean = { fg = p.orange or yellow }, Float = { fg = p.orange or yellow },
+            Function = { fg = blue }, Statement = { fg = magenta }, Keyword = { fg = magenta },
+            Operator = { fg = accent }, PreProc = { fg = cyan }, Type = { fg = yellow },
+            Special = { fg = cyan }, Delimiter = { fg = fg }, Underlined = { fg = blue, underline = true },
+            Error = { fg = red }, ErrorMsg = { fg = red }, WarningMsg = { fg = yellow },
+            Todo = { fg = bg, bg = accent, bold = true },
+            DiagnosticError = { fg = red }, DiagnosticWarn = { fg = yellow },
+            DiagnosticInfo = { fg = blue }, DiagnosticHint = { fg = cyan },
+            Cursor = { fg = bg, bg = p.cursor or fg },
+            CursorLine = { bg = raised }, CursorColumn = { bg = raised },
+            LineNr = { fg = muted, bg = bg }, CursorLineNr = { fg = accent, bold = true },
+            SignColumn = { bg = bg }, FoldColumn = { fg = muted, bg = bg },
+            Folded = { fg = muted, bg = raised }, EndOfBuffer = { fg = border },
+            WinSeparator = { fg = border, bg = bg }, VertSplit = { fg = border, bg = bg },
+            Visual = { fg = p.selection_foreground, bg = p.selection_background },
+            Search = { fg = bg, bg = yellow }, IncSearch = { fg = bg, bg = accent },
+            Pmenu = { fg = fg, bg = sidebar }, PmenuSel = { fg = bg, bg = accent },
+            PmenuSbar = { bg = raised }, PmenuThumb = { bg = muted },
+            StatusLine = { fg = bg, bg = accent }, StatusLineNC = { fg = muted, bg = sidebar },
+            TabLine = { fg = muted, bg = raised }, TabLineSel = { fg = accent, bg = bg, bold = true },
+            TabLineFill = { bg = sidebar }, VideAccent = { fg = accent },
+            DiffAdd = { bg = mix(bg, green, 0.2) }, DiffDelete = { fg = red, bg = mix(bg, red, 0.2) },
+            DiffChange = { bg = mix(bg, blue, 0.2) }, DiffText = { bg = mix(bg, blue, 0.35) },
+        }
+        for name, hl in pairs(highlights) do vim.api.nvim_set_hl(0, name, hl) end
+        for name, target in pairs({ ['@variable'] = 'Identifier', ['@function'] = 'Function',
+            ['@keyword'] = 'Keyword', ['@string'] = 'String', ['@type'] = 'Type',
+            ['@comment'] = 'Comment', ['@constant'] = 'Constant', ['@number'] = 'Number',
+            ['@boolean'] = 'Boolean', ['@operator'] = 'Operator' }) do
+            vim.api.nvim_set_hl(0, name, { link = target })
+        end
+        _G.vide_system_palette = p
+        vim.g.colors_name = 'system'
+        vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'system', modeline = false })
+        applying = false
+    end
+    local function refresh()
+        if not enabled then return end
+        local p, content = read_palette()
+        -- Omarchy replaces the theme directory during a switch. Retain the
+        -- last valid palette through that gap or an incomplete write.
+        if p and content ~= signature then
+            apply(p)
+            signature = content
+        end
+    end
+    _G.vide_apply_theme = function(name)
+        if name ~= 'system' then
+            stop()
+            return vim.cmd.colorscheme(name)
+        end
+        if not enabled then
+            enabled = true
+            refresh()
+            if not signature then
+                applying = true
+                vim.cmd.colorscheme('default')
+                vim.g.colors_name = 'system'
+                vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'system', modeline = false })
+                applying = false
+                _G.vide_native_notice('warning', 'System palette unavailable; using default colors until a desktop palette is available.')
+            end
+            timer = vim.uv.new_timer()
+            timer:start(1500, 1500, vim.schedule_wrap(refresh))
+        else
+            refresh()
+        end
+    end
+    local group = vim.api.nvim_create_augroup('VideSystemTheme', { clear = true })
+    vim.api.nvim_create_autocmd({ 'FocusGained', 'VimResume' }, { group = group, callback = refresh })
+    vim.api.nvim_create_autocmd('ColorScheme', { group = group, callback = function()
+        if not applying and vim.g.colors_name ~= 'system' then stop() end
+    end })
+    vim.api.nvim_create_autocmd('VimLeavePre', { group = group, callback = stop })
+end
+
 _G.vide_save_settings = function()
     local state = {}
     local path = vim.fn.stdpath("data") .. "/settings.json"
@@ -901,7 +1144,7 @@ _G.vide_load_settings = function()
             end
             if state.theme then
                 vim.schedule(function()
-                    if not pcall(vim.cmd, "colorscheme " .. state.theme) then
+                    if not pcall(_G.vide_apply_theme, state.theme) then
                         pcall(vim.cmd, "colorscheme vscode")
                     end
                 end)
@@ -911,7 +1154,7 @@ _G.vide_load_settings = function()
 end
 
 local M = {}
-local themes = { "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
+local themes = { "system", "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
 function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
@@ -1025,7 +1268,7 @@ function M.open()
     local function set_theme()
         local theme = vim.api.nvim_get_current_line():match("([%w%-]+)%s+%[t%]")
         if theme then 
-            vim.cmd("colorscheme " .. theme) 
+            _G.vide_apply_theme(theme)
             if _G.vide_save_settings then _G.vide_save_settings() end
             pcall(vim.api.nvim_win_close, win, true)
             require('vide_settings').open()
@@ -1118,9 +1361,11 @@ function M.sync_theme()
 
     -- Some colorschemes make Visual indistinguishable from Normal once Vide
     -- normalizes editor backgrounds. Keep mouse and keyboard selections clear.
-    local selection_bg = get_contrast(bg_editor, 36) or "#264f78"
-    vim.api.nvim_set_hl(0, "Visual", { bg = selection_bg, bold = true })
-    vim.api.nvim_set_hl(0, "VisualNOS", { bg = selection_bg, bold = true })
+    local system = vim.g.colors_name == 'system' and _G.vide_system_palette or nil
+    local selection_bg = system and system.selection_background or get_contrast(bg_editor, 36) or "#264f78"
+    local selection_fg = system and system.selection_foreground or nil
+    vim.api.nvim_set_hl(0, "Visual", { fg = selection_fg, bg = selection_bg, bold = true })
+    vim.api.nvim_set_hl(0, "VisualNOS", { fg = selection_fg, bg = selection_bg, bold = true })
     
     local fg_statusbar = "#ffffff"
     do
@@ -1153,6 +1398,10 @@ function M.sync_theme()
     vim.g.terminal_color_13 = get_color("Statement", "fg") or "#c678dd"
     vim.g.terminal_color_14 = get_color("Special", "fg") or "#56b6c2"
     vim.g.terminal_color_15 = "#ffffff"
+
+    if system then
+        for i, color in ipairs(system.terminal_colors) do vim.g['terminal_color_' .. (i - 1)] = color end
+    end
 
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         if vim.bo[buf].buftype == "terminal" then
@@ -1272,7 +1521,8 @@ _G.vide_alpha_start = function()
         '', '                         VIDE', '',
         '              Terminal-native editor and IDE', '',
         '              Ctrl+N   New file',
-        '              Ctrl+F   Find files',
+        '              Ctrl+P   Find files',
+        '              F1       Commands / keyboard shortcuts',
         '              Ctrl+E   Toggle explorer',
         '              Ctrl+T   Toggle terminal',
         '              F11      Zen / previous mode', '',
@@ -1429,7 +1679,7 @@ local function notify_telescope()
                         if c < 0 then c = 0 end
 
                         found_mt = true
-                        widget_title = " Telescope "
+                        widget_title = picker.prompt_title or "Search"
                         if r < mt_top then mt_top = r end
                         if c < mt_left then mt_left = c end
                         if r + h > mt_bottom then mt_bottom = r + h end
@@ -1493,7 +1743,7 @@ local function notify_telescope()
                 telescope_timer:start(50, 50, vim.schedule_wrap(notify_telescope))
             end
             if not rects_eq(mt_rect, prev_mt_rect) or not rects_eq(pr_rect, prev_pr_rect) or widget_title ~= prev_widget_title then
-                vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect, widget_title)
+                vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect, widget_title, picker ~= nil)
                 prev_mt_rect = mt_rect
                 prev_pr_rect = pr_rect
                 prev_widget_title = widget_title
@@ -1551,15 +1801,6 @@ vim.api.nvim_create_autocmd({"WinNew", "WinClosed", "WinEnter", "WinLeave", "Buf
     end
 })
 vim.schedule(notify_win_positions)
-
--- Configure Telescope to use no borders so Vide can draw its own widget frame
-pcall(function()
-    require('telescope').setup({
-        defaults = {
-            border = false,
-        }
-    })
-end)
 
 _G.vide_wincmd = function(dir)
     local current_win = vim.api.nvim_get_current_win()

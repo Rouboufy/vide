@@ -43,6 +43,7 @@ pub const TabInfo = struct {
     bufnr: i64 = 0,
     name: []const u8,
     path: ?[]const u8,
+    modified: bool = false,
 };
 
 pub const RpcContext = struct {
@@ -102,7 +103,7 @@ pub const App = struct {
     is_resizing_panel: bool = false,
     last_click_x: u16 = 0,
     last_click_y: u16 = 0,
-    file_tree_width: u16 = 30,
+    file_tree_width: u16 = 24,
     was_settings_open: bool = false,
     last_explorer_refresh: i64 = 0,
 
@@ -118,12 +119,22 @@ pub const App = struct {
     deferred_exit: @import("../nvim/call_sites_05c.zig").DeferredExit = .none,
 
     sidebar_focus: bool = false,
+    workspace: @import("workspace.zig").State = .{},
+    zen_sidebar_focus: bool = false,
+    zen_terminal_focus: bool = false,
 
     editor_wins: std.array_list.Managed(WinInfo),
     terminal_wins: std.array_list.Managed(WinInfo),
 
     layout_arena: std.heap.ArenaAllocator,
     root_split: *SplitNode,
+
+    pub fn layout(self: *const App, cols: u16, rows: u16) Layout {
+        return if (self.mode == .normal)
+            Layout.workspace(cols, rows, self.show_file_tree, self.file_tree_width, self.root_split)
+        else
+            Layout.compute(cols, rows, self.mode == .zen, self.show_file_tree, self.file_tree_width, self.root_split);
+    }
 
     pub fn init(allocator: std.mem.Allocator, term: *Terminal, ren: *renderer.Renderer, rpc: *rpc_client.RpcClient, rpc_term: *rpc_client.RpcClient, ui_state: *ui.UiState, ui_term: *ui.UiState) App {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -240,8 +251,10 @@ pub const App = struct {
                     .child2 = panel_node,
                 } } };
             } else {
-                const tree_w = if (self.show_file_tree) self.file_tree_width else 0;
-                const content_w = if (total_w > 5 + tree_w) total_w - 5 - tree_w else 1;
+                const content_w = if (self.mode == .normal)
+                    Layout.workspace(total_w, total_h, self.show_file_tree, self.file_tree_width, null).editor.w
+                else
+                    Layout.compute(total_w, total_h, false, self.show_file_tree, self.file_tree_width, null).editor.w;
                 const panel_w = @as(f32, @floatFromInt(self.terminal_panel_width));
                 const content_w_f = @as(f32, @floatFromInt(content_w));
                 const ratio = if (content_w_f > panel_w) (content_w_f - panel_w) / content_w_f else 0.7;

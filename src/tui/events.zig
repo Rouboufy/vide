@@ -150,8 +150,98 @@ fn startRequestedSoftwareUpdate(a: *App) void {
     a.notify(.info, "Downloading the latest Vide release in the background...", .{});
 }
 
+const workspace = @import("workspace.zig");
+
+fn openSettings(a: *App, keybindings: bool) void {
+    var old_cfg = a.settings_widget.config;
+    if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
+        a.settings_widget.config = new_cfg;
+        old_cfg.deinit(a.settings_widget.allocator);
+    } else |_| {}
+    a.settings_widget.refreshThemes(a.rpc);
+    a.settings_widget.refreshPlugins();
+    a.settings_widget.active_tab = if (keybindings) 4 else 0;
+    a.settings_widget.hover_row = 0;
+    a.settings_widget.is_open = true;
+    a.invalidations.damageAll();
+}
+
+fn workspaceAction(a: *App, action: workspace.Action, layout: Layout) anyerror!void {
+    a.workspace.palette = false;
+    const kb = a.settings_widget.config.keybindings;
+    const key: ?[]const u8 = switch (action) {
+        .terminal => kb.toggle_terminal,
+        .new_file => kb.new_file,
+        .zen => kb.toggle_zen,
+        .next_region => kb.focus_next,
+        .sidebar => kb.toggle_explorer,
+        else => null,
+    };
+    if (key) |raw| {
+        _ = try handleKey(a, .{ .char = 0, .raw = raw }, layout);
+    } else switch (action) {
+        .find_file => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "_G.vide_close_floating_windows(); local ok = pcall(vim.cmd, 'Telescope find_files'); if not ok then vim.ui.input({prompt='Open file: ', completion='file'}, function(p) if p and p ~= '' then vim.cmd.edit(vim.fn.fnameescape(p)) end end) end");
+        },
+        .explorer, .git, .ai, .extensions => {
+            if (a.mode == .zen) _ = try handleKey(a, .{ .char = 0, .raw = kb.toggle_zen }, layout);
+            a.workspace.overview = false;
+            a.show_file_tree = true;
+            a.sidebar_focus = true;
+            a.terminal_focus = false;
+            a.activity_bar.active_idx = switch (action) {
+                .explorer => 0,
+                .git => 2,
+                .ai => 3,
+                .extensions => 4,
+                else => unreachable,
+            };
+            if (action == .extensions) a.extension_shop.triggerSearch() catch {};
+        },
+        .settings => openSettings(a, false),
+        .keys => openSettings(a, true),
+        .help => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "vim.cmd('HelpMenu')");
+        },
+        .save => workspace.command(a, "vim.cmd('write')"),
+        .problems => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "vim.diagnostic.setqflist({open=true})");
+        },
+        .split_right => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "vim.cmd('vsplit')");
+        },
+        .split_down => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "vim.cmd('split')");
+        },
+        .close_file => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "_G.vide_close_buffer(vim.api.nvim_get_current_buf())");
+        },
+        .buffers => workspace.openBuffers(a),
+        .commands => workspace.openPalette(a),
+        .report => a.bug_report.open(),
+        else => {},
+    }
+    a.invalidations.damageAll();
+}
+
+fn workspaceItem(a: *App, index: usize, layout: Layout) !void {
+    if (index < a.tabs.items.len) workspace.selectBuffer(a, index) else if (index - a.tabs.items.len < 8) try workspaceAction(a, workspace.actions[index - a.tabs.items.len], layout);
+}
+
 pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
-    if (a.terminal_focus) {
+    if (a.terminal_focus and !a.workspace.palette and !a.settings_widget.is_open) {
         if (std.mem.eql(u8, k.raw, "\x1bv") or std.mem.eql(u8, k.raw, "\x1c")) { // Alt+v or Ctrl+\ -> Vertical Split
             var cmd_p = try a.allocator.alloc(Value, 1);
             defer a.allocator.free(cmd_p);
@@ -262,16 +352,11 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     "<C-y>", "<C-z>",
                 };
                 const ctrl_name = ctrl_keys[b - 1];
-                const is_editing_keys = a.settings_widget.is_open and a.settings_widget.active_binding != null;
+                const is_editing_keys = (a.settings_widget.is_open and a.settings_widget.active_binding != null) or a.workspace.editing_shortcut != null;
                 const kb = &a.settings_widget.config.keybindings;
                 if (is_editing_keys or
                     std.mem.eql(u8, ctrl_name, "<C-c>") or
-                    std.mem.eql(u8, ctrl_name, kb.toggle_terminal) or
-                    std.mem.eql(u8, ctrl_name, kb.toggle_explorer) or
-                    std.mem.eql(u8, ctrl_name, kb.toggle_zen) or
-                    std.mem.eql(u8, ctrl_name, kb.new_file) or
-                    std.mem.eql(u8, ctrl_name, kb.find_file) or
-                    std.mem.eql(u8, ctrl_name, kb.quit))
+                    kb.conflict(null, ctrl_name))
                 {
                     break :get_key ctrl_name;
                 }
@@ -288,6 +373,14 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1b[6~")) break :get_key "<PageDown>";
         if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
         if (std.mem.eql(u8, k.raw, "\x1b[23~")) break :get_key "<F11>";
+        if (std.mem.eql(u8, k.raw, "\x1bOP") or std.mem.eql(u8, k.raw, "\x1b[11~")) break :get_key "<F1>";
+        if (std.mem.eql(u8, k.raw, "\x1b[17~")) break :get_key "<F6>";
+        if (std.mem.eql(u8, k.raw, "\x1b[17;2~")) break :get_key "<S-F6>";
+        const function_sequences = [_][]const u8{ "\x1bOQ", "\x1bOR", "\x1bOS", "\x1b[15~", "\x1b[18~", "\x1b[19~", "\x1b[20~", "\x1b[21~", "\x1b[12~", "\x1b[13~", "\x1b[14~" };
+        const function_names = [_][]const u8{ "<F2>", "<F3>", "<F4>", "<F5>", "<F7>", "<F8>", "<F9>", "<F10>", "<F2>", "<F3>", "<F4>" };
+        for (function_sequences, function_names) |sequence, name| if (std.mem.eql(u8, k.raw, sequence)) {
+            break :get_key name;
+        };
         if (std.mem.eql(u8, k.raw, "\x1b[24~")) break :get_key "<F12>";
         if (std.mem.eql(u8, k.raw, "\x1b[Z")) break :get_key "<S-Tab>";
         if (std.mem.eql(u8, k.raw, "\x09")) break :get_key "<Tab>";
@@ -308,7 +401,9 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 break :get_key alt_key;
             }
         }
+        if (a.workspace.palette) break :get_key k.raw;
         if (std.mem.eql(u8, k.raw, "\x1b[1;3A")) { // Alt+Up
+            if (a.ui_state.native_picker_chrome) break :get_key k.raw;
             if (layout.panel != null) {
                 if (a.panel_position == .bottom) {
                     if (layout.total.h > 4 and a.terminal_panel_height < layout.total.h - 4) {
@@ -321,6 +416,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             break :get_key "";
         }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3B")) { // Alt+Down
+            if (a.ui_state.native_picker_chrome) break :get_key k.raw;
             if (layout.panel != null) {
                 if (a.panel_position == .bottom) {
                     if (a.terminal_panel_height > 2) {
@@ -333,6 +429,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             break :get_key "";
         }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3C")) { // Alt+Right
+            if (a.ui_state.native_picker_chrome) break :get_key k.raw;
             if (layout.panel != null and a.panel_position == .right) {
                 if (layout.total.w > 10 and a.terminal_panel_width > 10) {
                     a.terminal_panel_width -= 1;
@@ -348,6 +445,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             break :get_key "";
         }
         if (std.mem.eql(u8, k.raw, "\x1b[1;3D")) { // Alt+Left
+            if (a.ui_state.native_picker_chrome) break :get_key k.raw;
             if (layout.panel != null and a.panel_position == .right) {
                 if (layout.total.w > 10 and a.terminal_panel_width < layout.total.w - 10) {
                     a.terminal_panel_width += 1;
@@ -372,7 +470,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     };
 
     if (nk.len > 0) {
-        if (!a.bug_report.is_open and std.mem.eql(u8, nk, "<F12>")) {
+        if (a.mode == .ide and !a.ui_state.native_picker_chrome and !a.settings_widget.is_open and !a.workspace.palette and !a.bug_report.is_open and std.mem.eql(u8, nk, "<F12>")) {
             a.bug_report.open();
             a.invalidations.damageAll();
             return true;
@@ -458,6 +556,67 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     var quit = false;
 
     const kb = &a.settings_widget.config.keybindings;
+    if (a.workspace.palette) {
+        if (a.workspace.editing_shortcut != null) {
+            workspace.recordShortcut(a, nk);
+            a.invalidations.damageAll();
+            return true;
+        }
+        var found: [workspace.actions.len]workspace.Action = undefined;
+        const items = workspace.filtered(&a.workspace, &found);
+        const total = workspace.resultCount(a);
+        if (std.mem.eql(u8, nk, "<Esc>")) {
+            if (a.workspace.buffer_picker) workspace.openPalette(a) else a.workspace.palette = false;
+        } else if (std.mem.eql(u8, nk, "<Down>") or std.mem.eql(u8, nk, "<Tab>")) a.workspace.command_selected = @min(a.workspace.command_selected + 1, total -| 1) else if (std.mem.eql(u8, nk, "<Up>") or std.mem.eql(u8, nk, "<S-Tab>")) a.workspace.command_selected -|= 1 else if (std.mem.eql(u8, nk, "<F2>") and !a.workspace.buffer_picker) {
+            if (items.len > 0) workspace.editShortcut(a, items[@min(a.workspace.command_selected, items.len - 1)]);
+        } else if (std.mem.eql(u8, nk, "<Enter>")) {
+            if (a.workspace.buffer_picker) {
+                if (workspace.bufferIndex(a, @min(a.workspace.command_selected, total -| 1))) |index| {
+                    a.workspace.palette = false;
+                    workspace.selectBuffer(a, index);
+                }
+            } else if (items.len > 0) try workspaceAction(a, items[@min(a.workspace.command_selected, items.len - 1)], layout);
+        } else if (std.mem.eql(u8, nk, "<BS>")) {
+            a.workspace.query_len -|= 1;
+            a.workspace.command_selected = 0;
+            a.workspace.command_scroll = 0;
+        } else if (k.raw.len > 0 and k.raw[0] >= 32 and k.raw[0] < 127) {
+            workspace.appendQuery(a, k.raw);
+        }
+        a.invalidations.damageAll();
+        return true;
+    }
+    if (std.mem.eql(u8, nk, kb.commands)) {
+        if (a.ui_state.native_picker_chrome) workspace.command(a, "_G.vide_picker_action('close')");
+        workspace.openPalette(a);
+        return true;
+    }
+    if (a.ui_state.native_picker_chrome and !std.mem.eql(u8, nk, kb.toggle_zen)) {
+        const text = if (std.mem.eql(u8, nk, "<")) "<lt>" else nk;
+        const params = [_]Value{.{ .string = text }};
+        a.rpc.notify("nvim_input", &params) catch {};
+        return true;
+    }
+    if (a.ui_state.native_picker_chrome) workspace.command(a, "_G.vide_picker_action('close')");
+    if (std.mem.eql(u8, nk, kb.focus_next) or std.mem.eql(u8, nk, "<S-F6>")) {
+        const reverse = std.mem.eql(u8, nk, "<S-F6>");
+        if (a.mode != .zen) {
+            const region: usize = if (a.sidebar_focus) 1 else if (a.terminal_focus) 2 else 0;
+            var next = region;
+            for (0..3) |_| {
+                next = if (reverse) (next + 2) % 3 else (next + 1) % 3;
+                if (next == 0 or (next == 1 and layout.file_tree.w > 0) or (next == 2 and a.show_terminal_panel)) break;
+            }
+            a.sidebar_focus = next == 1;
+            a.terminal_focus = next == 2;
+        }
+        a.invalidations.damageAll();
+        return true;
+    }
+    if (!a.terminal_focus and std.mem.eql(u8, nk, kb.save_file)) {
+        workspace.command(a, "vim.cmd('write')");
+        return true;
+    }
     if (std.mem.eql(u8, nk, kb.toggle_terminal) or std.mem.eql(u8, k.raw, kb.toggle_terminal)) toggle_terminal_panel = true;
     if (std.mem.eql(u8, nk, kb.toggle_explorer) or std.mem.eql(u8, k.raw, kb.toggle_explorer)) toggle_explorer = true;
     if (std.mem.eql(u8, nk, kb.toggle_zen) or std.mem.eql(u8, k.raw, kb.toggle_zen)) toggle_zen = true;
@@ -490,6 +649,10 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             return true;
         } else {
             if (a.mode != .zen) {
+                a.zen_sidebar_focus = a.sidebar_focus;
+                a.zen_terminal_focus = a.terminal_focus;
+                a.sidebar_focus = false;
+                a.terminal_focus = false;
                 a.prev_mode = a.mode;
                 a.mode = .zen;
                 a.settings_widget.config.zen = true;
@@ -498,19 +661,21 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.settings_widget.allocator.free(a.settings_widget.config.mode);
                 a.settings_widget.config.mode = new_mode;
 
-                var cmd_p = [_]Value{.{ .string = "set laststatus=3" }};
+                var cmd_p = [_]Value{.{ .string = "set laststatus=0" }};
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
                 cmd_p[0] = .{ .string = "lua vim.g.vide_zen_mode = true; vim.g.vide_ide_mode = false; _G.vide_disable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)" };
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
             } else {
                 a.mode = a.prev_mode;
+                a.sidebar_focus = a.zen_sidebar_focus and a.show_file_tree;
+                a.terminal_focus = a.zen_terminal_focus and a.show_terminal_panel;
                 a.settings_widget.config.zen = false;
                 a.settings_widget.config.ide = a.mode == .ide;
                 const new_mode = try a.settings_widget.allocator.dupe(u8, @tagName(a.mode));
                 a.settings_widget.allocator.free(a.settings_widget.config.mode);
                 a.settings_widget.config.mode = new_mode;
 
-                var cmd_p = [_]Value{.{ .string = "set laststatus=3" }};
+                var cmd_p = [_]Value{.{ .string = "set laststatus=0" }};
                 _ = a.rpc.call("nvim_command", &cmd_p) catch {};
                 cmd_p[0] = .{ .string = if (a.mode == .ide)
                     "lua vim.g.vide_zen_mode = false; vim.g.vide_ide_mode = true; _G.vide_enable_ide_mode(); if _G.vide_update_dashboard_keys then _G.vide_update_dashboard_keys() end; pcall(function() require('alpha').redraw() end)"
@@ -522,6 +687,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             return true;
         }
     } else if (toggle_explorer) {
+        if (a.mode == .zen) _ = try handleKey(a, .{ .char = 0, .raw = kb.toggle_zen }, layout);
         a.show_file_tree = !a.show_file_tree;
         if (a.show_file_tree) {
             a.sidebar_focus = true;
@@ -532,6 +698,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         a.invalidations.damageAll();
         return true;
     } else if (toggle_terminal_panel) {
+        if (a.mode == .zen) _ = try handleKey(a, .{ .char = 0, .raw = kb.toggle_zen }, layout);
         a.show_terminal_panel = !a.show_terminal_panel;
         if (a.show_terminal_panel) {
             ensureTerminalStarted(a) catch |err| {
@@ -550,6 +717,8 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         a.invalidations.damageAll();
         return true;
     } else if (new_file) {
+        a.sidebar_focus = false;
+        a.terminal_focus = false;
         const cmd_p = [1]Value{.{ .string = "_G.vide_close_floating_windows(); vim.cmd('enew')" }};
         const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
         if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
@@ -557,11 +726,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         }
         return true;
     } else if (find_file) {
-        const cmd_p = [1]Value{.{ .string = "_G.vide_close_floating_windows(); vim.cmd('Telescope find_files')" }};
-        const params = [2]Value{ cmd_p[0], .{ .array = &[_]Value{} } };
-        if (a.rpc.call("nvim_exec_lua", &params) catch null) |res| {
-            @import("../nvim/msgpack.zig").freeValue(res, a.allocator);
-        }
+        try workspaceAction(a, .find_file, layout);
         return true;
     } else if (quit) {
         a.quit_requested = true;
@@ -572,7 +737,38 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         return true;
     }
 
+    // Core actions above keep their established terminal and focus behavior.
+    // Additional command-menu bindings use the same action as clicking a row.
+    for (workspace.actions) |action| {
+        switch (action) {
+            .terminal, .new_file, .zen, .next_region, .sidebar, .find_file, .save, .commands => continue,
+            else => {},
+        }
+        const binding = workspace.shortcut(a, action);
+        if (binding.len > 0 and (std.mem.eql(u8, nk, binding) or std.mem.eql(u8, k.raw, binding))) {
+            try workspaceAction(a, action, layout);
+            return true;
+        }
+    }
+
     if (nk.len > 0) {
+        if (a.mode == .normal and a.sidebar_focus and a.workspace.overview) {
+            if (k.raw.len > 1 and k.raw[0] >= 32 and k.raw[0] < 127) {
+                for (k.raw) |c| {
+                    const raw = [_]u8{c};
+                    _ = try handleKey(a, .{ .char = c, .raw = &raw }, layout);
+                }
+                return true;
+            }
+            if (std.mem.eql(u8, nk, "j") or std.mem.eql(u8, nk, "<Down>")) a.workspace.selected = @min(a.workspace.selected + 1, a.tabs.items.len + 7) else if (std.mem.eql(u8, nk, "k") or std.mem.eql(u8, nk, "<Up>")) a.workspace.selected -|= 1 else if (std.mem.eql(u8, nk, "<Home>")) a.workspace.selected = 0 else if (std.mem.eql(u8, nk, "<End>")) a.workspace.selected = a.tabs.items.len + 7 else if (std.mem.eql(u8, nk, "<Enter>") or std.mem.eql(u8, nk, "l")) try workspaceItem(a, a.workspace.selected, layout) else if (std.mem.eql(u8, nk, "<Esc>") or std.mem.eql(u8, nk, "<Tab>")) a.sidebar_focus = false;
+            a.invalidations.damageAll();
+            return true;
+        }
+        if (a.mode == .normal and a.sidebar_focus and !a.workspace.overview and std.mem.eql(u8, nk, "<Esc>") and a.explorer.action_state == .none and !a.git_panel.is_focus_commit) {
+            a.workspace.overview = true;
+            a.invalidations.damageAll();
+            return true;
+        }
         if (a.sidebar_focus) {
             if (std.mem.eql(u8, nk, "<Tab>")) {
                 a.activity_bar.active_idx = (a.activity_bar.active_idx + 1) % 5;
@@ -699,6 +895,50 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     a.last_click_x = m.col;
     a.last_click_y = m.row;
 
+    // A command menu owns mouse input, including clicks above live terminals.
+    if (a.workspace.palette) {
+        if (a.workspace.editing_shortcut != null) return;
+        if (m.action == .press) {
+            const rect = workspace.paletteRect(layout);
+            if (m.col >= rect.x and m.col < rect.x + rect.w and m.row >= rect.y + 2 and m.row < rect.y + rect.h -| 1) {
+                var found: [workspace.actions.len]workspace.Action = undefined;
+                const items = workspace.filtered(&a.workspace, &found);
+                if (m.button == .wheel_down) a.workspace.command_selected = @min(a.workspace.command_selected + 1, workspace.resultCount(a) -| 1) else if (m.button == .wheel_up) a.workspace.command_selected -|= 1 else if (m.button == .left) {
+                    const index = a.workspace.command_scroll + m.row - rect.y - 2;
+                    if (a.workspace.buffer_picker) {
+                        if (workspace.bufferIndex(a, index)) |buffer| {
+                            a.workspace.palette = false;
+                            workspace.selectBuffer(a, buffer);
+                        }
+                    } else if (index < items.len) {
+                        a.workspace.command_selected = index;
+                        if (rect.w >= 44 and m.col >= rect.x + rect.w - 15) workspace.editShortcut(a, items[index]) else try workspaceAction(a, items[index], layout);
+                    }
+                }
+            } else if (m.button == .left and (m.col < rect.x or m.col >= rect.x + rect.w or m.row < rect.y or m.row >= rect.y + rect.h)) a.workspace.palette = false;
+            a.invalidations.damageAll();
+        }
+        return;
+    }
+
+    if (a.ui_state.native_picker_chrome) {
+        if (m.row == layout.status_bar.y) {
+            if (m.action == .press and m.button == .left) {
+                if (workspace.pickerFooterAction(layout.status_bar.w, m.col)) |action| {
+                    var code: [96]u8 = undefined;
+                    workspace.command(a, std.fmt.bufPrint(&code, "_G.vide_picker_action('{s}')", .{@tagName(action)}) catch return);
+                }
+            }
+            return;
+        }
+        if (m.col < layout.editor.x or m.col >= layout.editor.x + layout.editor.w or m.row < layout.editor.y or m.row >= layout.editor.y + layout.editor.h) {
+            if (m.action == .press and m.button == .left) workspace.command(a, "_G.vide_picker_action('close')");
+            return;
+        }
+        nvim_helpers.sendMouseEvent(a.rpc, a.allocator, m, m.col - layout.editor.x, m.row - layout.editor.y);
+        return;
+    }
+
     if (a.bug_report.is_open) {
         if (m.action == .press or m.button == .wheel_up or m.button == .wheel_down) {
             _ = a.bug_report.handleMouse(m, a.ren.width, a.ren.height);
@@ -727,7 +967,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         return;
     }
 
-    if (m.action == .press and m.row == layout.status_bar.y and layout.status_bar.w >= 28) {
+    if (a.mode == .ide and m.action == .press and m.row == layout.status_bar.y and layout.status_bar.w >= 28) {
         const report_w: u16 = 14;
         const help_w: u16 = if (a.mode == .zen) 0 else if (a.settings_widget.config.nerd_fonts) @intCast(" 󰋖 Help ".len) else @intCast(" [?] Help ".len);
         const report_x = layout.status_bar.x + layout.status_bar.w -| help_w -| report_w;
@@ -839,7 +1079,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         return;
     }
     // Handle Telescope close click
-    if (m.action == .press) {
+    if (m.action == .press and !a.ui_state.native_picker_chrome) {
         for (a.ui_state.telescope_rects) |rect_opt| {
             if (rect_opt) |rect| {
                 const t_x = layout.editor.x + rect.x;
@@ -883,7 +1123,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     }
 
     // Handle split button click
-    if (m.action == .press and m.row == layout.tab_bar.y and layout.tab_bar.w > 15) {
+    if (a.mode == .ide and m.action == .press and m.row == layout.tab_bar.y and layout.tab_bar.w > 15) {
         const right_edge = layout.tab_bar.x + layout.tab_bar.w;
         if (m.col >= right_edge - 12 and m.col <= right_edge - 8) { // Split Vertically
             a.show_split_menu = true;
@@ -995,7 +1235,45 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         return;
     }
 
-    if (a.mode == .zen and m.action == .press and layout.status_bar.h > 0 and
+    if (a.mode != .ide and m.action == .press and m.button == .left and m.row == layout.status_bar.y and layout.status_bar.w >= 50 and m.col >= layout.status_bar.w - 36 and m.col < layout.status_bar.w - 18) {
+        workspace.openPalette(a);
+        return;
+    }
+    if (a.mode != .ide and m.action == .press and m.button == .left and m.row == layout.status_bar.y and layout.status_bar.w >= 16 and m.col >= layout.status_bar.w - 16) {
+        try workspaceAction(a, .zen, layout);
+        return;
+    }
+    if (a.mode == .normal and m.action == .press) {
+        if (m.row == layout.tab_bar.y and m.button == .left) {
+            workspace.openPalette(a);
+            return;
+        }
+        if (layout.file_tree.w > 0 and m.col < layout.file_tree.w -| 2) {
+            if (m.row == 1 and m.button == .left) {
+                a.workspace.overview = true;
+                a.sidebar_focus = true;
+                a.terminal_focus = false;
+                a.invalidations.damageAll();
+                return;
+            }
+            if (a.workspace.overview and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h) {
+                a.sidebar_focus = true;
+                a.terminal_focus = false;
+                if (m.button == .wheel_down) a.workspace.selected = @min(a.workspace.selected + 1, a.tabs.items.len + 7) else if (m.button == .wheel_up) a.workspace.selected -|= 1 else if (m.button == .left) {
+                    const row = m.row - layout.file_tree.y + a.workspace.scroll;
+                    for (0..a.tabs.items.len + 8) |i| if (workspace.itemRow(i, a.tabs.items.len) == row) {
+                        a.workspace.selected = i;
+                        try workspaceItem(a, i, layout);
+                        break;
+                    };
+                }
+                a.invalidations.damageAll();
+                return;
+            }
+        }
+    }
+
+    if (a.mode != .ide and m.button == .left and m.action == .press and layout.status_bar.h > 0 and
         m.row == layout.status_bar.y and m.col < layout.status_bar.x + @min(layout.status_bar.w, 12))
     {
         var old_cfg = a.settings_widget.config;
@@ -1007,7 +1285,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         a.settings_widget.refreshPlugins();
         a.settings_widget.active_tab = 0;
         a.settings_widget.active_dropdown = .mode;
-        a.settings_widget.hover_dropdown_idx = 2;
+        a.settings_widget.hover_dropdown_idx = if (a.mode == .zen) 2 else 0;
         a.settings_widget.dropdown_scroll_offset = 0;
         a.settings_widget.is_open = true;
         a.invalidations.damageAll();
@@ -1044,7 +1322,10 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     }
                     a.invalidations.damageAll();
                 }
-            } else if (a.show_file_tree and m.col >= layout.file_tree.x + layout.file_tree.w - 2 and m.col <= layout.file_tree.x + layout.file_tree.w) {
+            } else if (a.show_file_tree and m.button == .left and
+                m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h and
+                m.col >= layout.file_tree.x + (layout.file_tree.w -| 2) and m.col <= layout.file_tree.x + layout.file_tree.w)
+            {
                 a.is_resizing_sidebar = true;
             } else if (a.show_file_tree and m.col >= layout.file_tree.x and m.col < layout.file_tree.x + layout.file_tree.w and m.row >= layout.file_tree.y and m.row < layout.file_tree.y + layout.file_tree.h) {
                 a.sidebar_focus = true;
@@ -1201,7 +1482,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 }
 
                 // Handle status bar clicks
-                if (layout.status_bar.w > 0 and m.row == layout.status_bar.y) {
+                if (a.mode == .ide and layout.status_bar.w > 0 and m.row == layout.status_bar.y) {
                     const mode_end = layout.status_bar.x + @min(layout.status_bar.w, 12);
                     if (m.col >= layout.status_bar.x and m.col < mode_end) {
                         var old_cfg = a.settings_widget.config;
@@ -1235,7 +1516,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 }
 
                 // Handle tab bar clicks
-                if (m.row == layout.tab_bar.y) {
+                if (a.mode == .ide and m.row == layout.tab_bar.y) {
                     const primary_col = primaryEditorColumn(a);
                     const right_limit = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
 
@@ -1254,11 +1535,16 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                                 .{ .string = "return _G.vide_close_split(...)" },
                                 .{ .array = &close_args },
                             };
-                            a.rpc.notify("nvim_exec_lua", &close_params) catch {};
+                            a.rpc.notify("nvim_exec_lua", &close_params) catch |err| {
+                                a.notify(.failure, "Unable to queue split close: {}", .{err});
+                            };
                         } else {
                             const focus_params = [_]Value{.{ .integer = win.id }};
-                            a.rpc.notify("nvim_set_current_win", &focus_params) catch {};
+                            a.rpc.notify("nvim_set_current_win", &focus_params) catch |err| {
+                                a.notify(.failure, "Unable to queue split selection: {}", .{err});
+                            };
                         }
+                        a.invalidations.damage(.chrome);
                         return;
                     }
 
@@ -1283,15 +1569,20 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                                 };
                                 // The helper targets inactive tabs and provides
                                 // Neovim's confirmation UI for unsaved buffers.
-                                a.rpc.notify("nvim_exec_lua", &delete_params) catch {};
+                                a.rpc.notify("nvim_exec_lua", &delete_params) catch |err| {
+                                    std.log.err("Tab RPC failed: {}", .{err});
+                                };
                             } else {
                                 var select_args = [_]Value{.{ .integer = tab.bufnr }};
                                 const select_params = [_]Value{
                                     .{ .string = "return _G.vide_select_buffer(...)" },
                                     .{ .array = &select_args },
                                 };
-                                a.rpc.notify("nvim_exec_lua", &select_params) catch {};
+                                a.rpc.notify("nvim_exec_lua", &select_params) catch |err| {
+                                    std.log.err("Tab RPC failed: {}", .{err});
+                                };
                             }
+                            a.invalidations.damage(.chrome);
                             clicked_tab = true;
                             break;
                         }
@@ -1299,7 +1590,10 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     }
                     if (!clicked_tab and tx + 1 < tab_end and m.col == tx + 1) {
                         const new_params = [_]Value{ .{ .string = "return _G.vide_new_primary_buffer()" }, .{ .array = &[_]Value{} } };
-                        a.rpc.notify("nvim_exec_lua", &new_params) catch {};
+                        a.rpc.notify("nvim_exec_lua", &new_params) catch |err| {
+                            a.notify(.failure, "Unable to queue new tab: {}", .{err});
+                        };
+                        a.invalidations.damage(.chrome);
                     }
                 }
             }

@@ -59,6 +59,20 @@ pub const Layout = struct {
     status_bar: Rect,
     panel: ?Rect,
 
+    /// Normal mode uses a single workspace sidebar; IDE retains its legacy shell.
+    pub fn workspace(cols: u16, rows: u16, show_sidebar: bool, sidebar_width: u16, content_tree: ?*SplitNode) Layout {
+        const sidebar_w = if (show_sidebar and cols >= 40) @min(sidebar_width, cols - 24) else 0;
+        var result = compute(cols, rows, false, false, 0, null);
+        result.activity_bar = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+        result.file_tree = .{ .x = 0, .y = @min(2, rows), .w = sidebar_w, .h = rows -| 3 };
+        result.tab_bar = .{ .x = sidebar_w, .y = 0, .w = cols - sidebar_w, .h = @min(1, rows) };
+        result.editor = .{ .x = sidebar_w, .y = @min(1, rows), .w = cols - sidebar_w, .h = rows -| 2 };
+        if (content_tree) |tree| if (result.editor.w > 0 and result.editor.h > 0) {
+            tree.compute(result.editor, &result.editor, &result.panel);
+        };
+        return result;
+    }
+
     pub fn compute(cols: u16, rows: u16, is_zen: bool, show_file_tree: bool, file_tree_width: u16, content_tree: ?*SplitNode) Layout {
         if (is_zen) {
             const editor_h = if (rows > 1) rows - 1 else rows;
@@ -103,6 +117,25 @@ pub const Layout = struct {
         return layout;
     }
 };
+
+test "workspace sidebar shares one column and protects editor space" {
+    const normal = Layout.workspace(80, 24, true, 24, null);
+    try std.testing.expectEqual(@as(u16, 0), normal.activity_bar.w);
+    try std.testing.expectEqual(@as(u16, 24), normal.file_tree.w);
+    try std.testing.expectEqual(@as(u16, 24), normal.editor.x);
+    try std.testing.expectEqual(@as(u16, 56), normal.editor.w);
+    const narrow = Layout.workspace(40, 12, true, 30, null);
+    try std.testing.expectEqual(@as(u16, 24), narrow.editor.w);
+    const tiny = Layout.workspace(30, 12, true, 30, null);
+    try std.testing.expectEqual(@as(u16, 30), tiny.editor.w);
+    for (0..80) |w| for (0..25) |h| {
+        const layout = Layout.workspace(@intCast(w), @intCast(h), true, 24, null);
+        for ([_]Rect{ layout.file_tree, layout.editor, layout.tab_bar, layout.status_bar }) |rect| {
+            try std.testing.expect(rect.x + rect.w <= w);
+            try std.testing.expect(rect.y + rect.h <= h);
+        }
+    };
+}
 
 test "zen mode reserves only the mode indicator row" {
     const layout = Layout.compute(120, 40, true, true, 30, null);

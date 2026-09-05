@@ -50,7 +50,9 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
     const app = rpc_ctx.app;
 
     if (std.mem.eql(u8, method, "redraw") and params == .array) {
+        const previous_mode = ui_state.editor_mode;
         const damage = try ui_state.handleRedraw(params.array);
+        if (ui_state == app.ui_state and previous_mode != ui_state.editor_mode) app.invalidations.damage(.chrome);
         if (damage.grid or damage.lifecycle or damage.composition_uncertain) {
             // Mapping happens after handleRedraw has applied the whole batch.
             app.invalidations.damage(if (ui_state == app.ui_state) .editor else .drawer);
@@ -84,7 +86,7 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             const name_copy = try app.allocator.dupe(u8, display_name);
             errdefer app.allocator.free(name_copy);
             const path_copy = if (path.len == 0) null else try app.allocator.dupe(u8, path);
-            try app.tabs.append(.{ .bufnr = bufnr, .name = name_copy, .path = path_copy });
+            try app.tabs.append(.{ .bufnr = bufnr, .name = name_copy, .path = path_copy, .modified = changed });
             if (changed and relative_path.len > 0) {
                 const modified_path = try app.allocator.dupe(u8, relative_path);
                 errdefer app.allocator.free(modified_path);
@@ -95,6 +97,9 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
         if (app.tabs.items.len == 0) app.active_tab = 0;
         app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_telescope_rect")) {
+        ui_state.native_picker_chrome = params == .array and params.array.len >= 4 and params.array[3] == .bool and params.array[3].bool;
+        app.invalidations.damage(.overlay);
+        app.invalidations.damage(.chrome);
         if (params == .array and params.array.len >= 2) {
             for (params.array[0..2], 0..) |p, i| {
                 if (p == .array and p.array.len == 4) {

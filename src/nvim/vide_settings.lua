@@ -3,7 +3,7 @@ M.win = nil
 M.buf = nil
 
 local themes = {
-    "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord",
+    "system", "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord",
     "cyberdream", "rose-pine", "kanagawa", "nightfox"
 }
 
@@ -98,7 +98,7 @@ function M.open()
     local function set_theme()
         local theme = vim.api.nvim_get_current_line():match("([%w%-]+)%s+%[t%]")
         if theme then 
-            vim.cmd("colorscheme " .. theme) 
+            _G.vide_apply_theme(theme)
             if _G.vide_save_settings then _G.vide_save_settings() end
             pcall(vim.api.nvim_win_close, win, true)
             require('vide_settings').open()

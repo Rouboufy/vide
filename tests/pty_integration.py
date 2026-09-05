@@ -71,7 +71,8 @@ def run_mode(mode):
         })
         fd, slave_fd = pty.openpty()
         child = subprocess.Popen(
-            [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env
+            [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env,
+            start_new_session=True
         )
         os.close(slave_fd)
         pid = child.pid
@@ -139,7 +140,8 @@ def run_startup_failure():
         env.update({"HOME": temp, "PATH": "/nonexistent", "VIDE_DISABLE_PLUGINS": "1"})
         fd, slave_fd = pty.openpty()
         child = subprocess.Popen(
-            [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env
+            [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env,
+            start_new_session=True
         )
         os.close(slave_fd)
         pid = child.pid

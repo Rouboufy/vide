@@ -11,6 +11,10 @@ fn isThemeHeading(theme_name: []const u8) bool {
     return std.mem.startsWith(u8, theme_name, "---");
 }
 
+fn themeLabel(name: []const u8) []const u8 {
+    return if (std.mem.eql(u8, name, "system")) "System (follow desktop)" else name;
+}
+
 fn scrollThemeList(themes: []const []const u8, hover_idx: *usize, scroll_offset: *usize, down: bool) void {
     if (themes.len <= max_visible_themes) return;
 
@@ -42,9 +46,68 @@ pub const Keybindings = struct {
     toggle_terminal: []const u8 = "<C-t>", // Ctrl-t
     toggle_zen: []const u8 = "<F11>",
     new_file: []const u8 = "<C-n>", // Ctrl-n
-    find_file: []const u8 = "<C-f>", // Ctrl-f
+    find_file: []const u8 = "<C-p>", // Quick Open; Ctrl-F remains Neovim's page motion.
     quit: []const u8 = "<C-q>", // Ctrl-q
+    save_file: []const u8 = "<C-s>",
+    commands: []const u8 = "<F1>",
+    focus_next: []const u8 = "<F6>",
+    close_buffer: []const u8 = "",
+    switch_buffers: []const u8 = "",
+    project_files: []const u8 = "",
+    changes: []const u8 = "",
+    problems: []const u8 = "",
+    ai_assistants: []const u8 = "",
+    extensions: []const u8 = "",
+    settings: []const u8 = "",
+    keyboard_shortcuts: []const u8 = "",
+    help: []const u8 = "",
+    split_right: []const u8 = "",
+    split_down: []const u8 = "",
+    report_bug: []const u8 = "",
+
+    pub const Field = std.meta.FieldEnum(Keybindings);
+
+    pub fn get(self: Keybindings, field: Field) []const u8 {
+        inline for (std.meta.fields(Keybindings)) |f| {
+            if (field == @field(Field, f.name)) return @field(self, f.name);
+        }
+        unreachable;
+    }
+
+    pub fn ptr(self: *Keybindings, field: Field) *[]const u8 {
+        inline for (std.meta.fields(Keybindings)) |f| {
+            if (field == @field(Field, f.name)) return &@field(self, f.name);
+        }
+        unreachable;
+    }
+
+    pub fn conflict(self: Keybindings, field: ?Field, key: []const u8) bool {
+        if (key.len == 0) return false;
+        inline for (std.meta.fields(Keybindings)) |f| {
+            if (field != @field(Field, f.name) and std.mem.eql(u8, @field(self, f.name), key)) return true;
+        }
+        return false;
+    }
+
+    fn clone(self: Keybindings, allocator: std.mem.Allocator) !Keybindings {
+        var result = self;
+        var copied: usize = 0;
+        errdefer inline for (std.meta.fields(Keybindings), 0..) |f, i| {
+            if (i < copied) allocator.free(@field(result, f.name));
+        };
+        inline for (std.meta.fields(Keybindings)) |f| {
+            @field(result, f.name) = try allocator.dupe(u8, @field(self, f.name));
+            copied += 1;
+        }
+        return result;
+    }
+
+    fn deinit(self: Keybindings, allocator: std.mem.Allocator) void {
+        inline for (std.meta.fields(Keybindings)) |f| allocator.free(@field(self, f.name));
+    }
 };
+
+const binding_fields = [_][]const u8{ "toggle_terminal", "toggle_explorer", "toggle_zen", "new_file", "find_file", "quit", "save_file", "commands", "focus_next" };
 
 pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
     if (raw.len == 0) return "None";
@@ -174,17 +237,7 @@ pub const SettingsConfig = struct {
         errdefer allocator.free(result.split_separator);
         result.mode = try allocator.dupe(u8, source.mode);
         errdefer allocator.free(result.mode);
-        result.keybindings.toggle_terminal = try allocator.dupe(u8, source.keybindings.toggle_terminal);
-        errdefer allocator.free(result.keybindings.toggle_terminal);
-        result.keybindings.toggle_explorer = try allocator.dupe(u8, source.keybindings.toggle_explorer);
-        errdefer allocator.free(result.keybindings.toggle_explorer);
-        result.keybindings.toggle_zen = try allocator.dupe(u8, source.keybindings.toggle_zen);
-        errdefer allocator.free(result.keybindings.toggle_zen);
-        result.keybindings.new_file = try allocator.dupe(u8, source.keybindings.new_file);
-        errdefer allocator.free(result.keybindings.new_file);
-        result.keybindings.find_file = try allocator.dupe(u8, source.keybindings.find_file);
-        errdefer allocator.free(result.keybindings.find_file);
-        result.keybindings.quit = try allocator.dupe(u8, source.keybindings.quit);
+        result.keybindings = try source.keybindings.clone(allocator);
         return result;
     }
 
@@ -194,12 +247,7 @@ pub const SettingsConfig = struct {
         allocator.free(self.colorcolumn);
         allocator.free(self.split_separator);
         allocator.free(self.mode);
-        allocator.free(self.keybindings.toggle_terminal);
-        allocator.free(self.keybindings.toggle_explorer);
-        allocator.free(self.keybindings.toggle_zen);
-        allocator.free(self.keybindings.new_file);
-        allocator.free(self.keybindings.find_file);
-        allocator.free(self.keybindings.quit);
+        self.keybindings.deinit(allocator);
         self.* = undefined;
     }
 
@@ -251,6 +299,18 @@ pub const SettingsConfig = struct {
 
     pub fn save(self: *const SettingsConfig, path: []const u8) !void {
         return self.saveWithFailure(path, .none);
+    }
+
+    /// Publish the binding only after its atomic settings save succeeds.
+    pub fn saveBinding(self: *SettingsConfig, allocator: std.mem.Allocator, path: []const u8, field: Keybindings.Field, key: []const u8) !void {
+        if (self.keybindings.conflict(field, key)) return error.DuplicateShortcut;
+        const owned = try allocator.dupe(u8, key);
+        errdefer allocator.free(owned);
+        var updated = self.*;
+        updated.keybindings.ptr(field).* = owned;
+        try updated.save(path);
+        allocator.free(self.keybindings.get(field));
+        self.keybindings.ptr(field).* = owned;
     }
 
     fn writeAll(fd: std.posix.fd_t, data: []const u8) !void {
@@ -459,12 +519,9 @@ pub const SettingsWidget = struct {
             cfg.line_numbers = allocator.dupe(u8, cfg.line_numbers) catch cfg.line_numbers;
             cfg.colorcolumn = allocator.dupe(u8, cfg.colorcolumn) catch cfg.colorcolumn;
             cfg.split_separator = allocator.dupe(u8, cfg.split_separator) catch cfg.split_separator;
-            cfg.keybindings.toggle_terminal = allocator.dupe(u8, cfg.keybindings.toggle_terminal) catch cfg.keybindings.toggle_terminal;
-            cfg.keybindings.toggle_explorer = allocator.dupe(u8, cfg.keybindings.toggle_explorer) catch cfg.keybindings.toggle_explorer;
-            cfg.keybindings.toggle_zen = allocator.dupe(u8, cfg.keybindings.toggle_zen) catch cfg.keybindings.toggle_zen;
-            cfg.keybindings.new_file = allocator.dupe(u8, cfg.keybindings.new_file) catch cfg.keybindings.new_file;
-            cfg.keybindings.find_file = allocator.dupe(u8, cfg.keybindings.find_file) catch cfg.keybindings.find_file;
-            cfg.keybindings.quit = allocator.dupe(u8, cfg.keybindings.quit) catch cfg.keybindings.quit;
+            inline for (std.meta.fields(Keybindings)) |field| {
+                @field(cfg.keybindings, field.name) = allocator.dupe(u8, @field(cfg.keybindings, field.name)) catch @field(cfg.keybindings, field.name);
+            }
             cfg.mode = allocator.dupe(u8, cfg.mode) catch cfg.mode;
             break :blk cfg;
         };
@@ -607,6 +664,7 @@ pub const SettingsWidget = struct {
         const vim_defaults = [_][]const u8{ "default", "blue", "darkblue", "desert", "elflord", "habamax", "industry", "koehler", "lunaperche", "minischeme", "morning", "murphy", "peachpuff", "quiet", "randomhue", "retrobox", "ron", "shine", "slate", "sorbet", "torte", "wildcharm", "zaibatsu" };
 
         for (raw_list) |t| {
+            if (std.mem.eql(u8, t, "system")) continue;
             var is_vide = false;
             for (supported_themes) |st| {
                 if (std.mem.eql(u8, t, st)) {
@@ -634,8 +692,10 @@ pub const SettingsWidget = struct {
             try user_list.append(t);
         }
 
+        // System is built in, so it remains available without theme plugins.
+        try self.themes.append(try self.allocator.dupe(u8, "--- Vide Themes ---"));
+        try self.themes.append(try self.allocator.dupe(u8, "system"));
         if (vide_list.items.len > 0) {
-            try self.themes.append(try self.allocator.dupe(u8, "--- Vide Themes ---"));
             for (vide_list.items) |t| {
                 try self.themes.append(try self.allocator.dupe(u8, t));
             }
@@ -888,7 +948,7 @@ pub const SettingsWidget = struct {
             .rect = .{ .x = x + w - 18, .y = y + h - 2, .w = 16, .h = 1 },
             .state = if (self.has_unsaved_changes) .selected else .normal,
         };
-        save_button.draw(ren, "Save & Close", .{
+        save_button.draw(ren, "Save Ctrl+S", .{
             .fg = theme.fg_secondary,
             .bg = theme.bg_sidebar,
             .accent_fg = theme.fg_primary,
@@ -951,9 +1011,9 @@ pub const SettingsWidget = struct {
                 ren.drawText(content_x, content_y, "Appearance", theme.fg_primary, theme.bg_sidebar, true, false);
 
                 const theme_str = if (self.config.nerd_fonts)
-                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{self.config.theme}) catch "Theme: kanagawa"
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{themeLabel(self.config.theme)}) catch "Theme: kanagawa"
                 else
-                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{self.config.theme}) catch "Theme: kanagawa";
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{themeLabel(self.config.theme)}) catch "Theme: kanagawa";
                 ren.drawText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const sep_str = if (self.config.nerd_fonts)
@@ -1043,9 +1103,9 @@ pub const SettingsWidget = struct {
                 }
             },
             4 => {
-                ren.drawText(content_x, content_y, "Keybindings (Click to edit)", theme.fg_primary, theme.bg_sidebar, true, false);
+                ren.drawText(content_x, content_y, "Keybindings / Enter or click to record", theme.fg_primary, theme.bg_sidebar, true, false);
 
-                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Explorer", "Toggle Zen Mode", "New File", "Find File", "Quit" };
+                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Sidebar", "Toggle Zen Mode", "New File", "Find File", "Quit", "Save File", "Commands", "Next Region" };
                 const current_keys = [_][]const u8{
                     self.config.keybindings.toggle_terminal,
                     self.config.keybindings.toggle_explorer,
@@ -1053,6 +1113,9 @@ pub const SettingsWidget = struct {
                     self.config.keybindings.new_file,
                     self.config.keybindings.find_file,
                     self.config.keybindings.quit,
+                    self.config.keybindings.save_file,
+                    self.config.keybindings.commands,
+                    self.config.keybindings.focus_next,
                 };
 
                 for (actions, 0..) |action, i| {
@@ -1067,21 +1130,8 @@ pub const SettingsWidget = struct {
                     ren.drawText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
                 }
 
-                const static_actions = [_][]const u8{
-                    "Split Vertically:        [ Alt+V ]",
-                    "Split Horizontally:      [ Alt+S ]",
-                    "Close Split Window:      [ Alt+C ]",
-                    "Move Focus Left/Right:   [ Alt+H / Alt+L ]",
-                    "Move Focus Up/Down:      [ Alt+K / Alt+J ]",
-                    "Cycle Window Focus:      [ Alt+O ]",
-                    "Resize Sidebar/Panel:    [ Alt+Arrow ]",
-                    "Toggle Panel Bottom/Right:[ Alt+P ]",
-                };
-
-                ren.drawText(content_x, content_y + 9, "Window Splits & Layout (Static):", theme.fg_primary, theme.bg_sidebar, true, false);
-                for (static_actions, 0..) |sa, sa_idx| {
-                    ren.drawText(content_x, content_y + 10 + @as(u16, @intCast(sa_idx)), sa, theme.fg_secondary, theme.bg_sidebar, false, false);
-                }
+                ren.drawText(content_x, content_y + 12, "v Vim-safe   p Familiar   r Reset selected", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawText(content_x, content_y + 13, "Presets replace bindings; Ctrl+S saves", theme.fg_secondary, theme.bg_sidebar, false, false);
             },
             5 => {
                 ren.drawText(content_x, content_y, "About Vide", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -1168,7 +1218,7 @@ pub const SettingsWidget = struct {
 
             if (self.active_dropdown == .theme) {
                 items_len = self.themes.items.len;
-                drop_w = 22;
+                drop_w = 32;
                 drop_y = content_y + 3;
             } else if (self.active_dropdown == .split_separator) {
                 items_len = supported_split_seps.len;
@@ -1211,7 +1261,7 @@ pub const SettingsWidget = struct {
                     } else {
                         const is_sel = std.mem.eql(u8, self.config.theme, t);
                         const prefix = if (is_sel) " * " else "   ";
-                        const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, t }) catch " error";
+                        const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, themeLabel(t) }) catch " error";
                         ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                         if (i == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
                     }
@@ -1474,13 +1524,11 @@ pub const SettingsWidget = struct {
                 return true;
             }
 
-            const is_duplicate =
-                (idx != 0 and std.mem.eql(u8, self.config.keybindings.toggle_terminal, key)) or
-                (idx != 1 and std.mem.eql(u8, self.config.keybindings.toggle_explorer, key)) or
-                (idx != 2 and std.mem.eql(u8, self.config.keybindings.toggle_zen, key)) or
-                (idx != 3 and std.mem.eql(u8, self.config.keybindings.new_file, key)) or
-                (idx != 4 and std.mem.eql(u8, self.config.keybindings.find_file, key)) or
-                (idx != 5 and std.mem.eql(u8, self.config.keybindings.quit, key));
+            var binding: Keybindings.Field = undefined;
+            inline for (binding_fields, 0..) |field, i| {
+                if (idx == i) binding = @field(Keybindings.Field, field);
+            }
+            const is_duplicate = self.config.keybindings.conflict(binding, key);
 
             if (is_duplicate) {
                 self.duplicate_warning = true;
@@ -1488,30 +1536,17 @@ pub const SettingsWidget = struct {
                 return true;
             }
 
-            const duped = self.allocator.dupe(u8, key) catch key;
-            if (idx == 0) {
-                self.allocator.free(self.config.keybindings.toggle_terminal);
-                self.config.keybindings.toggle_terminal = duped;
-            } else if (idx == 1) {
-                self.allocator.free(self.config.keybindings.toggle_explorer);
-                self.config.keybindings.toggle_explorer = duped;
-            } else if (idx == 2) {
-                self.allocator.free(self.config.keybindings.toggle_zen);
-                self.config.keybindings.toggle_zen = duped;
-            } else if (idx == 3) {
-                self.allocator.free(self.config.keybindings.new_file);
-                self.config.keybindings.new_file = duped;
-            } else if (idx == 4) {
-                self.allocator.free(self.config.keybindings.find_file);
-                self.config.keybindings.find_file = duped;
-            } else if (idx == 5) {
-                self.allocator.free(self.config.keybindings.quit);
-                self.config.keybindings.quit = duped;
-            }
+            const duped = self.allocator.dupe(u8, key) catch return true;
+            self.allocator.free(self.config.keybindings.get(binding));
+            self.config.keybindings.ptr(binding).* = duped;
 
             self.active_binding = null;
             self.has_unsaved_changes = true;
             return true;
+        }
+
+        if (std.mem.eql(u8, key, "<C-s>") or std.mem.eql(u8, key, "\x13")) {
+            return self.saveAndClose();
         }
 
         if (self.keyboard_focus == .tabs) {
@@ -1533,6 +1568,33 @@ pub const SettingsWidget = struct {
                 return true;
             }
         } else if (self.keyboard_focus == .content) {
+            if (self.active_tab == 4 and (std.mem.eql(u8, key, "v") or std.mem.eql(u8, key, "p"))) {
+                var updated = self.config;
+                const preset: Keybindings = if (std.mem.eql(u8, key, "v"))
+                    .{ .toggle_explorer = "<M-e>", .toggle_terminal = "<M-t>", .new_file = "<M-n>", .find_file = "<M-p>" }
+                else
+                    .{ .toggle_explorer = "<C-b>" };
+                inline for (binding_fields) |field| @field(updated.keybindings, field) = @field(preset, field);
+                inline for (binding_fields) |field| {
+                    if (updated.keybindings.conflict(@field(Keybindings.Field, field), @field(updated.keybindings, field))) {
+                        self.duplicate_warning = true;
+                        return true;
+                    }
+                }
+                const owned = SettingsConfig.ownStrings(self.allocator, updated) catch return true;
+                self.config.deinit(self.allocator);
+                self.config = owned;
+                self.has_unsaved_changes = true;
+                return true;
+            }
+            if (self.active_tab == 4 and std.mem.eql(u8, key, "r")) {
+                inline for (binding_fields, 0..) |field, i| {
+                    if (self.hover_row == i) {
+                        self.active_binding = i;
+                        return self.handleKey(@field(Keybindings{}, field));
+                    }
+                }
+            }
             if (std.mem.eql(u8, key, "h") or std.mem.eql(u8, key, "<Left>") or std.mem.eql(u8, key, "<Esc>")) {
                 self.keyboard_focus = .tabs;
                 return true;
@@ -1543,7 +1605,7 @@ pub const SettingsWidget = struct {
                 1 => 3,
                 2 => 5,
                 3 => 2 + self.installed_plugins.items.len,
-                4 => 6,
+                4 => binding_fields.len,
                 5 => 1,
                 else => 0,
             };
@@ -1624,6 +1686,7 @@ pub const SettingsWidget = struct {
                     }
                 } else if (self.active_tab == 4) {
                     self.active_binding = self.hover_row;
+                    return true;
                 } else if (self.active_tab == 5) {
                     if (self.software_update_status != .running) self.software_update_requested = true;
                     return true;
@@ -1642,6 +1705,20 @@ pub const SettingsWidget = struct {
             return true;
         }
         return false;
+    }
+
+    fn saveAndClose(self: *SettingsWidget) bool {
+        if (self.has_unsaved_changes) {
+            self.config.save(self.settings_path) catch {
+                self.save_failed = true;
+                return true;
+            };
+            self.save_failed = false;
+            self.has_unsaved_changes = false;
+            self.needs_apply = true;
+        }
+        self.is_open = false;
+        return true;
     }
 
     pub fn handleMouse(self: *SettingsWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16) bool {
@@ -1697,12 +1774,7 @@ pub const SettingsWidget = struct {
                             self.allocator.free(old_cfg.colorcolumn);
                             self.allocator.free(old_cfg.split_separator);
                             self.allocator.free(old_cfg.mode);
-                            self.allocator.free(old_cfg.keybindings.toggle_terminal);
-                            self.allocator.free(old_cfg.keybindings.toggle_explorer);
-                            self.allocator.free(old_cfg.keybindings.toggle_zen);
-                            self.allocator.free(old_cfg.keybindings.new_file);
-                            self.allocator.free(old_cfg.keybindings.find_file);
-                            self.allocator.free(old_cfg.keybindings.quit);
+                            old_cfg.keybindings.deinit(self.allocator);
                         } else |_| {}
                         self.has_unsaved_changes = false;
                         self.popup_active = false;
@@ -1728,7 +1800,7 @@ pub const SettingsWidget = struct {
 
             if (self.active_dropdown == .theme) {
                 items_len = self.themes.items.len;
-                drop_w = 22;
+                drop_w = 32;
                 drop_y = content_y + 3;
             } else if (self.active_dropdown == .split_separator) {
                 items_len = supported_split_seps.len;
@@ -1859,17 +1931,7 @@ pub const SettingsWidget = struct {
             // Save button
             const save_button = primitives.Button{ .rect = .{ .x = x + w - 18, .y = y + h - 2, .w = 16, .h = 1 } };
             if (save_button.hit(mx, my)) {
-                if (self.has_unsaved_changes) {
-                    self.config.save(self.settings_path) catch {
-                        self.save_failed = true;
-                        return true;
-                    };
-                    self.save_failed = false;
-                    self.has_unsaved_changes = false;
-                    self.needs_apply = true;
-                }
-                self.is_open = false; // Save & Close
-                return true;
+                return self.saveAndClose();
             }
 
             // Tabs
@@ -1952,8 +2014,13 @@ pub const SettingsWidget = struct {
                         }
                     },
                     4 => {
-                        for (0..6) |i| {
+                        if (my == content_y + 12) {
+                            self.keyboard_focus = .content;
+                            return self.handleKey(if (mx < content_x + 13) "v" else if (mx < content_x + 26) "p" else "r");
+                        }
+                        for (0..binding_fields.len) |i| {
                             if (my == content_y + 2 + @as(u16, @intCast(i))) {
+                                self.hover_row = i;
                                 self.active_binding = i;
                                 changed = true;
                             }
@@ -1976,6 +2043,29 @@ pub const SettingsWidget = struct {
         return false;
     }
 };
+
+test "saved command shortcuts reject conflicts and preserve live state on failed saves" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer allocator.free(path);
+    const missing_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing/settings.json", .{tmp.sub_path});
+    defer allocator.free(missing_path);
+    var config = try SettingsConfig.ownedDefaults(allocator);
+    defer config.deinit(allocator);
+    try config.saveBinding(allocator, path, .close_buffer, "<C-k>");
+    try config.saveBinding(allocator, path, .switch_buffers, "<F4>");
+    try std.testing.expectError(error.DuplicateShortcut, config.saveBinding(allocator, path, .save_file, "<C-k>"));
+    try std.testing.expectError(error.DuplicateShortcut, config.saveBinding(allocator, path, .close_buffer, "<F1>"));
+    try std.testing.expectError(error.FileNotFound, config.saveBinding(allocator, missing_path, .close_buffer, "<F3>"));
+    try std.testing.expectEqualStrings("<C-k>", config.keybindings.close_buffer);
+    try std.testing.expectEqualStrings("<C-s>", config.keybindings.save_file);
+    var loaded = try SettingsConfig.load(allocator, path);
+    defer loaded.deinit(allocator);
+    try std.testing.expectEqualStrings("<C-k>", loaded.keybindings.close_buffer);
+    try std.testing.expectEqualStrings("<F4>", loaded.keybindings.switch_buffers);
+}
 
 test "settings roundtrip preserves canonical mode defaults" {
     var tmp = std.testing.tmpDir(.{});
@@ -2043,9 +2133,9 @@ test "corrupt and truncated settings preserve source and widget uses defaults" {
     const path = try std.fs.path.join(std.testing.allocator, &.{ data_dir, "settings.json" });
     defer std.testing.allocator.free(path);
 
-    for ([_][]const u8{ "not-json", "{\"version\":1,\"theme\":\"broken" }) |invalid| {
+    for ([_][]const u8{ "not-json", "{\"version\":1,\"theme\":\"broken" }, [_]anyerror{ error.SyntaxError, error.UnexpectedEndOfInput }) |invalid, expected_error| {
         try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = invalid });
-        try std.testing.expectError(error.SyntaxError, SettingsConfig.load(std.testing.allocator, path));
+        try std.testing.expectError(expected_error, SettingsConfig.load(std.testing.allocator, path));
 
         var widget = SettingsWidget.init(std.testing.allocator, path, std.testing.io, data_dir);
         defer widget.deinit();
@@ -2151,6 +2241,20 @@ test "software updater polls and clamps atomic progress state" {
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = progress_path, .data = "250\n" });
     widget.pollSoftwareUpdateProgress();
     try std.testing.expectEqual(@as(u8, 100), widget.software_update_progress);
+}
+
+test "system theme stays available once when installed themes refresh" {
+    var widget = SettingsWidget.init(std.testing.allocator, "/tmp/vide-no-system-theme-settings.json", std.testing.io, "/tmp");
+    defer widget.deinit();
+    try widget.setThemesAndGroup(&.{ "default", "system", "custom" });
+    try std.testing.expectEqualStrings("system", widget.themes.items[1]);
+    var count: usize = 0;
+    for (widget.themes.items) |name| {
+        if (std.mem.eql(u8, name, "system")) count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try widget.setThemesAndGroup(&.{});
+    try std.testing.expectEqualStrings("system", widget.themes.items[1]);
 }
 
 test "theme dropdown mouse scrolling keeps the highlight visible" {
