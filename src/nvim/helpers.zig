@@ -145,7 +145,8 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
     } else if (std.mem.eql(u8, method, "vide_ai_status") and params == .array and params.array.len >= 2 and
         params.array[0] == .string and params.array[1] == .string)
     {
-        app.ai_panel.updateSession(params.array[0].string, params.array[1].string);
+        const active = params.array.len < 3 or params.array[2] != .bool or params.array[2].bool;
+        app.ai_panel.updateSession(params.array[0].string, params.array[1].string, active);
         app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_settings_changed")) {
         var old_cfg = app.settings_widget.config;

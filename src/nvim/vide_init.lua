@@ -372,7 +372,7 @@ local plugins_setup = {
             local ts = require("nvim-treesitter")
             local site = vim.fn.stdpath("data") .. "/site"
             ts.setup({ install_dir = site })
-            ts.install({ "c", "lua", "vim", "vimdoc", "query", "zig", "markdown", "markdown_inline" }):wait()
+            ts.install({ "c", "lua", "python", "vim", "vimdoc", "query", "zig", "markdown", "markdown_inline" }):wait()
         end,
         event = { "BufReadPost", "BufNewFile" },
         config = function()
@@ -382,6 +382,14 @@ local plugins_setup = {
                 install_dir = site
             })
             vim.opt.rtp:prepend(site)
+            local function highlight(buf)
+                if vim.bo[buf].buftype == "" then pcall(vim.treesitter.start, buf) end
+            end
+            vim.api.nvim_create_autocmd('FileType', {
+                group = vim.api.nvim_create_augroup('VideTreesitter', { clear = true }),
+                callback = function(event) highlight(event.buf) end,
+            })
+            highlight(vim.api.nvim_get_current_buf())
         end
     },
     {
@@ -786,6 +794,19 @@ _G.vide_close_buffer = function(bufnr)
         return not vim.api.nvim_buf_is_valid(bufnr)
     end
 
+    if vim.bo[bufnr].buftype == 'terminal' then
+        local windows = vim.fn.win_findbuf(bufnr)
+        -- Closing a terminal buffer explicitly ends its job. Delete first so
+        -- Neovim can retain a usable buffer when this is the last window.
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+        for _, win in ipairs(windows) do
+            if vim.api.nvim_win_is_valid(win) and #vim.api.nvim_list_wins() > 1 then
+                pcall(vim.api.nvim_win_close, win, false)
+            end
+        end
+        return not vim.api.nvim_buf_is_valid(bufnr)
+    end
+
     if vim.bo[bufnr].modified then
         if vim.api.nvim_get_current_buf() ~= bufnr then _G.vide_select_buffer(bufnr) end
         vim.cmd('confirm bdelete ' .. bufnr)
@@ -874,14 +895,71 @@ _G.vide_disable_ide_mode = function()
     pcall(vim.api.nvim_del_augroup_by_name, "VideIdeMode")
 end
 
--- System follows the desktop palette as data; desktop Neovim configs are never
--- sourced into Vide. Keep the watcher here so embedded and native Zen agree.
+-- System reads only the desktop theme spec, never the user's Neovim init.
 do
     local enabled, timer, signature, applying = false, nil, nil, false
+    local theme_runtime
+    local function system_highlight(buf)
+        if not enabled or vim.bo[buf].buftype ~= '' then return end
+        local lang = vim.treesitter.language.get_lang(vim.bo[buf].filetype)
+        if not lang then return end
+        local ok, loaded = pcall(vim.treesitter.language.add, lang)
+        if not ok or not loaded then
+            local data = vim.env.XDG_DATA_HOME or ((vim.env.HOME or vim.fn.expand('~')) .. '/.local/share')
+            local site = data .. '/nvim/site'
+            -- Reuse only installed parser/query assets, without loading nvim's config.
+            ok, loaded = pcall(vim.treesitter.language.add, lang, { path = site .. '/parser/' .. lang .. '.so' })
+            if not ok or not loaded then return end
+            local query = site .. '/queries/' .. lang .. '/highlights.scm'
+            if vim.fn.filereadable(query) == 1 then
+                pcall(vim.treesitter.query.set, lang, 'highlights', table.concat(vim.fn.readfile(query), '\n'))
+            end
+        end
+        pcall(vim.treesitter.start, buf, lang)
+    end
     local function stop()
         enabled, signature = false, nil
         if timer then timer:stop(); timer:close(); timer = nil end
         _G.vide_system_palette = nil
+        _G.vide_system_colorscheme = nil
+        if theme_runtime then vim.opt.rtp:remove(theme_runtime); theme_runtime = nil end
+    end
+    local function desktop_theme(path)
+        local file = io.open(path, 'r')
+        if not file then return nil, '' end
+        local content = file:read(65537) or ''
+        file:close()
+        if #content > 65536 then return nil, '' end
+        -- Desktop theme files are declarative Lazy specs. An empty environment
+        -- excludes config side effects; unsupported specs use the palette.
+        local chunk = loadstring(content, '@' .. path)
+        if not chunk then return nil, content end
+        setfenv(chunk, {})
+        local ok, specs = pcall(chunk)
+        if not ok or type(specs) ~= 'table' then return nil, content end
+        local name
+        for _, spec in ipairs(specs) do
+            if type(spec) == 'table' and spec[1] == 'LazyVim/LazyVim' and type(spec.opts) == 'table' then
+                name = spec.opts.colorscheme
+            end
+        end
+        if type(name) ~= 'string' or not name:match('^[%w_.-]+$') then return nil, content end
+        local data = vim.env.XDG_DATA_HOME or ((vim.env.HOME or vim.fn.expand('~')) .. '/.local/share')
+        for _, spec in ipairs(specs) do
+            local repo = type(spec) == 'table' and spec[1] or spec
+            if type(repo) == 'string' and repo ~= 'LazyVim/LazyVim' then
+                local directory = repo:match('^[%w_.-]+/([%w_.-]+)$')
+                if directory then
+                    for _, root in ipairs({ vim.fn.stdpath('data'), data .. '/nvim' }) do
+                        local runtime = root .. '/lazy/' .. directory
+                        if vim.uv.fs_stat(runtime .. '/colors/' .. name .. '.lua') or vim.uv.fs_stat(runtime .. '/colors/' .. name .. '.vim') then
+                            return { name = name, runtime = runtime }, content .. runtime
+                        end
+                    end
+                end
+            end
+        end
+        return nil, content
     end
     local function mix(a, b, amount)
         local out = '#'
@@ -909,7 +987,11 @@ do
                         local mode = line:match('^%s*mode%s*=%s*["\'](%a+)["\']')
                         if mode == 'dark' or mode == 'light' then p.mode = mode end
                     end
-                    if p.background and p.foreground then return p, path .. '\n' .. content end
+                    if p.background and p.foreground then
+                        local theme, spec = desktop_theme(root .. '/omarchy/current/theme/neovim.lua')
+                        p.desktop_theme = theme
+                        return p, path .. '\n' .. content .. '\n' .. spec
+                    end
                 end
             end
         end
@@ -977,10 +1059,24 @@ do
             ['@boolean'] = 'Boolean', ['@operator'] = 'Operator' }) do
             vim.api.nvim_set_hl(0, name, { link = target })
         end
+        _G.vide_system_colorscheme = nil
+        if theme_runtime then vim.opt.rtp:remove(theme_runtime); theme_runtime = nil end
+        if p.desktop_theme then
+            theme_runtime = p.desktop_theme.runtime
+            vim.opt.rtp:prepend(theme_runtime)
+            _G.vide_system_colorscheme = p.desktop_theme.name
+            if not pcall(vim.cmd.colorscheme, p.desktop_theme.name) then
+                p.desktop_theme = nil
+                return apply(p)
+            end
+        end
         _G.vide_system_palette = p
         vim.g.colors_name = 'system'
         vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'system', modeline = false })
         applying = false
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_loaded(buf) then system_highlight(buf) end
+        end
     end
     local function refresh()
         if not enabled then return end
@@ -1015,6 +1111,7 @@ do
         end
     end
     local group = vim.api.nvim_create_augroup('VideSystemTheme', { clear = true })
+    vim.api.nvim_create_autocmd('FileType', { group = group, callback = function(event) system_highlight(event.buf) end })
     vim.api.nvim_create_autocmd({ 'FocusGained', 'VimResume' }, { group = group, callback = refresh })
     vim.api.nvim_create_autocmd('ColorScheme', { group = group, callback = function()
         if not applying and vim.g.colors_name ~= 'system' then stop() end
@@ -1364,8 +1461,10 @@ function M.sync_theme()
     local system = vim.g.colors_name == 'system' and _G.vide_system_palette or nil
     local selection_bg = system and system.selection_background or get_contrast(bg_editor, 36) or "#264f78"
     local selection_fg = system and system.selection_foreground or nil
-    vim.api.nvim_set_hl(0, "Visual", { fg = selection_fg, bg = selection_bg, bold = true })
-    vim.api.nvim_set_hl(0, "VisualNOS", { fg = selection_fg, bg = selection_bg, bold = true })
+    if not _G.vide_system_colorscheme then
+        vim.api.nvim_set_hl(0, "Visual", { fg = selection_fg, bg = selection_bg, bold = true })
+        vim.api.nvim_set_hl(0, "VisualNOS", { fg = selection_fg, bg = selection_bg, bold = true })
+    end
     
     local fg_statusbar = "#ffffff"
     do
@@ -2263,11 +2362,12 @@ _G.last_ai_win = nil
 _G.last_ai_source_win = nil
 _G.ai_generation = 0
 _G.ai_ready_at = 0
+_G.vide_ai_sessions = {}
 
 local ai_context_limit = 64 * 1024
 
 local function ai_notify_status(command, state)
-    pcall(vim.rpcnotify, 1, "vide_ai_status", command or "", state)
+    pcall(vim.rpcnotify, 1, "vide_ai_status", command or "", state, command == _G.last_ai_command)
 end
 
 local function ai_sanitize(text)
@@ -2503,7 +2603,15 @@ vim.keymap.set({ "n", "v", "i" }, "<C-M-f>", _G.SendFilePathToAI, { desc = "Send
 vim.keymap.set({ "n", "v", "i" }, "<C-M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
 
 function _G.NotifyAIMissing(cmd)
-    vim.notify("AI agent '" .. cmd .. "' is not installed or not available on PATH.", vim.log.levels.WARN)
+    ai_notice("warning", "AI agent '" .. cmd .. "' is not installed or not available on PATH.")
+end
+
+function _G.OpenTerminalRight()
+    _G.vide_close_floating_windows()
+    vim.cmd('botright vnew')
+    vim.fn.termopen(vim.o.shell)
+    vim.bo.bufhidden = 'hide'
+    vim.cmd('startinsert')
 end
 
 local function configure_ai_winbar(win, command)
@@ -2534,9 +2642,11 @@ function _G.StopAITerminal()
     if not job_id then return end
     _G.ai_generation = _G.ai_generation + 1
     _G.last_ai_job_id = nil
+    local session = _G.vide_ai_sessions[_G.last_ai_command]
+    if session then session.job = nil end
     pcall(vim.fn.jobstop, job_id)
     ai_notify_status(_G.last_ai_command, "stopped")
-    vim.notify("AI session stopped", vim.log.levels.INFO)
+    ai_notice("info", "AI session stopped")
 end
 
 function _G.CloseAITerminal()
@@ -2552,6 +2662,7 @@ function _G.CloseAITerminal()
     _G.last_ai_win = nil
     _G.last_ai_buf = nil
     _G.ai_ready_at = 0
+    _G.vide_ai_sessions[_G.last_ai_command or ''] = nil
 
     if job_id then pcall(vim.fn.jobstop, job_id) end
     if win and vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
@@ -2571,7 +2682,7 @@ end
 function _G.RestartAITerminal()
     local command = _G.last_ai_command
     if not command then
-        vim.notify("No AI session to restart.", vim.log.levels.WARN)
+        ai_notice("warning", "No AI session to restart.")
         return
     end
     _G.StopAITerminal()
@@ -2580,40 +2691,58 @@ end
 
 function _G.OpenAITerminal(cmd)
     if vim.fn.executable(cmd) == 0 then _G.NotifyAIMissing(cmd); return end
-    local active = _G.GetActiveAIJob()
-    if active then _G.StopAITerminal() end
+    local session = _G.vide_ai_sessions[cmd]
+    if session and session.job and vim.fn.jobwait({ session.job }, 0)[1] ~= -1 then session.job = nil end
     local current_win = vim.api.nvim_get_current_win()
     local current_buf = vim.api.nvim_get_current_buf()
     if vim.bo[current_buf].buftype == "" then _G.last_ai_source_win = current_win end
     if _G.last_ai_win and vim.api.nvim_win_is_valid(_G.last_ai_win) then
         vim.api.nvim_set_current_win(_G.last_ai_win)
-        vim.cmd("enew")
     else
         vim.cmd("botright vsplit")
         vim.cmd("wincmd L")
-        vim.cmd("enew")
     end
     _G.ai_generation = _G.ai_generation + 1
     local generation = _G.ai_generation
+    _G.last_ai_command = cmd
+    _G.last_ai_win = vim.api.nvim_get_current_win()
+    if session and session.job and vim.api.nvim_buf_is_valid(session.buf) then
+        _G.last_ai_job_id, _G.last_ai_buf = session.job, session.buf
+        _G.ai_ready_at = session.ready_at
+        vim.api.nvim_win_set_buf(0, session.buf)
+        configure_ai_winbar(_G.last_ai_win, cmd)
+        ai_notify_status(cmd, 'running')
+        vim.cmd('startinsert')
+        return
+    end
+    if session and vim.api.nvim_buf_is_valid(session.buf) then
+        pcall(vim.api.nvim_buf_delete, session.buf, { force = true })
+    end
+    vim.cmd('enew')
+    session = { buf = vim.api.nvim_get_current_buf(), ready_at = vim.uv.now() + 900 }
+    _G.vide_ai_sessions[cmd] = session
+    vim.b[session.buf].vide_ai = true
     -- Launch the agent directly. Going through an interactive shell creates a
     -- race where the first AI prompt can be pasted into the shell before its
     -- `exec` command has replaced it with the agent.
     local job_id = vim.fn.termopen({ cmd }, {
         on_exit = function()
-            if generation ~= _G.ai_generation then return end
-            _G.last_ai_job_id = nil
+            if _G.vide_ai_sessions[cmd] ~= session then return end
+            session.job = nil
+            if _G.last_ai_command == cmd then _G.last_ai_job_id = nil end
             ai_notify_status(cmd, "stopped")
         end,
     })
     _G.last_ai_job_id = job_id
+    session.job = job_id > 0 and job_id or nil
     _G.last_ai_command = cmd
-    _G.ai_ready_at = vim.uv.now() + 900
+    _G.ai_ready_at = session.ready_at
     _G.last_ai_buf = vim.api.nvim_get_current_buf()
     _G.last_ai_win = vim.api.nvim_get_current_win()
     vim.bo[_G.last_ai_buf].bufhidden = "hide"
     vim.api.nvim_buf_set_name(_G.last_ai_buf, string.format("AI: %s [%d]", cmd, generation))
     configure_ai_winbar(_G.last_ai_win, cmd)
-    ai_notify_status(cmd, "running")
+    ai_notify_status(cmd, session.job and "running" or "stopped")
     vim.cmd("startinsert")
 end
 
@@ -2635,7 +2764,7 @@ local function vide_notify_buffers()
     for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
         -- Split-owned AI terminals have their own winbar tab and should not
         -- masquerade as files in Vide's global file tab strip.
-        if info.bufnr ~= _G.last_ai_buf then
+        if not vim.b[info.bufnr].vide_ai then
             local name = info.name or ""
             table.insert(buffers, {
                 bufnr = info.bufnr,

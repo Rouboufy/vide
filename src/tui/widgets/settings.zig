@@ -62,6 +62,7 @@ pub const Keybindings = struct {
     keyboard_shortcuts: []const u8 = "",
     help: []const u8 = "",
     split_right: []const u8 = "",
+    terminal_right: []const u8 = "",
     split_down: []const u8 = "",
     report_bug: []const u8 = "",
 

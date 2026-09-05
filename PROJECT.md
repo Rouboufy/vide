@@ -59,6 +59,10 @@ maps to:
 The user's `~/.config/nvim` and corresponding Neovim data directories are not
 loaded or modified.
 
+The System theme reads the desktop's declarative theme spec and may reuse its
+installed colorscheme and parser/query assets read-only. It does not load the
+user's Neovim init or LazyVim configuration. Other themes stay Vide-local.
+
 ## Source layout
 
 - `src/main.zig`: process orchestration and the poll-based application loop.

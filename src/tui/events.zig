@@ -129,13 +129,8 @@ fn writeHandoffInit(path: []const u8, content: []const u8) void {
 }
 
 fn ensureTerminalStarted(a: *App) !void {
-    if (a.terminal_started) return;
-    const commands = [_][]const u8{ "terminal", "startinsert" };
-    for (commands) |command| {
-        const params = [_]Value{.{ .string = command }};
-        try a.rpc_term.notify("nvim_command", &params);
-    }
-    a.terminal_started = true;
+    const params = [_]Value{.{ .string = "lua _G.vide_ensure_terminal()" }};
+    try a.rpc_term.notify("nvim_command", &params);
 }
 
 fn startRequestedSoftwareUpdate(a: *App) void {
@@ -217,6 +212,11 @@ fn workspaceAction(a: *App, action: workspace.Action, layout: Layout) anyerror!v
             a.sidebar_focus = false;
             a.terminal_focus = false;
             workspace.command(a, "vim.cmd('vsplit')");
+        },
+        .terminal_right => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "_G.OpenTerminalRight()");
         },
         .split_down => {
             a.sidebar_focus = false;

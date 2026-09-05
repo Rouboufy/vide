@@ -19,6 +19,7 @@ test "all core modules compile and register their tests" {
     _ = @import("tui/theme.zig");
     _ = @import("tui/widgets/primitives.zig");
     _ = @import("tui/widgets/git_panel.zig");
+    _ = @import("tui/widgets/ai_panel.zig");
     _ = @import("tui/widgets/bug_report.zig");
     _ = @import("tui/widgets/editor_context_menu.zig");
 }

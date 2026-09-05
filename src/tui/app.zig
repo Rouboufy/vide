@@ -69,7 +69,6 @@ pub const App = struct {
     active_tab: usize,
 
     terminal_focus: bool,
-    terminal_started: bool,
     notice_text: [256]u8,
     notice_len: usize,
     notice_level: NoticeLevel,
@@ -159,7 +158,6 @@ pub const App = struct {
             .tabs = std.array_list.Managed(TabInfo).init(allocator),
             .active_tab = 0,
             .terminal_focus = false,
-            .terminal_started = false,
             .notice_text = undefined,
             .notice_len = 0,
             .notice_level = .info,

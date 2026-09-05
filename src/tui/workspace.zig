@@ -5,9 +5,9 @@ const Rect = @import("layout.zig").Rect;
 const Value = @import("../nvim/msgpack.zig").Value;
 const settings = @import("widgets/settings.zig");
 
-pub const Action = enum { find_file, explorer, terminal, git, problems, ai, extensions, settings, keys, help, save, new_file, split_right, split_down, close_file, zen, next_region, sidebar, report, buffers, commands };
+pub const Action = enum { find_file, explorer, terminal, git, problems, ai, extensions, settings, keys, help, save, new_file, split_right, split_down, close_file, zen, next_region, sidebar, report, buffers, commands, terminal_right };
 pub const actions = std.enums.values(Action);
-pub const labels = [_][]const u8{ "Find file", "Explorer", "Terminal", "Git", "Problems", "AI assistants", "Extensions", "Settings", "Keyboard shortcuts", "Help", "Save file", "New file", "Split right", "Split down", "Close buffer", "Toggle zen", "Next region", "Toggle sidebar", "Report bug", "Switch buffers", "Command menu" };
+pub const labels = [_][]const u8{ "Find file", "Explorer", "Terminal", "Git", "Problems", "AI assistants", "Extensions", "Settings", "Keyboard shortcuts", "Help", "Save file", "New file", "Split right", "Split down", "Close buffer", "Toggle zen", "Next region", "Toggle sidebar", "Report bug", "Switch buffers", "Command menu", "Open terminal right" };
 pub const State = struct {
     overview: bool = true,
     selected: usize = 0,
@@ -135,6 +135,7 @@ pub fn bindingField(action: Action) settings.Keybindings.Field {
         .save => .save_file,
         .new_file => .new_file,
         .split_right => .split_right,
+        .terminal_right => .terminal_right,
         .split_down => .split_down,
         .close_file => .close_buffer,
         .zen => .toggle_zen,

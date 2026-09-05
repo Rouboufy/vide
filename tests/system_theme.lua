@@ -33,6 +33,30 @@ assert(color('Visual', 'bg') == '#134e5a' and color('Visual', 'fg') == '#a7c9c6'
 assert(current().bg_editor == '#05182e' and current().bg_sidebar == '#031222')
 assert(current().bg_accent == '#faa968')
 assert(vim.g.terminal_color_1 == '#f85525')
+-- Load the desktop's actual syntax theme, including Tree-sitter captures,
+-- without executing the user's Neovim init or importing LazyVim.
+local runtime = vim.env.XDG_DATA_HOME .. '/nvim/lazy/test-theme'
+vim.fn.mkdir(runtime .. '/colors', 'p')
+vim.fn.writefile({
+    "vim.cmd('highlight clear')",
+    "vim.api.nvim_set_hl(0, 'Normal', {fg='#a7c9c6', bg='#05182e'})",
+    "vim.api.nvim_set_hl(0, 'Comment', {fg='#135363'})",
+    "vim.api.nvim_set_hl(0, '@function.call', {fg='#faa968'})",
+    "vim.api.nvim_set_hl(0, 'Visual', {fg='#a7c9c6', bg='#134e5a'})",
+    "vim.g.colors_name = 'test-theme'",
+}, runtime .. '/colors/test-theme.lua')
+vim.fn.writefile({ "return {{'example/test-theme'}, {'LazyVim/LazyVim', opts={colorscheme='test-theme'}}}" }, root .. '/neovim.lua')
+vim.api.nvim_exec_autocmds('FocusGained', {})
+assert(_G.vide_system_colorscheme == 'test-theme')
+assert(color('Normal', 'fg') == '#a7c9c6')
+assert(color('Comment', 'fg') == '#135363')
+assert(color('@function.call', 'fg') == '#faa968')
+assert(not vim.api.nvim_get_hl(0, {name='Visual'}).bold)
+assert(vim.g.colors_name == 'system')
+vim.fn.delete(root .. '/neovim.lua')
+vim.api.nvim_exec_autocmds('FocusGained', {})
+assert(_G.vide_system_colorscheme == nil)
+assert(color('Normal', 'fg') == '#f6dcac')
 _G.vide_save_settings()
 local saved = vim.json.decode(table.concat(vim.fn.readfile(vim.fn.stdpath('data') .. '/settings.json'), '\n'))
 assert(saved.theme == 'system', 'System selection was replaced by a concrete theme name')
