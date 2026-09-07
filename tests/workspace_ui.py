@@ -82,9 +82,9 @@ def run(capture=None):
             # Added section spacing must keep the last action reachable when short.
             tmux("resize-window", "-t", "ui", "-x", "100", "-y", "12")
             send("F6", *(["Down"] * 12))
-            wait_for(lambda s: "> Settings" in s, "Short sidebar did not scroll to focused Settings")
+            wait_for(lambda s: "[ Settings" in s, "Short sidebar did not scroll to focused Settings")
             send(*(["Up"] * 12))
-            wait_for(lambda s: "> [No Name]" in s or "> sample.zig" in s, "Short sidebar did not scroll back to file")
+            wait_for(lambda s: "[ [No Name]" in s or "[ sample.zig" in s, "Short sidebar did not scroll back to file")
             send("Escape")
             tmux("resize-window", "-t", "ui", "-x", "100", "-y", "30")
             wait_for(lambda s: "PROJECT" in s and "Settings" in s, "Sidebar sections did not return after resize")

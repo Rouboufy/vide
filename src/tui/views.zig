@@ -180,7 +180,8 @@ fn overlayVisible(a: *App) bool {
 }
 
 pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_damage: bool) void {
-    const t = &a.active_theme;
+    const chrome = a.active_theme.chrome();
+    const t = &chrome;
     const plan = CompositionPlan.init(damage, cursor_damage, overlayVisible(a));
     clearDamagedRegions(a.ren, layout, plan, t.fg_primary, t.bg_editor);
 
@@ -479,31 +480,31 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
 
                 var px: u16 = 0;
                 while (px < panel.w) : (px += 1) {
-                    var cell = Cell{ .fg = t.bg_accent, .bg = t.bg_sidebar };
-                    cell.setChar("━");
+                    var cell = Cell{ .fg = t.border_color, .bg = t.bg_sidebar };
+                    cell.setChar("─");
                     a.ren.setCell(panel.x + px, panel.y, cell);
                 }
 
                 // Draw terminal header
-                const term_header_fg = if (a.active_terminal_panel_idx == 0) t.bg_accent else t.fg_secondary;
-                const debug_header_fg = if (a.active_terminal_panel_idx == 1) t.bg_accent else t.fg_secondary;
-                const output_header_fg = if (a.active_terminal_panel_idx == 2) t.bg_accent else t.fg_secondary;
+                const term_header_fg = if (a.active_terminal_panel_idx == 0) t.fg_primary else t.fg_secondary;
+                const debug_header_fg = if (a.active_terminal_panel_idx == 1) t.fg_primary else t.fg_secondary;
+                const output_header_fg = if (a.active_terminal_panel_idx == 2) t.fg_primary else t.fg_secondary;
 
                 if (panel.w >= 40) {
-                    drawText(a.ren, panel.x + 2, panel.y, " TERMINAL ", term_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 0, false);
-                    drawText(a.ren, panel.x + 13, panel.y, " DEBUG CONSOLE ", debug_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 1, false);
-                    drawText(a.ren, panel.x + 30, panel.y, " OUTPUT ", output_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 2, false);
+                    drawText(a.ren, panel.x + 2, panel.y, "[Terminal]", term_header_fg, if (a.active_terminal_panel_idx == 0) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 0, false);
+                    drawText(a.ren, panel.x + 13, panel.y, "[Debug console]", debug_header_fg, if (a.active_terminal_panel_idx == 1) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 1, false);
+                    drawText(a.ren, panel.x + 30, panel.y, "[Output]", output_header_fg, if (a.active_terminal_panel_idx == 2) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 2, false);
                 } else if (panel.w >= 23) {
-                    drawText(a.ren, panel.x + 1, panel.y, " TERM ", term_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 0, false);
-                    drawText(a.ren, panel.x + 8, panel.y, " DEBUG ", debug_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 1, false);
-                    drawText(a.ren, panel.x + 17, panel.y, " OUT ", output_header_fg, t.bg_terminal, a.active_terminal_panel_idx == 2, false);
+                    drawText(a.ren, panel.x + 1, panel.y, "[Term]", term_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 0, false);
+                    drawText(a.ren, panel.x + 8, panel.y, "[Debug]", debug_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 1, false);
+                    drawText(a.ren, panel.x + 17, panel.y, "[Out]", output_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 2, false);
                 } else {
                     const compact_title = switch (a.active_terminal_panel_idx) {
-                        1 => " DEBUG ",
-                        2 => " OUTPUT ",
-                        else => " TERMINAL ",
+                        1 => "[Debug]",
+                        2 => "[Output]",
+                        else => "[Terminal]",
                     };
-                    drawText(a.ren, panel.x + 1, panel.y, compact_title, t.bg_accent, t.bg_terminal, true, false);
+                    a.ren.drawTextClipped(panel.x + 1, panel.y, panel.w -| 1, compact_title, t.fg_primary, t.bg_sidebar, true, false);
                 }
 
                 if (panel.h > 1) {

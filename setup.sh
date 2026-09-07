@@ -61,6 +61,15 @@ version_at_least() {
 
 OS_NAME="${VIDE_TEST_PLATFORM:-$(uname -s)}"
 ARCH="${VIDE_TEST_ARCH:-$(uname -m)}"
+# Noninteractive shells may not have loaded Homebrew's shell configuration.
+if [ "$OS_NAME" = Darwin ] && ! command -v brew >/dev/null 2>&1; then
+    for brew_prefix in "${HOMEBREW_PREFIX:-/opt/homebrew}" /opt/homebrew /usr/local; do
+        if [ -x "$brew_prefix/bin/brew" ]; then
+            export PATH="$brew_prefix/bin:$brew_prefix/sbin:$PATH"
+            break
+        fi
+    done
+fi
 IS_WSL=false
 if [ "${VIDE_TEST_WSL:-0}" = 1 ] || { [ "$OS_NAME" = Linux ] && rg -qi microsoft /proc/version 2>/dev/null; }; then
     IS_WSL=true
@@ -71,13 +80,16 @@ if [ -n "${VIDE_TEST_MISSING:-}" ]; then
     read -r -a MISSING <<< "$VIDE_TEST_MISSING"
 else
     command -v curl >/dev/null 2>&1 || MISSING+=("curl")
+    if $SOURCE_BUILD || ! $NO_PLUGINS; then
+        # macOS can provide a git shim even when the developer tools are absent.
+        git --version >/dev/null 2>&1 || MISSING+=("git")
+    fi
     if $SOURCE_BUILD && command -v nvim >/dev/null 2>&1; then
         NVIM_VERSION="$(nvim --version | head -n1 | awk '{gsub(/^v/, "", $2); print $2}')"
         version_at_least "$NVIM_VERSION" 0.10.0 || MISSING+=("neovim>=0.10.0")
     fi
     if $SOURCE_BUILD; then
         command -v nvim >/dev/null 2>&1 || MISSING+=("neovim>=0.10.0")
-        command -v git >/dev/null 2>&1 || MISSING+=("git")
         if ! command -v zig >/dev/null 2>&1 || [ "$(zig version)" != "$ZIG_VERSION" ]; then
             echo "Source builds require Zig $ZIG_VERSION exactly. Install it from https://ziglang.org/download/ and retry." >&2
             exit 1
@@ -236,10 +248,13 @@ if ! $NO_PLUGINS; then
     INIT_PATH="$SOURCE_DIR/src/nvim/vide_init.lua"
     if [ -f "$INIT_PATH" ]; then
         echo "Bootstrapping optional Neovim plugins..."
-        if ! $DRY_RUN; then
-            NVIM_APPNAME=vide VIDE_INIT_PATH="$INIT_PATH" nvim --clean --headless \
-                -c "execute 'luafile ' .. fnameescape(\$VIDE_INIT_PATH)" -c "Lazy! sync" -c qa
+        BOOTSTRAP_NVIM=nvim
+        if ! $SOURCE_BUILD; then
+            BOOTSTRAP_NVIM="$DATA_HOME/runtime/lib/vide/nvim/bin/nvim"
+            export VIMRUNTIME="$DATA_HOME/runtime/lib/vide/nvim/share/nvim/runtime"
         fi
+        run env NVIM_APPNAME=vide VIDE_INIT_PATH="$INIT_PATH" "$BOOTSTRAP_NVIM" --clean --headless \
+            -c "execute 'luafile ' .. fnameescape(\$VIDE_INIT_PATH)" -c "Lazy! sync" -c qa
     else
         echo "Plugin bootstrap deferred until first launch (release install has no source checkout)."
     fi

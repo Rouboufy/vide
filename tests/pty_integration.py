@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import pty
+import re
 import select
 import signal
 import struct
@@ -82,6 +83,9 @@ def run_mode(mode):
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         os.kill(pid, signal.SIGWINCH)
         output = bytearray(read_available(fd, time.monotonic() + 1.5))
+        startup = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(output))
+        for intro_text in (b"NVIM v", b"Nvim is open source", b":help nvim"):
+            assert intro_text not in startup, f"{mode}: Neovim intro flashed during startup"
 
         if mode != "zen":
             os.write(fd, "integration 界 🙂".encode("utf-8"))

@@ -30,7 +30,7 @@ if vim.uv.fs_stat(lazypath) then vim.opt.rtp:prepend(lazypath) end
 
 vim.g.mapleader = " "
 vim.opt.hidden = true
-vim.opt.shortmess:append("A")
+vim.opt.shortmess:append("AI")
 vim.opt.completeopt = { "menu", "menuone", "noselect" }
 
 local set = vim.opt
@@ -184,39 +184,15 @@ local plugins_setup = {
         priority = 1000,
         config = function()
             local dashboard = require("alpha.themes.dashboard")
-            local logo = {
-                "██╗   ██╗██╗██████╗ ███████╗",
-                "██║   ██║██║██╔══██╗██╔════╝",
-                "██║   ██║██║██║  ██║█████╗  ",
-                "╚██╗ ██╔╝██║██║  ██║██╔══╝  ",
-                " ╚████╔╝ ██║██████╔╝███████╗",
-                "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝",
-            }
-            local colors = {
-                "DiagnosticError",
-                "DiagnosticWarning",
-                "DiagnosticInfo",
-                "DiagnosticHint",
-                "Type",
-                "String",
-            }
-            local header_elements = {}
-            for i, line in ipairs(logo) do
-                table.insert(header_elements, {
-                    type = "text",
-                    val = line,
-                    opts = {
-                        position = "center",
-                        hl = colors[i],
-                    }
-                })
+            dashboard.section.header.val = function()
+                return vim.fn.strcharpart('vide / ' .. vim.fn.fnamemodify(vim.fn.getcwd(), ':t'), 0, math.max(8, vim.api.nvim_win_get_width(0) - 6))
             end
-            dashboard.config.layout[2] = header_elements[1]
-            table.insert(dashboard.config.layout, 3, header_elements[2])
-            table.insert(dashboard.config.layout, 4, header_elements[3])
-            table.insert(dashboard.config.layout, 5, header_elements[4])
-            table.insert(dashboard.config.layout, 6, header_elements[5])
-            table.insert(dashboard.config.layout, 7, header_elements[6])
+            dashboard.section.header.opts.hl = 'Normal'
+            dashboard.section.buttons.opts.spacing = 0
+            dashboard.config.layout = {
+                { type = 'padding', val = 2 }, dashboard.section.header,
+                { type = 'padding', val = 2 }, dashboard.section.buttons,
+            }
 
             local function format_key(key)
                 if not key or key == "" then return "None" end
@@ -267,69 +243,60 @@ local plugins_setup = {
                 
                 local kb = state.keybindings or {}
                 local raw_new = kb.new_file or "<C-n>"
-                local raw_find = kb.find_file or "<C-p>"
+                local raw_find = kb.find_file or "<C-f>"
                 local raw_quit = kb.quit or "<C-q>"
                 local raw_recent = "<C-r>"
-                local raw_explorer = kb.toggle_explorer or "<C-e>"
-                local raw_help = kb.commands or "<F1>"
-
-                local new_file_key = format_key(raw_new)
-                local find_file_key = format_key(raw_find)
-                local quit_key = format_key(raw_quit)
-                local recent_key = format_key(raw_recent)
-                local explorer_key = format_key(raw_explorer)
-                local help_key = format_key(raw_help)
-                
-                local term = os.getenv("TERM") or ""
-                local nerd_fonts = true
-                if state.nerd_fonts ~= nil then
-                    nerd_fonts = state.nerd_fonts
+                local raw_help = kb.help or "<F1>"
+                if raw_help == "" then raw_help = "<F1>" end
+                local width = math.max(12, math.min(44, vim.api.nvim_win_get_width(0) - 6))
+                local height = vim.api.nvim_win_get_height(0)
+                dashboard.config.layout[3].val = height < 18 and 1 or 2
+                local recent_limit = math.max(0, math.min(5, height - 13))
+                local function clip(text, limit)
+                    while vim.fn.strdisplaywidth(text) > limit do
+                        text = vim.fn.strcharpart(text, 0, vim.fn.strchars(text) - 1)
+                    end
+                    return text
                 end
-                if term == "linux" then
-                    nerd_fonts = false
-                end
-                vim.g.vide_nerd_fonts = nerd_fonts
-
-                local new_file_icon = nerd_fonts and "󰝒 " or "+ "
-                local find_file_icon = nerd_fonts and " " or "/ "
-                local quit_icon = nerd_fonts and "󰈆 " or "x "
-
-                local recent_icon = nerd_fonts and "󰄉 " or "r "
-                local explorer_icon = nerd_fonts and "󰙅 " or "e "
-
-                local function custom_button(key, display_text, cmd)
-                    local btn = dashboard.button(key, "", cmd)
-                    btn.val = display_text
+                local function button(key, label, command, muted)
+                    local btn = dashboard.button(key, label, command)
+                    local shortcut = format_key(key)
+                    btn.val = clip(label, math.max(1, width - #shortcut - 2))
+                    btn.opts.width = width
                     btn.opts.position = "center"
-                    btn.opts.hl = "Function"
-                    btn.opts.shortcut = ""
+                    btn.opts.hl = muted and "VideWelcomeMuted" or "Normal"
+                    btn.opts.hl_shortcut = "VideWelcomeMuted"
+                    btn.opts.shortcut = shortcut
+                    btn.opts.cursor = 0
                     return btn
                 end
-
                 local buttons = {
-                    custom_button(raw_new, string.format("%s New File       %-6s", new_file_icon, new_file_key), "<cmd>enew<cr>"),
-                    { type = "padding", val = 1 },
-                    custom_button(raw_find, string.format("%s Find File      %-6s", find_file_icon, find_file_key), "<cmd>Telescope find_files<cr>"),
-                    { type = "padding", val = 1 },
-                    custom_button(raw_recent, string.format("%s Recent Files   %-6s", recent_icon, recent_key), "<cmd>Telescope oldfiles<cr>"),
+                    button(raw_new, "New file", "<cmd>enew<cr>"),
+                    button(raw_find, "Find file", "<cmd>Telescope find_files<cr>"),
+                    button(raw_recent, "Recent files", "<cmd>Telescope oldfiles<cr>"),
                     { type = "padding", val = 1 },
                 }
-
-                local is_zen_mode = vim.g.vide_zen_mode
-                if is_zen_mode == nil then
-                    is_zen_mode = state.zen
+                local cwd, recent_count, seen = vim.fn.getcwd(), 0, {}
+                for _, path in ipairs(vim.v.oldfiles) do
+                    if recent_count >= recent_limit then break end
+                    if not seen[path] and vim.fn.filereadable(path) == 1 and path:sub(1, #cwd + 1) == cwd .. '/' then
+                        seen[path] = true
+                        recent_count = recent_count + 1
+                        local item = button(tostring(recent_count), vim.fn.fnamemodify(path, ':.'), nil)
+                        item.on_press = function() vim.cmd.edit(vim.fn.fnameescape(path)) end
+                        item.opts.keymap = { 'n', tostring(recent_count), item.on_press, { silent = true } }
+                        table.insert(buttons, item)
+                    end
                 end
-
-                if is_zen_mode then
-                    table.insert(buttons, custom_button(raw_explorer, string.format("%s File Explorer  %-6s", explorer_icon, explorer_key), "<cmd>Ex<cr>"))
-                    table.insert(buttons, { type = "padding", val = 1 })
+                if recent_count == 0 and recent_limit > 0 then
+                    table.insert(buttons, { type = 'text', val = clip('No recent files in this project', width), opts = { position = 'center', hl = 'VideWelcomeMuted' } })
                 end
-
-                table.insert(buttons, custom_button(raw_help, string.format("󰌌  Help Bindings  %-6s", help_key), "<cmd>HelpMenu<cr>"))
                 table.insert(buttons, { type = "padding", val = 1 })
-                table.insert(buttons, custom_button(raw_quit, string.format("%s Quit           %-6s", quit_icon, quit_key), "<cmd>qa<cr>"))
-
+                table.insert(buttons, button(raw_help, "Help", "<cmd>HelpMenu<cr>", true))
+                table.insert(buttons, button(raw_quit, "Quit", "<cmd>qa<cr>", true))
                 dashboard.section.buttons.val = buttons
+                local content_height = 1 + dashboard.config.layout[3].val + #buttons
+                dashboard.config.layout[1].val = math.max(0, math.floor((height - content_height) / 2))
             end
 
             _G.vide_update_dashboard_keys()
@@ -339,6 +306,28 @@ local plugins_setup = {
             }
             require("alpha").setup(dashboard.config)
             local group = vim.api.nvim_create_augroup("VideDashboard", { clear = true })
+            local function welcome_colors()
+                local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
+                local fg, bg = normal.fg or 0xd4d4d4, normal.bg or 0x1e1e1e
+                local muted = 0
+                for _, shift in ipairs({16, 8, 0}) do
+                    local f = bit.band(bit.rshift(fg, shift), 255)
+                    local b = bit.band(bit.rshift(bg, shift), 255)
+                    muted = muted + bit.lshift(math.floor(b + (f - b) * 0.7), shift)
+                end
+                vim.api.nvim_set_hl(0, 'VideWelcomeMuted', { fg = muted })
+            end
+            welcome_colors()
+            vim.api.nvim_create_autocmd('ColorScheme', { group = group, callback = welcome_colors })
+            vim.api.nvim_create_autocmd({ 'VimResized', 'WinResized', 'DirChanged' }, {
+                group = group,
+                callback = function()
+                    if vim.bo.filetype == 'alpha' then
+                        _G.vide_update_dashboard_keys()
+                        pcall(function() require('alpha').redraw() end)
+                    end
+                end,
+            })
             vim.api.nvim_create_autocmd({ "FileType" }, {
                 group = group,
                 pattern = "alpha",
@@ -1478,8 +1467,7 @@ function M.sync_theme()
     end
 
     -- Set terminal colors for the terminal panel so bash prompt ~ > is legible
-    local bg_terminal = get_contrast(bg_editor, 12) -- Lighten background slightly for contrast
-    if not bg_terminal then bg_terminal = bg_editor end
+    local bg_terminal = bg_editor
     
     vim.g.terminal_color_0  = get_color("Normal", "bg") or "#1e1e1e"
     vim.g.terminal_color_1  = get_color("Error", "fg") or "#f2495a"
@@ -1617,15 +1605,11 @@ _G.vide_alpha_start = function()
     vim.bo[buf].swapfile = false
     vim.bo[buf].filetype = 'vide_dashboard'
     local lines = {
-        '', '                         VIDE', '',
-        '              Terminal-native editor and IDE', '',
-        '              Ctrl+N   New file',
-        '              Ctrl+P   Find files',
-        '              F1       Commands / keyboard shortcuts',
-        '              Ctrl+E   Toggle explorer',
-        '              Ctrl+T   Toggle terminal',
-        '              F11      Zen / previous mode', '',
-        '              Plugins are offline for this session.',
+        '', '  vide / ' .. vim.fn.fnamemodify(vim.fn.getcwd(), ':t'), '',
+        '  New file          Ctrl+N',
+        '  Find file         Ctrl+F', '',
+        '  Commands          F1',
+        '  Quit              Ctrl+Q',
     }
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].modifiable = false

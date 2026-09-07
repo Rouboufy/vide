@@ -90,7 +90,7 @@ def run(capture=None):
             send("C-s")
             wait_for(lambda _: json.loads((base / "data/vide/settings.json").read_text()).get("theme") == "system", "System selection was not saved")
             wait_for(lambda _: "48;2;5;24;46m" in ansi(), "Editor did not use system background")
-            assert "48;2;3;18;34m" in ansi(), "Sidebar did not use system background"
+            assert "48;2;3;18;34m" not in ansi(), "Sidebar did not blend into the editor background"
             save_capture("system-dark")
 
         try:
@@ -99,7 +99,7 @@ def run(capture=None):
             wait_for(lambda s: "WORKSPACE" in s and "sample.zig" in s, "Workspace did not render")
             choose_system()
             colors.write_text('mode = "light"\nbackground = "#f8f4ee"\nforeground = "#242424"\naccent = "#805020"\ndark_background = "#eee4d8"\n')
-            wait_for(lambda _: "48;2;248;244;238m" in ansi() and "48;2;238;228;216m" in ansi(), "Desktop change did not update editor and sidebar")
+            wait_for(lambda _: "48;2;248;244;238m" in ansi() and "48;2;5;24;46m" not in ansi(), "Desktop change did not update editor and sidebar")
             save_capture("system-light")
             send("C-q")
             deadline = time.monotonic() + 6

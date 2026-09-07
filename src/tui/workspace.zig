@@ -74,7 +74,7 @@ pub fn filtered(state: *const State, out: *[actions.len]Action) []Action {
 pub fn paletteRect(layout: Layout) Rect {
     const w = @min(64, layout.total.w);
     const h = @min(14, layout.total.h);
-    return .{ .x = (layout.total.w - w) / 2, .y = (layout.total.h - h) / 3, .w = w, .h = h };
+    return .{ .x = (layout.total.w - w) / 2, .y = @min(2, layout.total.h - h), .w = w, .h = h };
 }
 
 pub fn selectBuffer(a: *App, index: usize) void {
@@ -191,18 +191,21 @@ pub fn ensureSelection(a: *App, rect: Rect) void {
 
 fn section(a: *App, rect: Rect, row: usize, text: []const u8) void {
     if (rect.w < 4 or row < a.workspace.scroll or row - a.workspace.scroll >= rect.h) return;
-    const t = &a.active_theme;
+    const chrome = a.active_theme.chrome();
+    const t = &chrome;
     const y = rect.y + @as(u16, @intCast(row - a.workspace.scroll));
-    // Headings sit above indented items and continue into a visible rule.
-    a.ren.drawTextClipped(rect.x + 1, y, rect.w - 3, text, t.fg_secondary, t.bg_sidebar, true, false);
-    const start: u16 = @intCast(@min(text.len + 2, rect.w - 2));
-    if (start < rect.w - 2) a.ren.drawRect(.{ .x = rect.x + start, .y = y, .w = rect.w - 2 - start, .h = 1 }, "─", t.border_color, t.bg_sidebar);
+    a.ren.drawRect(.{ .x = rect.x, .y = y, .w = rect.w - 1, .h = 1 }, "─", t.border_color, t.bg_sidebar);
+    const label_w: u16 = @intCast(@min(text.len, rect.w -| 5));
+    a.ren.drawTextClipped(rect.x + 1, y, 1, "[", t.border_color, t.bg_sidebar, false, false);
+    a.ren.drawTextClipped(rect.x + 2, y, label_w, text, t.fg_secondary, t.bg_sidebar, true, false);
+    a.ren.drawTextClipped(rect.x + 2 + label_w, y, 1, "]", t.border_color, t.bg_sidebar, false, false);
 }
 
 pub fn drawSidebar(a: *App, layout: Layout) void {
     const rect = layout.file_tree;
     if (rect.w == 0) return;
-    const t = &a.active_theme;
+    const chrome = a.active_theme.chrome();
+    const t = &chrome;
     a.ren.drawRect(.{ .x = 0, .y = 0, .w = rect.w, .h = @min(2, layout.total.h) }, " ", t.fg_primary, t.bg_sidebar);
     var title: [160]u8 = undefined;
     const project = std.fmt.bufPrint(&title, "vide / {s}", .{a.git_panel.current_branch orelse "main"}) catch "vide";
@@ -225,12 +228,15 @@ pub fn drawSidebar(a: *App, layout: Layout) void {
         const label = if (index < files) a.tabs.items[index].name else labels[index - files];
         const focused = a.sidebar_focus and index == a.workspace.selected;
         const current_file = index < files and index == a.active_tab;
-        const bg = if (focused) t.bg_accent else if (current_file) t.bg_tab_inactive else t.bg_sidebar;
+        const bg = if (focused or current_file) t.bg_tab_inactive else t.bg_sidebar;
         const fg = @import("theme.zig").readableForeground(t.fg_primary, bg, 4.5);
         if (focused or current_file) a.ren.drawRect(.{ .x = rect.x + 1, .y = y, .w = rect.w - 3, .h = 1 }, " ", fg, bg);
         // The rail marks the current file even while focus moves to a tool.
         if (current_file) a.ren.drawTextClipped(rect.x, y, 1, "▎", t.fg_accent, t.bg_sidebar, true, false);
-        if (focused) a.ren.drawTextClipped(rect.x + 1, y, 1, ">", fg, bg, true, false);
+        if (focused or current_file) {
+            a.ren.drawTextClipped(rect.x + 1, y, 1, "[", if (focused) t.fg_primary else t.border_color, bg, false, false);
+            a.ren.drawTextClipped(rect.x + rect.w - 2, y, 1, "]", if (focused) t.fg_primary else t.border_color, bg, false, false);
+        }
         a.ren.drawTextClipped(rect.x + 3, y, rect.w - 6, label, fg, bg, focused or current_file, false);
         if (index < files and a.tabs.items[index].modified) {
             a.ren.drawTextClipped(rect.x + rect.w - 3, y, 1, "*", fg, t.bg_sidebar, true, false);
@@ -247,7 +253,8 @@ pub fn shortcut(a: *App, action: Action) []const u8 {
 }
 
 pub fn drawChrome(a: *App, layout: Layout) void {
-    const t = &a.active_theme;
+    const chrome = a.active_theme.chrome();
+    const t = &chrome;
     const file = if (a.active_tab < a.tabs.items.len) a.tabs.items[a.active_tab].name else "[No file]";
     var hint_buf: [80]u8 = undefined;
     const hint = std.fmt.bufPrint(&hint_buf, "{s} Commands", .{a.settings_widget.config.keybindings.commands}) catch "Commands";
@@ -311,21 +318,31 @@ test "picker footer hit targets follow wide and compact labels" {
 
 fn paletteLine(a: *App, r: Rect, index: usize, label: []const u8, detail: []const u8) void {
     if (index < a.workspace.command_scroll or index >= a.workspace.command_scroll + r.h - 3) return;
-    const t = &a.active_theme;
+    const chrome = a.active_theme.chrome();
+    const t = &chrome;
     const y = r.y + 2 + @as(u16, @intCast(index - a.workspace.command_scroll));
     const selected = index == a.workspace.command_selected;
-    const bg = if (selected) t.bg_accent else t.bg_sidebar;
+    const bg = if (selected) t.bg_tab_inactive else t.bg_sidebar;
     const fg = @import("theme.zig").readableForeground(t.fg_primary, bg, 4.5);
-    a.ren.drawRect(.{ .x = r.x, .y = y, .w = r.w, .h = 1 }, " ", fg, bg);
-    a.ren.drawTextClipped(r.x + 1, y, if (r.w >= 44) r.w - 17 else r.w - 2, label, fg, bg, selected, false);
+    a.ren.drawRect(.{ .x = r.x + 1, .y = y, .w = r.w - 2, .h = 1 }, " ", fg, bg);
+    a.ren.drawTextClipped(r.x + 2, y, if (r.w >= 44) r.w - 18 else r.w - 4, label, fg, bg, selected, false);
+    if (selected) a.ren.drawTextClipped(r.x + 1, y, 1, "▎", t.fg_primary, bg, false, false);
     if (r.w >= 44) a.ren.drawTextClipped(r.x + r.w - 15, y, 14, detail, if (selected) fg else t.fg_secondary, bg, false, false);
 }
 
 pub fn drawPalette(a: *App, layout: Layout) void {
     const r = paletteRect(layout);
     if (r.w < 4 or r.h < 4) return;
-    const t = &a.active_theme;
+    const chrome = a.active_theme.chrome();
+    const t = &chrome;
     a.ren.drawRect(r, " ", t.fg_primary, t.bg_sidebar);
+    a.ren.drawRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = 1 }, "─", t.border_color, t.bg_sidebar);
+    a.ren.drawRect(.{ .x = r.x, .y = r.y + r.h - 1, .w = r.w, .h = 1 }, "─", t.border_color, t.bg_sidebar);
+    for (0..r.h) |row| {
+        const y = r.y + @as(u16, @intCast(row));
+        a.ren.drawTextClipped(r.x, y, 1, if (row == 0) "┌" else if (row == r.h - 1) "└" else "│", t.border_color, t.bg_sidebar, false, false);
+        a.ren.drawTextClipped(r.x + r.w - 1, y, 1, if (row == 0) "┐" else if (row == r.h - 1) "┘" else "│", t.border_color, t.bg_sidebar, false, false);
+    }
     const title = if (a.workspace.editing_shortcut != null) "Set shortcut / press a key" else if (a.workspace.buffer_picker) "Open buffers / type to filter" else "Commands / type to filter";
     a.ren.drawTextClipped(r.x + 1, r.y, r.w - 2, title, t.fg_accent, t.bg_sidebar, true, false);
     const prompt = if (a.workspace.editing_shortcut) |action| labels[@intFromEnum(action)] else a.workspace.query[0..a.workspace.query_len];
@@ -350,7 +367,7 @@ pub fn drawPalette(a: *App, layout: Layout) void {
         var results: [actions.len]Action = undefined;
         for (filtered(&a.workspace, &results), 0..) |action, i| {
             const key = shortcut(a, action);
-            paletteLine(a, r, i, labels[@intFromEnum(action)], if (key.len > 0) key else "[Set shortcut]");
+            paletteLine(a, r, i, labels[@intFromEnum(action)], key);
         }
     }
     if (total == 0) a.ren.drawTextClipped(r.x + 1, r.y + 2, r.w - 2, if (a.workspace.buffer_picker) "No matching buffers" else "No matching commands", t.fg_secondary, t.bg_sidebar, false, false);

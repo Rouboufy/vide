@@ -2,6 +2,14 @@ vim.g.vide_is_terminal = true
 vim.opt.termguicolors = true
 vim.opt.laststatus = 0
 vim.opt.showmode = false
+vim.opt.ruler = false
+vim.opt.showcmd = false
+vim.opt.cmdheight = 0
+vim.opt.number = false
+vim.opt.relativenumber = false
+vim.opt.signcolumn = 'no'
+vim.opt.foldcolumn = '0'
+vim.opt.fillchars:append({ eob = ' ' })
 
 function _G.vide_ensure_terminal()
     local buf = vim.api.nvim_get_current_buf()

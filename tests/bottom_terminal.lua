@@ -1,6 +1,7 @@
 vim.rpcnotify = function() end
 vim.opt.shell = '/bin/sh'
 dofile('src/nvim/terminal_init.lua')
+assert(not vim.o.ruler and not vim.o.showcmd and vim.o.cmdheight == 0)
 
 _G.vide_ensure_terminal()
 local first_buf = vim.api.nvim_get_current_buf()

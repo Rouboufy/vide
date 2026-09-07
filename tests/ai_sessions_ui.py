@@ -105,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix="vide-ai-ui-") as directory:
         tmux("send-keys", "-t", "ui", "Escape")
         time.sleep(0.1)
         tmux("send-keys", "-t", "ui", "C-t")
-        wait_for("TERMINAL")
+        wait_for("[Terminal]")
         time.sleep(0.3)
         tmux("send-keys", "-l", "-t", "ui", "exit")
         tmux("send-keys", "-t", "ui", "Enter")

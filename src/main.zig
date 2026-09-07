@@ -642,9 +642,6 @@ fn runNvimSession(
         const r_au2 = try rpc.call("nvim_command", cp);
         msgpack.freeValue(r_au2, alloc);
 
-        cp[0] = .{ .string = "set shortmess+=I" };
-        const r_sm = try rpc.call("nvim_command", cp);
-        msgpack.freeValue(r_sm, alloc);
     }
 
     var seq_buf: [4096]u8 = undefined;
@@ -730,6 +727,16 @@ fn runNvimSession(
         var ts: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         const now = ts.sec;
+
+        // SIGWINCH wakes the reactor immediately; checking the actual size
+        // also recovers from coalesced/missed signals without requiring input.
+        const physical_size = try term.getSize();
+        if (physical_size[0] > 0 and physical_size[1] > 0 and
+            (physical_size[0] != ren.width or physical_size[1] != ren.height))
+        {
+            try ren.resize(alloc, physical_size[0], physical_size[1]);
+            app.invalidations.forceFull(.terminal_resize);
+        }
 
         if (now - app.last_explorer_refresh >= 2) {
             app.last_explorer_refresh = now;

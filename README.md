@@ -144,7 +144,7 @@ Before installing Vide, make sure you have the following:
 | :--- | :--- | :--- |
 | **Neovim** | `>= 0.10.0` | Required only for source builds; release bundles include 0.12.4 |
 | **Zig** | `0.16.0` | Required only for reproducible source builds |
-| **git** | any | Required only to clone or build from source |
+| **git** | any | Required for source builds, plugin installation and updates, and Git integration |
 | **curl** | any | Required by `setup.sh` and the optional in-app bug reporter |
 | **Python** | `>= 3` | Required by the extension shop and automatic Zig installation |
 | **A Nerd Font** | recommended | Rich icons are enabled by default; portable text symbols can be selected in Settings |
@@ -159,12 +159,12 @@ Before installing Vide, make sure you have the following:
 
 Run the one-line installer. It will automatically:
 
-1. Detect a missing download tool (and source-build dependencies when needed)
+1. Detect missing curl and Git (and source-build dependencies when needed)
 2. Ask before changing system packages
 3. Download the latest supported release binary
 4. Install it to `~/.local/bin/vide`
 5. Create VIDE's isolated Neovim directories
-6. Bootstrap all Neovim plugins headlessly
+6. Bootstrap Neovim plugins headlessly from a source checkout, or on first launch otherwise
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash
@@ -177,6 +177,11 @@ an explicit source build or on a platform without a published binary. Source
 builds require the pinned Zig version to be installed first. Automatic package
 installation supports apt, pacman, dnf, zypper, and Homebrew and installs only
 dependencies detected as missing or too old.
+
+On macOS, setup also detects Homebrew in `/opt/homebrew` (Apple Silicon) and
+`/usr/local` (Intel) if it is missing from `PATH`. Release installs use their
+bundled Neovim for plugin bootstrap; a separate `brew install neovim` is unnecessary.
+Git is checked for plugin installation unless `--no-plugins` is supplied.
 
 Tagged releases provide checksum-verified bundles for Linux x86-64 and ARM64,
 and macOS Intel and Apple Silicon. Each bundle contains Vide, Neovim 0.12.4,
