@@ -204,7 +204,7 @@ pub const LazyWidget = struct {
         primitives.drawModalFrame(ren, modal, .square, theme.fg_primary, theme.bg_sidebar, theme.border_color, theme.bg_editor);
 
         // Red Close Button Top Right
-        ren.drawText(x + w - 2, y, "X", .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }, theme.bg_sidebar, true, false);
+        ren.drawControlText(x + w - 2, y, "X", .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }, theme.bg_sidebar, true, false);
 
         // Header
         const header_text = " LAZY.NVIM ";
@@ -216,9 +216,9 @@ pub const LazyWidget = struct {
             var search_buf: [80]u8 = undefined;
             const display_query = if (self.search_len > 0) self.search_query[0..self.search_len] else "";
             const search_line = std.fmt.bufPrint(&search_buf, " Search: {s}{s} ", .{ display_query, if (self.is_searching) "_" else "" }) catch "";
-            ren.drawText(search_x, y, search_line, theme.bg_sidebar, theme.fg_primary, false, false);
+            ren.drawControlText(search_x, y, search_line, theme.bg_sidebar, theme.fg_primary, false, false);
         } else {
-            ren.drawText(search_x, y, " [/] Search ", theme.fg_comment, theme.bg_sidebar, false, false);
+            ren.drawControlText(search_x, y, " [/] Search ", theme.fg_comment, theme.bg_sidebar, false, false);
         }
 
         // Stats
@@ -240,7 +240,7 @@ pub const LazyWidget = struct {
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
             const bg = if (is_selected) theme.fg_accent else theme.bg_sidebar;
-            ren.drawText(tx, tab_y, label, fg, bg, is_selected, false);
+            ren.drawControlText(tx, tab_y, label, fg, bg, is_selected, false);
             tx += @as(u16, @intCast(label.len)) + 1;
         }
 
@@ -266,6 +266,7 @@ pub const LazyWidget = struct {
             if (rendered_count >= visible_items) break;
 
             const py = list_y + @as(u16, @intCast(rendered_count));
+            defer ren.highlightHover(.{ .x = x + 1, .y = py, .w = w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
             const is_selected = (i == self.selected_idx);
             const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
             const fg = if (is_selected) theme.fg_accent else theme.fg_primary;

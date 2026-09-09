@@ -25,12 +25,15 @@ pub const Button = struct {
 
     pub fn draw(self: Button, ren: *Renderer, label: []const u8, palette: Palette) void {
         if (self.rect.w == 0 or self.rect.h == 0) return;
+        const hovered = self.state != .disabled and ren.isHovered(self.rect);
         const active = self.state == .focused or self.state == .hovered or self.state == .selected;
-        const fg = if (self.state == .disabled) palette.muted_fg else if (active) palette.accent_fg else palette.fg;
-        const bg = if (active) palette.accent_bg else palette.bg;
+        const base_fg = if (self.state == .disabled) palette.muted_fg else if (active) palette.accent_fg else palette.fg;
+        const base_bg = if (active) palette.accent_bg else palette.bg;
+        const fg = if (hovered) base_bg else base_fg;
+        const bg = if (hovered) base_fg else base_bg;
         ren.drawRect(self.rect, " ", fg, bg);
         const padding: u16 = if (self.rect.w > 2) 1 else 0;
-        ren.drawTextClipped(self.rect.x + padding, self.rect.y, self.rect.w -| padding *| 2, label, fg, bg, active, false);
+        ren.drawTextClipped(self.rect.x + padding, self.rect.y, self.rect.w -| padding *| 2, label, fg, bg, active or hovered, false);
     }
 };
 

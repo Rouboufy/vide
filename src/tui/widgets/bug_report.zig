@@ -282,6 +282,7 @@ pub const BugReportWidget = struct {
             const idx = self.category_menu_scroll + row;
             if (idx >= categoryCount()) break;
             const item_y = inner_y + @as(u16, @intCast(row));
+            defer ren.highlightHover(.{ .x = inner_x, .y = item_y, .w = inner_w, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
             const selected = idx == self.category_menu_idx;
             const row_bg = if (selected) theme.bg_accent else theme.bg_sidebar;
             const row_fg = if (selected) theme.fg_primary else theme.fg_secondary;
@@ -319,7 +320,7 @@ pub const BugReportWidget = struct {
         primitives.drawModalFrame(ren, m, .rounded, theme.fg_primary, theme.bg_sidebar, theme.border_color, theme.bg_editor);
         const r = m.rect;
         ren.drawText(r.x + 2, r.y, " Report a bug ", theme.fg_accent, theme.bg_sidebar, true, false);
-        ren.drawText(r.x + r.w - 4, r.y, " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
+        ren.drawControlText(r.x + r.w - 4, r.y, " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
 
         switch (self.stage) {
             .form => self.drawForm(ren, r, theme),
@@ -352,6 +353,13 @@ pub const BugReportWidget = struct {
     fn drawForm(self: *const BugReportWidget, ren: *renderer.Renderer, r: Rect, theme: anytype) void {
         const x = r.x + 3;
         const w = r.w - 6;
+        defer {
+            if (!self.category_menu_open) {
+                ren.highlightHover(.{ .x = x, .y = r.y + 3, .w = w, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
+                ren.highlightHover(.{ .x = x, .y = r.y + 6, .w = w, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
+                ren.highlightHover(.{ .x = x, .y = r.y + 9, .w = w, .h = 7 }, theme.bg_sidebar, theme.fg_primary);
+            }
+        }
         ren.drawText(x, r.y + 2, "Category", theme.fg_secondary, theme.bg_sidebar, false, false);
         const category_bg = if (self.focus == 0) theme.bg_accent else theme.bg_editor;
         ren.drawRect(.{ .x = x, .y = r.y + 3, .w = w, .h = 1 }, " ", theme.fg_primary, category_bg);

@@ -132,6 +132,7 @@ pub const AiPanel = struct {
         for (0..@min(rows, self.itemCount() - self.scroll)) |row| {
             const idx = row + self.scroll;
             const y = rect.y + 3 + @as(u16, @intCast(row));
+            defer ren.highlightHover(.{ .x = rect.x + 1, .y = y, .w = rect.w - 2, .h = 1 }, colors.bg_sidebar, colors.fg_primary);
             const selected = self.selected == idx;
             const primary = !self.choosing and idx == 1;
             const bg = if (selected or primary) colors.bg_accent else colors.bg_sidebar;

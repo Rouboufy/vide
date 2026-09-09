@@ -107,7 +107,6 @@ pub const App = struct {
     last_explorer_refresh: i64 = 0,
 
     show_split_menu: bool = false,
-    ide_menu: ?u8 = null, // 0=File, 1=Edit, 2=Selection, 3=Buffer
     quit_requested: bool = false,
     split_menu_dir: enum { right, bottom } = .right,
     split_menu_x: u16 = 0,
@@ -129,7 +128,7 @@ pub const App = struct {
     root_split: *SplitNode,
 
     pub fn layout(self: *const App, cols: u16, rows: u16) Layout {
-        return if (self.mode == .normal)
+        return if (self.mode != .zen)
             Layout.workspace(cols, rows, self.show_file_tree, self.file_tree_width, self.root_split)
         else
             Layout.compute(cols, rows, self.mode == .zen, self.show_file_tree, self.file_tree_width, self.root_split);
@@ -249,7 +248,7 @@ pub const App = struct {
                     .child2 = panel_node,
                 } } };
             } else {
-                const content_w = if (self.mode == .normal)
+                const content_w = if (self.mode != .zen)
                     Layout.workspace(total_w, total_h, self.show_file_tree, self.file_tree_width, null).editor.w
                 else
                     Layout.compute(total_w, total_h, false, self.show_file_tree, self.file_tree_width, null).editor.w;

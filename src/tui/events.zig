@@ -24,39 +24,6 @@ fn zenSessionSaved(context: ?*anyopaque, completion: *Completion) anyerror!void 
 const Layout = @import("layout.zig").Layout;
 const settings = @import("widgets/settings.zig");
 
-fn primaryEditorColumn(a: *const App) u16 {
-    var min_col: u16 = std.math.maxInt(u16);
-    for (a.editor_wins.items) |win| min_col = @min(min_col, win.col);
-    return if (min_col == std.math.maxInt(u16)) 0 else min_col;
-}
-
-fn isSecondarySplitBuffer(a: *const App, bufnr: i64) bool {
-    const primary_col = primaryEditorColumn(a);
-    for (a.editor_wins.items) |win| {
-        if (win.col > primary_col and win.bufnr == bufnr) return true;
-    }
-    return false;
-}
-
-fn ideMenuAt(relative_x: u16) ?u8 {
-    const ranges = [_][2]u16{ .{ 7, 12 }, .{ 13, 18 }, .{ 19, 29 }, .{ 30, 38 } };
-    for (ranges, 0..) |range, i| {
-        if (relative_x >= range[0] and relative_x < range[1]) return @intCast(i);
-    }
-    return null;
-}
-
-fn ideMenuAction(menu: u8, row: u16) ?[]const u8 {
-    const actions: []const []const u8 = switch (menu) {
-        0 => &[_][]const u8{ "new", "save", "close" },
-        1 => &[_][]const u8{ "undo", "redo", "cut", "copy", "paste", "find", "replace" },
-        2 => &[_][]const u8{ "select_all", "select_line" },
-        3 => &[_][]const u8{ "previous_buffer", "next_buffer", "close" },
-        else => return null,
-    };
-    return if (row < actions.len) actions[row] else null;
-}
-
 fn aiCommandMovesFocus(command: []const u8) bool {
     return std.mem.indexOf(u8, command, "OpenAITerminal") != null or
         std.mem.indexOf(u8, command, "FocusAITerminal") != null or
@@ -93,17 +60,6 @@ test "editor context AI actions route to the AI bridge" {
     try std.testing.expectEqualStrings("_G.RunAIAction('fix_selection')", editorActionCode("ai_fix_selection", &buf).?);
     try std.testing.expectEqualStrings("_G.SendSelectionToAI()", editorActionCode("ai_add_context", &buf).?);
     try std.testing.expectEqualStrings("_G.vide_ide_action('copy')", editorActionCode("copy", &buf).?);
-}
-
-test "IDE menu hit targets and actions stay aligned" {
-    try std.testing.expectEqual(@as(?u8, 0), ideMenuAt(7));
-    try std.testing.expectEqual(@as(?u8, 1), ideMenuAt(15));
-    try std.testing.expectEqual(@as(?u8, 2), ideMenuAt(28));
-    try std.testing.expectEqual(@as(?u8, 3), ideMenuAt(37));
-    try std.testing.expect(ideMenuAt(12) == null);
-    try std.testing.expectEqualStrings("replace", ideMenuAction(1, 6).?);
-    try std.testing.expectEqualStrings("select_line", ideMenuAction(2, 1).?);
-    try std.testing.expect(ideMenuAction(2, 2) == null);
 }
 
 test "AI context commands keep sidebar focus" {
@@ -202,7 +158,11 @@ fn workspaceAction(a: *App, action: workspace.Action, layout: Layout) anyerror!v
             a.terminal_focus = false;
             workspace.command(a, "vim.cmd('HelpMenu')");
         },
-        .save => workspace.command(a, "vim.cmd('write')"),
+        .save => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "_G.vide_save_file()");
+        },
         .problems => {
             a.sidebar_focus = false;
             a.terminal_focus = false;
@@ -367,8 +327,8 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         if (std.mem.eql(u8, k.raw, "\x1b[B") or std.mem.eql(u8, k.raw, "\x1bOB")) break :get_key "<Down>";
         if (std.mem.eql(u8, k.raw, "\x1b[C") or std.mem.eql(u8, k.raw, "\x1bOC")) break :get_key "<Right>";
         if (std.mem.eql(u8, k.raw, "\x1b[D") or std.mem.eql(u8, k.raw, "\x1bOD")) break :get_key "<Left>";
-        if (std.mem.eql(u8, k.raw, "\x1b[H")) break :get_key "<Home>";
-        if (std.mem.eql(u8, k.raw, "\x1b[F")) break :get_key "<End>";
+        if (std.mem.eql(u8, k.raw, "\x1b[H") or std.mem.eql(u8, k.raw, "\x1bOH") or std.mem.eql(u8, k.raw, "\x1b[1~") or std.mem.eql(u8, k.raw, "\x1b[7~")) break :get_key "<Home>";
+        if (std.mem.eql(u8, k.raw, "\x1b[F") or std.mem.eql(u8, k.raw, "\x1bOF") or std.mem.eql(u8, k.raw, "\x1b[4~") or std.mem.eql(u8, k.raw, "\x1b[8~")) break :get_key "<End>";
         if (std.mem.eql(u8, k.raw, "\x1b[5~")) break :get_key "<PageUp>";
         if (std.mem.eql(u8, k.raw, "\x1b[6~")) break :get_key "<PageDown>";
         if (std.mem.eql(u8, k.raw, "\x1b[3~")) break :get_key "<Del>";
@@ -483,12 +443,10 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         switch (a.editor_context_menu.handleKey(nk)) {
             .action => |action| {
                 executeEditorAction(a, action);
-                a.term.setHoverMouse(false);
                 a.invalidations.damageAll();
                 return true;
             },
             .handled => {
-                if (!a.editor_context_menu.is_open) a.term.setHoverMouse(false);
                 a.invalidations.damageAll();
                 return true;
             },
@@ -614,7 +572,8 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
         return true;
     }
     if (!a.terminal_focus and std.mem.eql(u8, nk, kb.save_file)) {
-        workspace.command(a, "vim.cmd('write')");
+        a.sidebar_focus = false;
+        workspace.command(a, "_G.vide_save_file()");
         return true;
     }
     if (std.mem.eql(u8, nk, kb.toggle_terminal) or std.mem.eql(u8, k.raw, kb.toggle_terminal)) toggle_terminal_panel = true;
@@ -752,7 +711,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
     }
 
     if (nk.len > 0) {
-        if (a.mode == .normal and a.sidebar_focus and a.workspace.overview) {
+        if (a.mode != .zen and a.sidebar_focus and a.workspace.overview) {
             if (k.raw.len > 1 and k.raw[0] >= 32 and k.raw[0] < 127) {
                 for (k.raw) |c| {
                     const raw = [_]u8{c};
@@ -764,12 +723,20 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             a.invalidations.damageAll();
             return true;
         }
-        if (a.mode == .normal and a.sidebar_focus and !a.workspace.overview and std.mem.eql(u8, nk, "<Esc>") and a.explorer.action_state == .none and !a.git_panel.is_focus_commit) {
+        if (a.mode != .zen and a.sidebar_focus and !a.workspace.overview and std.mem.eql(u8, nk, "<Esc>") and a.explorer.action_state == .none and !a.git_panel.is_focus_commit) {
             a.workspace.overview = true;
             a.invalidations.damageAll();
             return true;
         }
         if (a.sidebar_focus) {
+            // Commit text owns Escape and printable keys before sidebar shortcuts.
+            if (a.show_file_tree and a.activity_bar.active_idx == 2 and a.git_panel.is_focus_commit) {
+                _ = a.git_panel.handleKey(nk, layout.file_tree.h) catch |err| {
+                    a.notify(.failure, "Git action failed: {}", .{err});
+                };
+                a.invalidations.damageAll();
+                return true;
+            }
             if (std.mem.eql(u8, nk, "<Tab>")) {
                 a.activity_bar.active_idx = (a.activity_bar.active_idx + 1) % 5;
                 if (a.activity_bar.active_idx == 4) {
@@ -832,15 +799,26 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     return true;
                 }
             } else if (a.show_file_tree and a.activity_bar.active_idx == 2) {
-                const handled = a.git_panel.handleKey(nk) catch |err| blk: {
+                const handled = a.git_panel.handleKey(nk, layout.file_tree.h) catch |err| blk: {
                     a.notify(.failure, "Git action failed: {}", .{err});
                     std.log.err("Git panel key action failed: {}", .{err});
                     break :blk false;
                 };
+                if (handled and std.mem.eql(u8, nk, "<Enter>")) {
+                    if (a.git_panel.selectedPath()) |path| {
+                        nvim_helpers.openFile(a.rpc, a.allocator, path) catch |err| {
+                            a.notify(.failure, "Unable to open file: {}", .{err});
+                            return true;
+                        };
+                        a.sidebar_focus = false;
+                        a.terminal_focus = false;
+                    }
+                }
                 if (handled) {
                     a.invalidations.damageAll();
                     return true;
                 }
+                return true; // Unbound Git keys must not edit the buffer behind the panel.
             } else if (a.show_file_tree and a.activity_bar.active_idx == 3) {
                 if (a.ai_panel.handleKey(nk)) |cmd| {
                     if (std.mem.startsWith(u8, cmd, "__CMD__:lua ")) {
@@ -870,7 +848,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 }
             }
             if (a.show_file_tree and a.activity_bar.active_idx == 2 and a.git_panel.is_focus_commit) {
-                const handled = a.git_panel.handleKey(nk) catch |err| blk: {
+                const handled = a.git_panel.handleKey(nk, layout.file_tree.h) catch |err| blk: {
                     a.notify(.failure, "Git action failed: {}", .{err});
                     std.log.err("Git commit action failed: {}", .{err});
                     break :blk false;
@@ -892,6 +870,13 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
 }
 
 pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
+    const point = a.ren.pointer_position;
+    if (point == null or point.?.x != m.col or point.?.y != m.row) {
+        a.ren.pointer_position = .{ .x = m.col, .y = m.row };
+        a.invalidations.damageAll();
+    }
+    // Passive motion must never activate controls or reach editor drag handling.
+    if (m.action == .move and m.button == .none and !a.editor_context_menu.is_open) return;
     a.last_click_x = m.col;
     a.last_click_y = m.row;
 
@@ -953,60 +938,15 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                 m.row >= layout.editor.y and m.row < layout.editor.y + layout.editor.h)
             {
                 a.editor_context_menu.open(m.col, m.row, a.ren.width, a.ren.height);
-                a.term.setHoverMouse(true);
             } else {
                 a.editor_context_menu.close();
-                a.term.setHoverMouse(false);
             }
             a.invalidations.damageAll();
             return;
         }
         if (a.editor_context_menu.handleMouse(m)) |action| executeEditorAction(a, action);
-        if (!a.editor_context_menu.is_open) a.term.setHoverMouse(false);
         a.invalidations.damageAll();
         return;
-    }
-
-    if (a.mode == .ide and m.action == .press and m.row == layout.status_bar.y and layout.status_bar.w >= 28) {
-        const report_w: u16 = 14;
-        const help_w: u16 = if (a.mode == .zen) 0 else if (a.settings_widget.config.nerd_fonts) @intCast(" 󰋖 Help ".len) else @intCast(" [?] Help ".len);
-        const report_x = layout.status_bar.x + layout.status_bar.w -| help_w -| report_w;
-        if (m.col >= report_x and m.col < report_x + report_w) {
-            a.bug_report.open();
-            a.invalidations.damageAll();
-            return;
-        }
-    }
-
-    // IDE status-bar menus expose familiar actions to mouse-only users.
-    if (a.ide_menu) |menu| {
-        if (m.action == .press) {
-            const counts = [_]u16{ 3, 7, 2, 3 };
-            const widths = [_]u16{ 18, 12, 16, 19 };
-            const status_xs = [_]u16{ 7, 13, 19, 30 };
-            const mh = counts[menu] + 2;
-            const mx = @min(layout.status_bar.x + status_xs[menu], a.ren.width -| widths[menu]);
-            const my = layout.status_bar.y -| mh;
-            if (m.col >= mx and m.col < mx + widths[menu] and m.row > my and m.row < my + mh - 1) {
-                const row = m.row - my - 1;
-                const action = ideMenuAction(menu, row) orelse return;
-                executeEditorAction(a, action);
-                a.ide_menu = null;
-                a.invalidations.damageAll();
-                return;
-            }
-            a.ide_menu = null;
-            a.invalidations.damageAll();
-        }
-    }
-
-    if (a.mode == .ide and m.action == .press and m.row == layout.status_bar.y and layout.status_bar.w >= 48) {
-        const relative_x = m.col -| layout.status_bar.x;
-        if (ideMenuAt(relative_x)) |menu| {
-            a.ide_menu = menu;
-            a.invalidations.damageAll();
-            return;
-        }
     }
 
     // Handle split menu click if open
@@ -1122,26 +1062,6 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         }
     }
 
-    // Handle split button click
-    if (a.mode == .ide and m.action == .press and m.row == layout.tab_bar.y and layout.tab_bar.w > 15) {
-        const right_edge = layout.tab_bar.x + layout.tab_bar.w;
-        if (m.col >= right_edge - 12 and m.col <= right_edge - 8) { // Split Vertically
-            a.show_split_menu = true;
-            a.split_menu_dir = .right;
-            a.split_menu_x = right_edge - 26;
-            a.split_menu_y = layout.tab_bar.y + 1;
-            a.invalidations.damageAll();
-            return;
-        } else if (m.col >= right_edge - 6 and m.col <= right_edge - 2) { // Split Horizontally
-            a.show_split_menu = true;
-            a.split_menu_dir = .bottom;
-            a.split_menu_x = right_edge - 26;
-            a.split_menu_y = layout.tab_bar.y + 1;
-            a.invalidations.damageAll();
-            return;
-        }
-    }
-
     if (a.explorer.show_menu and m.action == .press) {
         if (try a.explorer.handleMenuClick(m.col, m.row)) {
             a.invalidations.damageAll();
@@ -1235,15 +1155,15 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         return;
     }
 
-    if (a.mode != .ide and m.action == .press and m.button == .left and m.row == layout.status_bar.y and layout.status_bar.w >= 50 and m.col >= layout.status_bar.w - 36 and m.col < layout.status_bar.w - 18) {
+    if (m.action == .press and m.button == .left and m.row == layout.status_bar.y and layout.status_bar.w >= 50 and m.col >= layout.status_bar.w - 36 and m.col < layout.status_bar.w - 18) {
         workspace.openPalette(a);
         return;
     }
-    if (a.mode != .ide and m.action == .press and m.button == .left and m.row == layout.status_bar.y and layout.status_bar.w >= 16 and m.col >= layout.status_bar.w - 16) {
+    if (m.action == .press and m.button == .left and m.row == layout.status_bar.y and layout.status_bar.w >= 16 and m.col >= layout.status_bar.w - 16) {
         try workspaceAction(a, .zen, layout);
         return;
     }
-    if (a.mode == .normal and m.action == .press) {
+    if (a.mode != .zen and m.action == .press) {
         if (m.row == layout.tab_bar.y and m.button == .left) {
             workspace.openPalette(a);
             return;
@@ -1273,7 +1193,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         }
     }
 
-    if (a.mode != .ide and m.button == .left and m.action == .press and layout.status_bar.h > 0 and
+    if (m.button == .left and m.action == .press and layout.status_bar.h > 0 and
         m.row == layout.status_bar.y and m.col < layout.status_bar.x + @min(layout.status_bar.w, 12))
     {
         var old_cfg = a.settings_widget.config;
@@ -1285,7 +1205,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
         a.settings_widget.refreshPlugins();
         a.settings_widget.active_tab = 0;
         a.settings_widget.active_dropdown = .mode;
-        a.settings_widget.hover_dropdown_idx = if (a.mode == .zen) 2 else 0;
+        a.settings_widget.hover_dropdown_idx = if (a.mode == .zen) 2 else if (a.mode == .ide) 1 else 0;
         a.settings_widget.dropdown_scroll_offset = 0;
         a.settings_widget.is_open = true;
         a.invalidations.damageAll();
@@ -1480,122 +1400,6 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         a.invalidations.damageAll();
                     }
                 }
-
-                // Handle status bar clicks
-                if (a.mode == .ide and layout.status_bar.w > 0 and m.row == layout.status_bar.y) {
-                    const mode_end = layout.status_bar.x + @min(layout.status_bar.w, 12);
-                    if (m.col >= layout.status_bar.x and m.col < mode_end) {
-                        var old_cfg = a.settings_widget.config;
-                        if (settings.SettingsConfig.load(a.settings_widget.allocator, a.settings_widget.settings_path)) |new_cfg| {
-                            a.settings_widget.config = new_cfg;
-                            old_cfg.deinit(a.settings_widget.allocator);
-                        } else |_| {}
-                        a.settings_widget.refreshThemes(a.rpc);
-                        a.settings_widget.refreshPlugins();
-                        a.settings_widget.active_tab = 0;
-                        a.settings_widget.active_dropdown = .mode;
-                        a.settings_widget.hover_dropdown_idx = switch (a.mode) {
-                            .normal => 0,
-                            .ide => 1,
-                            .zen => 2,
-                        };
-                        a.settings_widget.dropdown_scroll_offset = 0;
-                        a.settings_widget.is_open = true;
-                        a.invalidations.damageAll();
-                        return;
-                    }
-                    const help_btn_len: u16 = if (a.settings_widget.config.nerd_fonts) 8 else 10;
-                    const help_start = layout.status_bar.x + layout.status_bar.w -| help_btn_len;
-                    if (m.col >= help_start and m.col < layout.status_bar.x + layout.status_bar.w) {
-                        var cmd_p = try a.allocator.alloc(Value, 1);
-                        cmd_p[0] = .{ .string = "HelpMenu" };
-                        a.rpc.notify("nvim_command", cmd_p) catch {};
-                        a.allocator.free(cmd_p);
-                        return;
-                    }
-                }
-
-                // Handle tab bar clicks
-                if (a.mode == .ide and m.row == layout.tab_bar.y) {
-                    const primary_col = primaryEditorColumn(a);
-                    const right_limit = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
-
-                    // A split-local tab focuses or closes its owning Neovim
-                    // window instead of switching the primary editor buffer.
-                    for (a.editor_wins.items) |win| {
-                        if (win.col <= primary_col or win.row != 0 or win.width < 4) continue;
-                        const split_x = layout.tab_bar.x + win.col;
-                        if (split_x >= right_limit) continue;
-                        const desired_w: u16 = @intCast(@min(win.name.len + 8, std.math.maxInt(u16)));
-                        const tab_w = @min(@min(desired_w, win.width), right_limit - split_x);
-                        if (tab_w < 4 or m.col < split_x or m.col >= split_x + tab_w) continue;
-                        if (m.col >= split_x + tab_w - 2) {
-                            var close_args = [_]Value{ .{ .integer = win.id }, .{ .integer = win.bufnr } };
-                            const close_params = [_]Value{
-                                .{ .string = "return _G.vide_close_split(...)" },
-                                .{ .array = &close_args },
-                            };
-                            a.rpc.notify("nvim_exec_lua", &close_params) catch |err| {
-                                a.notify(.failure, "Unable to queue split close: {}", .{err});
-                            };
-                        } else {
-                            const focus_params = [_]Value{.{ .integer = win.id }};
-                            a.rpc.notify("nvim_set_current_win", &focus_params) catch |err| {
-                                a.notify(.failure, "Unable to queue split selection: {}", .{err});
-                            };
-                        }
-                        a.invalidations.damage(.chrome);
-                        return;
-                    }
-
-                    var tx: u16 = layout.tab_bar.x;
-                    var clicked_tab = false;
-                    var tab_end = right_limit;
-                    for (a.editor_wins.items) |win| {
-                        if (win.col > primary_col) tab_end = @min(tab_end, layout.tab_bar.x + win.col);
-                    }
-                    for (a.tabs.items) |tab| {
-                        if (isSecondarySplitBuffer(a, tab.bufnr)) continue;
-                        if (tx >= tab_end) break;
-                        const desired_w: u16 = @intCast(@min(tab.name.len + 8, std.math.maxInt(u16)));
-                        const tab_w = @min(desired_w, tab_end - tx);
-                        if (tab_w < 4) break;
-                        if (m.col >= tx and m.col < tx + tab_w) {
-                            if (m.col >= tx + tab_w - 2 and m.col < tx + tab_w) {
-                                var close_args = [_]Value{.{ .integer = tab.bufnr }};
-                                const delete_params = [_]Value{
-                                    .{ .string = "return _G.vide_close_buffer(...)" },
-                                    .{ .array = &close_args },
-                                };
-                                // The helper targets inactive tabs and provides
-                                // Neovim's confirmation UI for unsaved buffers.
-                                a.rpc.notify("nvim_exec_lua", &delete_params) catch |err| {
-                                    std.log.err("Tab RPC failed: {}", .{err});
-                                };
-                            } else {
-                                var select_args = [_]Value{.{ .integer = tab.bufnr }};
-                                const select_params = [_]Value{
-                                    .{ .string = "return _G.vide_select_buffer(...)" },
-                                    .{ .array = &select_args },
-                                };
-                                a.rpc.notify("nvim_exec_lua", &select_params) catch |err| {
-                                    std.log.err("Tab RPC failed: {}", .{err});
-                                };
-                            }
-                            a.invalidations.damage(.chrome);
-                            clicked_tab = true;
-                            break;
-                        }
-                        tx += tab_w;
-                    }
-                    if (!clicked_tab and tx + 1 < tab_end and m.col == tx + 1) {
-                        const new_params = [_]Value{ .{ .string = "return _G.vide_new_primary_buffer()" }, .{ .array = &[_]Value{} } };
-                        a.rpc.notify("nvim_exec_lua", &new_params) catch |err| {
-                            a.notify(.failure, "Unable to queue new tab: {}", .{err});
-                        };
-                        a.invalidations.damage(.chrome);
-                    }
-                }
             }
         }
 
@@ -1666,10 +1470,8 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
     {
         if (m.action == .press) a.terminal_focus = false;
         if (m.action == .press and m.button == .right) {
-            a.ide_menu = null;
             a.show_split_menu = false;
             a.editor_context_menu.open(m.col, m.row, a.ren.width, a.ren.height);
-            a.term.setHoverMouse(true);
             a.invalidations.damageAll();
             return;
         }

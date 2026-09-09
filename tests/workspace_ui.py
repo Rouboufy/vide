@@ -11,12 +11,12 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run(capture=None):
+def run(capture=None, mode="normal"):
     with tempfile.TemporaryDirectory(prefix="vide-workspace-test-") as directory:
         base = pathlib.Path(directory)
         for name in ("config", "data/vide", "state", "cache"):
             (base / name).mkdir(parents=True, exist_ok=True)
-        (base / "data/vide/settings.json").write_text('{"mode":"normal","nerd_fonts":false}')
+        (base / "data/vide/settings.json").write_text(json.dumps({"mode": mode, "nerd_fonts": False}))
         sample = base / "sample.zig"
         sample.write_text('const answer: u32 = 42;\n')
         socket = str(base / "tmux.sock")
@@ -64,13 +64,16 @@ def run(capture=None):
         command = shlex.join(["env", *(f"{k}={v}" for k, v in env.items()), str(ROOT / "zig-out/bin/vide"), str(sample)])
         try:
             tmux("new-session", "-d", "-s", "ui", "-x", "100", "-y", "30", "-c", str(base), command)
+            explorer = wait_for(lambda s: "EXPLORER" in s and "sample.zig" in s, "Explorer was not the default view")
+            assert "OPEN FILES" not in explorer, "Workspace overview opened instead of Explorer"
+            text("\x1b[<0;4;2M\x1b[<0;4;2m")
             normal = wait_for(lambda s: "WORKSPACE" in s and "sample.zig" in s and "OPEN FILES" in s, "Workspace did not render")
             assert "[?] Help" not in normal, "Legacy status chrome remains"
             if capture:
                 destination = pathlib.Path(capture)
                 destination.mkdir(parents=True, exist_ok=True)
-                (destination / "normal.txt").write_text(normal)
-                (destination / "normal.ansi").write_text(tmux("capture-pane", "-p", "-e", "-t", "ui"))
+                (destination / f"{mode}.txt").write_text(normal)
+                (destination / f"{mode}.ansi").write_text(tmux("capture-pane", "-p", "-e", "-t", "ui"))
 
             # Section rules and their blank gutters are not action targets.
             project_header = next(i for i, line in enumerate(normal.splitlines()) if "PROJECT" in line)
@@ -90,7 +93,7 @@ def run(capture=None):
             wait_for(lambda s: "PROJECT" in s and "Settings" in s, "Sidebar sections did not return after resize")
 
             # The same workspace actions are reachable through mouse hit tests.
-            project_row = next(i for i, line in enumerate(screen().splitlines()) if "Project files" in line)
+            project_row = next(i for i, line in enumerate(screen().splitlines()) if "Explorer" in line)
             text(f"\x1b[<0;4;{project_row + 1}M\x1b[<0;4;{project_row + 1}m")
             wait_for(lambda s: "< Workspace [Esc]" in s, "Mouse did not open project files")
             text("\x1b[<0;4;2M\x1b[<0;4;2m")
@@ -99,7 +102,8 @@ def run(capture=None):
             text(f"\x1b[<0;4;{file_row + 1}M\x1b[<0;4;{file_row + 1}m")
             wait_for(lambda s: "Editor" in s.splitlines()[-1], "Mouse file selection did not focus editor")
 
-            send("i")
+            if mode == "normal":
+                send("i")
             text("// saved ")
             send("Escape", "C-s")
             wait_for(lambda _: sample.read_text().startswith("// saved "), "Ctrl-S did not save")
@@ -161,9 +165,22 @@ def run(capture=None):
             send("F6")
             palette("new file")
             wait_for(lambda s: "Editor" in s.splitlines()[-1], "New file kept focus in the sidebar")
-            send("i")
+            if mode == "normal":
+                send("i")
             text("new-file-input")
             wait_for(lambda s: "new-file-input" in s, "New file did not accept editor input")
+            # First save asks for a name; cancellation preserves the new text.
+            send("C-s")
+            wait_for(lambda s: "Save new file as" in s, "New file did not ask for a name")
+            send("Escape")
+            send("C-s")
+            wait_for(lambda s: "Save new file as" in s, "Cancelled save could not be retried")
+            text("new file.txt")
+            send("Enter")
+            wait_for(lambda _: (base / "new file.txt").exists() and "new-file-input" in (base / "new file.txt").read_text(), "First save did not write the named file")
+            wait_for(lambda s: "new file.txt" in s and "Save new file as" not in s, "Saved name did not appear in the workspace")
+            send("C-s")
+            assert "Save new file as" not in screen(), "Named file prompted again"
             send("Escape")
             send("C-q")
         finally:
@@ -174,4 +191,6 @@ def run(capture=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--capture", type=pathlib.Path)
-    run(parser.parse_args().capture)
+    parser.add_argument("--mode", choices=("normal", "ide"), default="normal")
+    args = parser.parse_args()
+    run(args.capture, args.mode)

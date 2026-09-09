@@ -2,6 +2,7 @@
 """Resize a real terminal without keystrokes and verify the shell's PTY size."""
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import tempfile
@@ -41,6 +42,47 @@ with tempfile.TemporaryDirectory(prefix='vide-resize-') as directory:
         wait_for(lambda s: 'editor stays visible' in s)
         tmux('send-keys', '-t', 'ui', 'C-t')
         wait_for(lambda s: 'Debug console' in s)
+        # Spaces can move Neovim's terminal cursor without a grid-line update.
+        # Each old software cursor must be erased even in these cursor-only frames.
+        tmux('send-keys', '-l', '-t', 'ui', "PS1='VIDE> '")
+        time.sleep(0.15)
+        tmux('send-keys', '-t', 'ui', 'Enter')
+        wait_for(lambda s: any(line.split('│')[-1].lstrip().startswith('VIDE>') for line in s.splitlines()))
+        tmux('send-keys', '-l', '-t', 'ui', 'echo')
+        time.sleep(0.15)
+        for _ in range(4):
+            tmux('send-keys', '-l', '-t', 'ui', ' ')
+            time.sleep(0.12)
+        grid = wait_for(lambda s: 'VIDE> echo' in s)
+        row, line = next((i, line) for i, line in enumerate(grid.splitlines()) if 'VIDE> echo' in line)
+        command_x = line.index('VIDE> echo') + len('VIDE> ')
+        ansi = tmux('capture-pane', '-p', '-e', '-t', 'ui').splitlines()[row]
+        backgrounds = []
+        background = None
+        for chunk in re.split(r'(\x1b\[[0-9;]*m)', ansi):
+            if chunk.startswith('\x1b['):
+                codes = [int(c or 0) for c in chunk[2:-1].split(';')]
+                i = 0
+                while i < len(codes):
+                    code = codes[i]
+                    if code in (0, 49):
+                        background = None
+                    elif 40 <= code <= 47 or 100 <= code <= 107:
+                        background = (code,)
+                    elif code in (38, 48) and i + 1 < len(codes):
+                        count = 4 if codes[i + 1] == 2 else 2
+                        if code == 48:
+                            background = tuple(codes[i + 1:i + count + 1])
+                        i += count
+                    i += 1
+            else:
+                backgrounds.extend([background] * len(chunk))
+        expected = backgrounds[command_x]
+        assert len(backgrounds) >= command_x + 8, repr(ansi)
+        assert backgrounds[command_x + 4:command_x + 8] == [expected] * 4, ('Spaces retained cursor blocks', repr(ansi))
+        tmux('send-keys', '-l', '-t', 'ui', 'ok')
+        tmux('send-keys', '-t', 'ui', 'Enter')
+
         for width, height in ((90, 28), (150, 45), (45, 16), (120, 36)):
             tmux('resize-window', '-t', 'ui', '-x', str(width), '-y', str(height))
             # No keypress wakes Vide: the footer must move by itself.
@@ -62,4 +104,4 @@ with tempfile.TemporaryDirectory(prefix='vide-resize-') as directory:
         tmux('send-keys', '-t', 'ui', 'C-q')
     finally:
         subprocess.run(['tmux', '-S', socket, 'kill-server'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-print('Terminal UI passed: header, no ruler, idle window resize and exact shell PTY dimensions at four sizes')
+print('Terminal UI passed: spaces leave no cursor blocks, header, no ruler, idle resize and exact shell PTY dimensions at four sizes')

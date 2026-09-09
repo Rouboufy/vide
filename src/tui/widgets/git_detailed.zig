@@ -147,7 +147,7 @@ pub const GitDetailedWidget = struct {
         ren.drawText(x, y + 2, "├", theme.border_color, theme.bg_sidebar, false, false);
         ren.drawText(x + w - 1, y + 2, "┤", theme.border_color, theme.bg_sidebar, false, false);
 
-        ren.drawText(x + w - 2, y, "X", .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }, theme.bg_sidebar, true, false);
+        ren.drawControlText(x + w - 2, y, "X", .{ .rgb = .{ .r = 255, .g = 0, .b = 0 } }, theme.bg_sidebar, true, false);
 
         const header_text = " GIT DETAILED ";
         ren.drawText(x + 2, y, header_text, theme.bg_sidebar, theme.fg_accent, true, false);
@@ -159,7 +159,7 @@ pub const GitDetailedWidget = struct {
             const is_selected = (self.selected_tab == tab_enum);
             const fg = if (is_selected) theme.bg_sidebar else theme.fg_primary;
             const bg = if (is_selected) theme.fg_accent else theme.bg_sidebar;
-            ren.drawText(tx, y, label, fg, bg, is_selected, false);
+            ren.drawControlText(tx, y, label, fg, bg, is_selected, false);
             tx += @as(u16, @intCast(label.len)) + 1;
         }
 
@@ -182,6 +182,7 @@ pub const GitDetailedWidget = struct {
                 if (rendered_count >= visible_items) break;
 
                 const py = list_y + @as(u16, @intCast(rendered_count));
+                defer ren.highlightHover(.{ .x = x + 1, .y = py, .w = w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                 const is_selected = (i == self.selected_idx);
                 const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
 
@@ -212,6 +213,7 @@ pub const GitDetailedWidget = struct {
                 if (rendered_count >= visible_items) break;
 
                 const py = list_y + @as(u16, @intCast(rendered_count));
+                defer ren.highlightHover(.{ .x = x + 1, .y = py, .w = w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                 const is_selected = (i == self.selected_idx);
                 const bg = if (is_selected) theme.bg_editor else theme.bg_sidebar;
 

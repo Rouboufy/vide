@@ -82,14 +82,14 @@ def run(capture=None):
             send("Enter")
 
         def picker_rows():
-            return "\n".join(line[18:82] for line in screen().splitlines()[7:18])
+            return "\n".join(line[18:82] for line in screen().splitlines()[4:18])
 
         second = base / "second.zig"
         second.write_text("const second = true;\n")
         try:
             tmux("new-session", "-d", "-s", "ui", "-x", "100", "-y", "30", "-c", str(base), command)
             tmux("set-option", "-t", "ui", "remain-on-exit", "on")
-            wait_for(lambda s: "WORKSPACE" in s and "sample.zig" in s, "Workspace did not render")
+            wait_for(lambda s: ("WORKSPACE" in s or "EXPLORER" in s) and "sample.zig" in s, "Workspace did not render")
             search("close buffer")
             send("F2")
             wait_for(lambda s: "Set shortcut / press a key" in s, "F2 did not start shortcut editing")
@@ -143,7 +143,7 @@ def run(capture=None):
             assert "sample.zig" not in picker_rows(), "Closed buffer remains in picker"
             text("second")
             grid = wait_for(lambda s: "second" in s, "Buffer query missing")
-            row = next(i for i, line in enumerate(grid.splitlines()[7:18], 7) if "second.zig" in line[18:82])
+            row = next(i for i, line in enumerate(grid.splitlines()[4:18], 4) if "second.zig" in line[18:82])
             text(f"\x1b[<0;22;{row + 1}M\x1b[<0;22;{row + 1}m")
             wait_for(lambda s: "Open buffers /" not in s and "const second = true;" in s, "Mouse did not activate buffer")
 
@@ -169,7 +169,7 @@ def run(capture=None):
                 time.sleep(0.05)
             assert tmux("display-message", "-p", "-t", "ui", "#{pane_dead}").strip() == "1"
             tmux("respawn-pane", "-t", "ui", "-c", str(base), command)
-            wait_for(lambda s: "WORKSPACE" in s and "sample.zig" in s, "Relaunch failed")
+            wait_for(lambda s: ("WORKSPACE" in s or "EXPLORER" in s) and "sample.zig" in s, "Relaunch failed")
             send("F4")
             wait_for(lambda s: "Open buffers / type to filter" in s, "Shortcut did not survive restart")
             send("Escape", "Escape")

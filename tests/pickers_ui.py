@@ -46,7 +46,7 @@ def run(plugin_root, capture):
                 if predicate(grid):
                     return grid
                 time.sleep(0.05)
-            raise AssertionError(description + "\n" + screen())
+            raise AssertionError(description + "\n" + tmux("capture-pane", "-p", "-S", "-200", "-t", "ui"))
 
         def send(*keys):
             for key in keys:
@@ -82,7 +82,8 @@ def run(plugin_root, capture):
         launch = shlex.join(["env", *(f"{k}={v}" for k, v in env.items()), str(ROOT / "zig-out/bin/vide"), str(project / "alpha.lua")])
         try:
             tmux("new-session", "-d", "-s", "ui", "-x", "160", "-y", "38", "-c", str(project), launch)
-            wait_for(lambda s: "WORKSPACE" in s and "alpha.lua" in s, "Vide did not start")
+            tmux("set-option", "-t", "ui", "remain-on-exit", "on")
+            wait_for(lambda s: ("WORKSPACE" in s or "EXPLORER" in s) and "alpha.lua" in s, "Vide did not start")
             time.sleep(0.3)
             wait_for(lambda s: "Plugins are disabled" not in s, "Startup notice did not clear", timeout=12)
             command("luafile " + str(setup))
@@ -91,7 +92,12 @@ def run(plugin_root, capture):
             send("C-p")
             wide = wait_for(lambda s: "Find files" in s and "Esc Close" in s and "beta.lua" in s and s.count("alpha preview") == 2, "Wide file picker missing results or preview")
             assert "Telescope" not in wide, "Legacy frame still visible"
-            assert wide.index("Find files") < wide.index("beta.lua"), "Search title is below results"
+            # Explorer also lists beta.lua; compare rows inside the picker.
+            wide_rows = wide.splitlines()
+            title_row = next(i for i, line in enumerate(wide_rows) if "Find files" in line)
+            picker_left = wide_rows[title_row].index("╭")
+            result_rows = [i for i, line in enumerate(wide_rows) if "beta.lua" in line[picker_left:]]
+            assert result_rows and min(result_rows) > title_row, "Search title is below picker results\n" + wide
             save_capture("find-files-normal")
             send("C-n")
             wait_for(lambda s: "beta preview" in s and "Esc Close" in s, "Ctrl-N did not move selection inside picker")
@@ -135,7 +141,7 @@ def run(plugin_root, capture):
             picker("find_files", "Find files")
             save_capture("find-files-zen")
             send("F11")
-            wait_for(lambda s: "WORKSPACE" in s and "Esc Close" not in s, "Zen toggle did not close picker and restore workspace")
+            wait_for(lambda s: ("WORKSPACE" in s or "EXPLORER" in s) and "Esc Close" not in s, "Zen toggle did not close picker and restore workspace")
             picker("find_files", "Find files")
             send("F1")
             wait_for(lambda s: "Commands / type to filter" in s and "Esc Close" not in s, "Command menu did not replace picker")

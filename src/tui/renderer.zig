@@ -74,6 +74,7 @@ pub const Renderer = struct {
     true_color: bool = true,
     force_full_redraw: bool = true,
     cursor_position: ?CursorPosition = null,
+    pointer_position: ?CursorPosition = null,
 
     pub fn init(allocator: std.mem.Allocator, width: u16, height: u16, writer: *std.Io.Writer) !Renderer {
         const size = @as(usize, width) * @as(usize, height);
@@ -106,6 +107,40 @@ pub const Renderer = struct {
     pub fn setCell(self: *Renderer, x: u16, y: u16, cell: Cell) void {
         if (x >= self.width or y >= self.height) return;
         self.buf[@as(usize, y) * @as(usize, self.width) + x] = cell;
+    }
+
+    pub fn isHovered(self: *const Renderer, rect: @import("layout.zig").Rect) bool {
+        const point = self.pointer_position orelse return false;
+        return point.x >= rect.x and point.x - rect.x < rect.w and
+            point.y >= rect.y and point.y - rect.y < rect.h;
+    }
+
+    /// Apply hover only to explicitly interactive regions, preserving glyphs.
+    pub fn highlightHover(self: *Renderer, rect: @import("layout.zig").Rect, fg: Color, bg: Color) void {
+        if (!self.isHovered(rect)) return;
+        var y = rect.y;
+        while (y < @min(self.height, rect.y +| rect.h)) : (y += 1) {
+            var x = rect.x;
+            while (x < @min(self.width, rect.x +| rect.w)) : (x += 1) {
+                const cell = &self.buf[@as(usize, y) * self.width + x];
+                cell.fg = fg;
+                cell.bg = bg;
+                cell.bold = true;
+            }
+        }
+    }
+
+    pub fn drawControlText(self: *Renderer, x: u16, y: u16, label: []const u8, fg: Color, bg: Color, bold: bool, italic: bool) void {
+        var width: u16 = 0;
+        var iter = (std.unicode.Utf8View.init(label) catch return).iterator();
+        while (iter.nextCodepoint()) |cp| width +|= unicodeCellWidth(cp);
+        self.drawButtonText(x, y, width, label, fg, bg, bold, italic);
+    }
+
+    pub fn drawButtonText(self: *Renderer, x: u16, y: u16, width: u16, label: []const u8, fg: Color, bg: Color, bold: bool, italic: bool) void {
+        const hovered = self.isHovered(.{ .x = x, .y = y, .w = width, .h = 1 });
+        // Reverse the control's own colors so hover works with every theme.
+        self.drawTextClipped(x, y, width, label, if (hovered) bg else fg, if (hovered) fg else bg, bold or hovered, italic);
     }
 
     pub fn drawCursor(self: *Renderer, x: u16, y: u16) void {
@@ -531,4 +566,40 @@ test "drawTextClipped respects terminal boundaries and preserves continuation ce
     try std.testing.expectEqualStrings("á", renderer.buf[2].char[0..renderer.buf[2].len]);
     try std.testing.expectEqualStrings("Z", renderer.buf[3].char[0..renderer.buf[3].len]);
     try std.testing.expectEqualStrings("A", renderer.buf[7].char[0..renderer.buf[7].len]);
+}
+
+test "button hover clears on exit and respects the right edge" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var ren = try Renderer.init(std.testing.allocator, 8, 2, &output.writer);
+    defer ren.deinit(std.testing.allocator);
+    const fg = Color{ .index = 7 };
+    const bg = Color{ .index = 0 };
+    ren.pointer_position = .{ .x = 2, .y = 0 };
+    ren.drawButtonText(1, 0, 4, "Save", fg, bg, false, false);
+    try std.testing.expectEqual(bg, ren.buf[1].fg);
+    try std.testing.expectEqual(fg, ren.buf[1].bg);
+    ren.pointer_position = .{ .x = 5, .y = 0 };
+    ren.drawButtonText(1, 0, 4, "Save", fg, bg, false, false);
+    try std.testing.expectEqual(fg, ren.buf[1].fg);
+    try std.testing.expectEqual(bg, ren.buf[1].bg);
+    try std.testing.expect(!ren.buf[1].bold);
+}
+
+test "hover regions preserve wide glyphs and clip to the terminal" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    var ren = try Renderer.init(std.testing.allocator, 4, 2, &output.writer);
+    defer ren.deinit(std.testing.allocator);
+    ren.drawText(0, 1, "界A", .{ .index = 7 }, .{ .index = 0 }, false, false);
+    const glyph = ren.buf[4].char;
+    ren.pointer_position = .{ .x = 1, .y = 1 };
+    ren.highlightHover(.{ .x = 0, .y = 1, .w = 100, .h = 100 }, .{ .index = 0 }, .{ .index = 7 });
+    try std.testing.expectEqualSlices(u8, &glyph, &ren.buf[4].char);
+    try std.testing.expect(ren.buf[5].continuation);
+    try std.testing.expectEqual(Color{ .index = 7 }, ren.buf[5].bg);
+    try std.testing.expect(!ren.buf[0].bold);
+    ren.pointer_position = null;
+    ren.highlightHover(.{ .x = 0, .y = 0, .w = 4, .h = 1 }, .{ .index = 0 }, .{ .index = 7 });
+    try std.testing.expect(!ren.buf[0].bold);
 }

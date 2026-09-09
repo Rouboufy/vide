@@ -9,7 +9,7 @@ pub const Action = enum { find_file, explorer, terminal, git, problems, ai, exte
 pub const actions = std.enums.values(Action);
 pub const labels = [_][]const u8{ "Find file", "Explorer", "Terminal", "Git", "Problems", "AI assistants", "Extensions", "Settings", "Keyboard shortcuts", "Help", "Save file", "New file", "Split right", "Split down", "Close buffer", "Toggle zen", "Next region", "Toggle sidebar", "Report bug", "Switch buffers", "Command menu", "Open terminal right" };
 pub const State = struct {
-    overview: bool = true,
+    overview: bool = false,
     selected: usize = 0,
     scroll: usize = 0,
     palette: bool = false,
@@ -210,7 +210,7 @@ pub fn drawSidebar(a: *App, layout: Layout) void {
     var title: [160]u8 = undefined;
     const project = std.fmt.bufPrint(&title, "vide / {s}", .{a.git_panel.current_branch orelse "main"}) catch "vide";
     a.ren.drawTextClipped(1, 0, rect.w -| 2, project, t.fg_accent, t.bg_sidebar, true, false);
-    if (layout.total.h > 1) a.ren.drawTextClipped(1, 1, rect.w -| 2, if (a.workspace.overview) "WORKSPACE" else "< Workspace [Esc]", t.fg_secondary, t.bg_sidebar, false, false);
+    if (layout.total.h > 1) a.ren.drawButtonText(1, 1, rect.w -| 2, if (a.workspace.overview) "WORKSPACE" else "< Workspace [Esc]", t.fg_secondary, t.bg_sidebar, false, false);
     if (!a.workspace.overview) return;
     a.ren.drawRect(rect, " ", t.fg_primary, t.bg_sidebar);
     const files = a.tabs.items.len;
@@ -226,7 +226,7 @@ pub fn drawSidebar(a: *App, layout: Layout) void {
         if (row < a.workspace.scroll or row - a.workspace.scroll >= rect.h or rect.w < 6) continue;
         const y = rect.y + @as(u16, @intCast(row - a.workspace.scroll));
         const label = if (index < files) a.tabs.items[index].name else labels[index - files];
-        const focused = a.sidebar_focus and index == a.workspace.selected;
+        const focused = (a.sidebar_focus and index == a.workspace.selected) or a.ren.isHovered(.{ .x = rect.x, .y = y, .w = rect.w -| 1, .h = 1 });
         const current_file = index < files and index == a.active_tab;
         const bg = if (focused or current_file) t.bg_tab_inactive else t.bg_sidebar;
         const fg = @import("theme.zig").readableForeground(t.fg_primary, bg, 4.5);
@@ -258,23 +258,23 @@ pub fn drawChrome(a: *App, layout: Layout) void {
     const file = if (a.active_tab < a.tabs.items.len) a.tabs.items[a.active_tab].name else "[No file]";
     var hint_buf: [80]u8 = undefined;
     const hint = std.fmt.bufPrint(&hint_buf, "{s} Commands", .{a.settings_widget.config.keybindings.commands}) catch "Commands";
-    if (a.mode == .normal and layout.tab_bar.h > 0) {
+    if (a.mode != .zen and layout.tab_bar.h > 0) {
         const r = layout.tab_bar;
         a.ren.drawRect(r, " ", t.fg_primary, t.bg_editor);
         a.ren.drawTextClipped(r.x + @min(1, r.w), r.y, r.w -| 19, file, t.fg_primary, t.bg_editor, false, false);
-        if (r.w >= 18) a.ren.drawTextClipped(r.x + r.w - 18, r.y, 18, hint, t.fg_secondary, t.bg_editor, false, false);
+        if (r.w >= 18) a.ren.drawButtonText(r.x + r.w - 18, r.y, 18, hint, t.fg_secondary, t.bg_editor, false, false);
     }
     const r = layout.status_bar;
     if (r.h == 0) return;
     a.ren.drawRect(r, " ", t.fg_primary, t.bg_editor);
     if (a.ui_state.native_picker_chrome) {
-        if (r.w >= 24) a.ren.drawTextClipped(1, r.y, 10, "Enter Open", t.fg_primary, t.bg_editor, true, false);
+        if (r.w >= 24) a.ren.drawButtonText(1, r.y, 10, "Enter Open", t.fg_primary, t.bg_editor, true, false);
         if (r.w >= 72) {
             a.ren.drawTextClipped(14, r.y, 12, "Up/Down Move", t.fg_secondary, t.bg_editor, false, false);
-            a.ren.drawTextClipped(28, r.y, 8, "Tab Mark", t.fg_secondary, t.bg_editor, false, false);
-            a.ren.drawTextClipped(39, r.y, 13, "Alt+P Preview", t.fg_secondary, t.bg_editor, false, false);
-        } else if (r.w >= 48) a.ren.drawTextClipped(17, r.y, 13, "Alt+P Preview", t.fg_secondary, t.bg_editor, false, false);
-        if (r.w >= 11) a.ren.drawTextClipped(r.w - 11, r.y, 10, "Esc Close", t.fg_primary, t.bg_editor, false, false);
+            a.ren.drawButtonText(28, r.y, 8, "Tab Mark", t.fg_secondary, t.bg_editor, false, false);
+            a.ren.drawButtonText(39, r.y, 13, "Alt+P Preview", t.fg_secondary, t.bg_editor, false, false);
+        } else if (r.w >= 48) a.ren.drawButtonText(17, r.y, 13, "Alt+P Preview", t.fg_secondary, t.bg_editor, false, false);
+        if (r.w >= 11) a.ren.drawButtonText(r.w - 11, r.y, 10, "Esc Close", t.fg_primary, t.bg_editor, false, false);
         return;
     }
     const editing_mode: []const u8 = switch (a.ui_state.editor_mode) {
@@ -285,13 +285,13 @@ pub fn drawChrome(a: *App, layout: Layout) void {
         't' => "TERMINAL",
         else => "NORMAL",
     };
-    a.ren.drawTextClipped(1, r.y, r.w -| 1, if (a.mode == .zen) "ZEN" else editing_mode, t.fg_accent, t.bg_editor, true, false);
+    a.ren.drawTextClipped(1, r.y, r.w -| 1, if (a.mode == .zen) "ZEN" else if (a.mode == .ide) "IDE" else editing_mode, t.fg_accent, t.bg_editor, true, false);
     const focus = if (a.terminal_focus) "Terminal" else if (a.sidebar_focus) "Workspace" else "Editor";
     if (r.w >= 48) a.ren.drawTextClipped(9, r.y, r.w -| 50, if (a.mode == .zen) file else focus, t.fg_secondary, t.bg_editor, false, false);
-    if (r.w >= 50) a.ren.drawTextClipped(r.w - 36, r.y, 18, hint, t.fg_secondary, t.bg_editor, false, false);
+    if (r.w >= 50) a.ren.drawButtonText(r.w - 36, r.y, 18, hint, t.fg_secondary, t.bg_editor, false, false);
     var footer_buf: [80]u8 = undefined;
     const footer = std.fmt.bufPrint(&footer_buf, "{s} {s}", .{ a.settings_widget.config.keybindings.toggle_zen, if (a.mode == .zen) @as([]const u8, "Return") else "Zen" }) catch "Zen";
-    if (r.w >= 16) a.ren.drawTextClipped(r.w - 16, r.y, 16, footer, t.fg_secondary, t.bg_editor, false, false);
+    if (r.w >= 16) a.ren.drawButtonText(r.w - 16, r.y, 16, footer, t.fg_secondary, t.bg_editor, false, false);
 }
 
 pub const PickerAction = enum { open, mark, preview, close };
@@ -321,7 +321,7 @@ fn paletteLine(a: *App, r: Rect, index: usize, label: []const u8, detail: []cons
     const chrome = a.active_theme.chrome();
     const t = &chrome;
     const y = r.y + 2 + @as(u16, @intCast(index - a.workspace.command_scroll));
-    const selected = index == a.workspace.command_selected;
+    const selected = index == a.workspace.command_selected or a.ren.isHovered(.{ .x = r.x + 1, .y = y, .w = r.w -| 2, .h = 1 });
     const bg = if (selected) t.bg_tab_inactive else t.bg_sidebar;
     const fg = @import("theme.zig").readableForeground(t.fg_primary, bg, 4.5);
     a.ren.drawRect(.{ .x = r.x + 1, .y = y, .w = r.w - 2, .h = 1 }, " ", fg, bg);
@@ -367,7 +367,7 @@ pub fn drawPalette(a: *App, layout: Layout) void {
         var results: [actions.len]Action = undefined;
         for (filtered(&a.workspace, &results), 0..) |action, i| {
             const key = shortcut(a, action);
-            paletteLine(a, r, i, labels[@intFromEnum(action)], key);
+            paletteLine(a, r, i, labels[@intFromEnum(action)], if (key.len == 0) "[Set shortcut]" else key);
         }
     }
     if (total == 0) a.ren.drawTextClipped(r.x + 1, r.y + 2, r.w - 2, if (a.workspace.buffer_picker) "No matching buffers" else "No matching commands", t.fg_secondary, t.bg_sidebar, false, false);

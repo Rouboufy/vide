@@ -27,6 +27,7 @@ pub fn runGitCommand(allocator: std.mem.Allocator, io: std.Io, argv: []const []c
         }
     }
 
-    _ = try child.wait(io);
+    const term = try child.wait(io);
+    if (term != .exited or term.exited != 0) return error.GitCommandFailed;
     return try stdout.toOwnedSlice();
 }

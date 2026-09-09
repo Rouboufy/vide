@@ -28,7 +28,9 @@ pub const CompositionPlan = struct {
             .chrome = damage.chrome or expose_underlay,
             .sidebar = damage.sidebar or expose_underlay,
             .editor = damage.editor or cursor_damage or expose_underlay,
-            .drawer = damage.drawer or expose_underlay,
+            // Cursor-only terminal updates (spaces/arrows) must erase the old
+            // software cursor even when Neovim sends no changed grid cells.
+            .drawer = damage.drawer or cursor_damage or expose_underlay,
             .overlays = overlay_visible and (any_base or damage.overlay),
         };
     }
@@ -56,13 +58,13 @@ test "composition plan retains unaffected coarse regions" {
     try std.testing.expect(!plan.overlays);
 }
 
-test "cursor damage recomposes only editor and reapplies visible overlay" {
+test "cursor damage recomposes both cursor surfaces and reapplies visible overlay" {
     const plan = CompositionPlan.init(.{}, true, true);
     try std.testing.expect(plan.editor);
     try std.testing.expect(plan.overlays);
     try std.testing.expect(!plan.chrome);
     try std.testing.expect(!plan.sidebar);
-    try std.testing.expect(!plan.drawer);
+    try std.testing.expect(plan.drawer);
 }
 
 test "overlay movement or closure exposes every underlying region" {
@@ -144,38 +146,11 @@ fn drawText(ren: *Renderer, x: u16, y: u16, text: []const u8, fg: Color, bg: Col
     ren.drawText(x, y, text, fg, bg, bold, italic);
 }
 
-fn primaryEditorColumn(a: *const App) u16 {
-    var min_col: u16 = std.math.maxInt(u16);
-    for (a.editor_wins.items) |win| min_col = @min(min_col, win.col);
-    return if (min_col == std.math.maxInt(u16)) 0 else min_col;
-}
-
-fn isSecondarySplitBuffer(a: *const App, bufnr: i64) bool {
-    const primary_col = primaryEditorColumn(a);
-    for (a.editor_wins.items) |win| {
-        if (win.col > primary_col and win.bufnr == bufnr) return true;
-    }
-    return false;
-}
-
-fn primaryEditorBuffer(a: *const App) i64 {
-    const primary_col = primaryEditorColumn(a);
-    var best_row: u16 = std.math.maxInt(u16);
-    var bufnr: i64 = 0;
-    for (a.editor_wins.items) |win| {
-        if (win.col == primary_col and win.row < best_row) {
-            best_row = win.row;
-            bufnr = win.bufnr;
-        }
-    }
-    return bufnr;
-}
-
 fn overlayVisible(a: *App) bool {
     return a.ui_state.telescope_rects[0] != null or a.ui_state.telescope_rects[1] != null or
         a.settings_widget.is_open or a.mason_widget.is_open or a.lazy_widget.is_open or
         a.git_detailed_widget.is_open or a.extension_shop.is_popup_open or a.show_split_menu or
-        a.ide_menu != null or a.activeNotice() != null or a.editor_context_menu.is_open or
+        a.activeNotice() != null or a.editor_context_menu.is_open or
         a.bug_report.is_open or a.workspace.palette;
 }
 
@@ -183,6 +158,14 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
     const chrome = a.active_theme.chrome();
     const t = &chrome;
     const plan = CompositionPlan.init(damage, cursor_damage, overlayVisible(a));
+    const pointer = a.ren.pointer_position;
+    defer a.ren.pointer_position = pointer;
+    // A modal owns interaction; controls behind it must not respond to hover.
+    if (a.workspace.palette or a.settings_widget.is_open or a.mason_widget.is_open or
+        a.lazy_widget.is_open or a.git_detailed_widget.is_open or
+        a.extension_shop.is_popup_open or a.bug_report.is_open or a.editor_context_menu.is_open)
+        a.ren.pointer_position = null;
+
     clearDamagedRegions(a.ren, layout, plan, t.fg_primary, t.bg_editor);
 
     // Draw grid 1 (global grid) first for cmdline, messages, and global statusline
@@ -262,17 +245,9 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
     }
 
     if (a.mode != .zen) {
-        if (plan.sidebar or (plan.chrome and a.mode == .normal)) {
-            if (a.mode == .normal) workspace.drawSidebar(a, layout);
-            if (a.mode == .ide) a.activity_bar.draw(a.ren, layout.activity_bar, .{
-                .bg_sidebar = t.bg_sidebar,
-                .bg_accent = t.bg_accent,
-                .fg_primary = t.fg_primary,
-                .fg_secondary = t.fg_secondary,
-                .border_color = t.border_color,
-                .nerd_fonts = a.settings_widget.config.nerd_fonts,
-            });
-            if (a.show_file_tree and !(a.mode == .normal and a.workspace.overview)) {
+        if (plan.sidebar or plan.chrome) {
+            workspace.drawSidebar(a, layout);
+            if (a.show_file_tree and !a.workspace.overview) {
                 if (a.activity_bar.active_idx == 0) {
                     a.explorer.draw(a.ren, layout.file_tree, .{
                         .bg_sidebar = t.bg_sidebar,
@@ -341,138 +316,7 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
                 }
             }
         }
-        if (plan.chrome and a.mode == .ide) {
-            drawRect(a.ren, layout.tab_bar, " ", t.fg_secondary, t.bg_sidebar);
-            var tx: u16 = layout.tab_bar.x;
-            var tab_end = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
-            const primary_col = primaryEditorColumn(a);
-            for (a.editor_wins.items) |win| {
-                if (win.col > primary_col) tab_end = @min(tab_end, layout.tab_bar.x + win.col);
-            }
-            const primary_bufnr = primaryEditorBuffer(a);
-            for (a.tabs.items, 0..) |tab, i| {
-                if (isSecondarySplitBuffer(a, tab.bufnr)) continue;
-                if (tx >= tab_end) break;
-                const is_active = if (primary_bufnr != 0) tab.bufnr == primary_bufnr else i == a.active_tab;
-                const desired_w: u16 = @intCast(@min(tab.name.len + 8, std.math.maxInt(u16)));
-                const tab_w = @min(desired_w, tab_end - tx);
-                if (tab_w < 4) break;
-                const bg = if (is_active) t.bg_tab_active else t.bg_tab_inactive;
-                const fg = if (is_active) t.fg_primary else t.fg_secondary;
 
-                drawRect(a.ren, Rect{ .x = tx, .y = layout.tab_bar.y, .w = tab_w, .h = 1 }, " ", fg, bg);
-                a.ren.drawTextClipped(tx + 2, layout.tab_bar.y, tab_w - 4, tab.name, fg, bg, is_active, false);
-                const close_color = if (is_active) Color{ .rgb = .{ .r = 235, .g = 100, .b = 100 } } else t.fg_secondary;
-                const tab_close_icon = if (a.settings_widget.config.nerd_fonts) "󰅖" else "x";
-                drawText(a.ren, tx + tab_w - 2, layout.tab_bar.y, tab_close_icon, close_color, bg, false, false);
-                tx += tab_w;
-            }
-            // Draw + button for new tab
-            if (tx + 1 < tab_end) drawText(a.ren, tx + 1, layout.tab_bar.y, "+", t.fg_secondary, t.bg_sidebar, true, false);
-
-            // Buffers shown in right-hand splits own a local tab aligned over that
-            // pane, matching the visual ownership of desktop IDE split groups.
-            for (a.editor_wins.items) |win| {
-                if (win.col <= primary_col or win.row != 0 or win.width < 4) continue;
-                const split_x = layout.tab_bar.x + win.col;
-                const right_limit = layout.tab_bar.x + layout.tab_bar.w -| (if (layout.tab_bar.w > 15) @as(u16, 14) else 0);
-                if (split_x >= right_limit) continue;
-                const desired_w: u16 = @intCast(@min(win.name.len + 8, std.math.maxInt(u16)));
-                const tab_w = @min(@min(desired_w, win.width), right_limit - split_x);
-                if (tab_w < 4) continue;
-                const bg = if (win.active) t.bg_tab_active else t.bg_tab_inactive;
-                const fg = if (win.active) t.fg_primary else t.fg_secondary;
-                drawRect(a.ren, .{ .x = split_x, .y = layout.tab_bar.y, .w = tab_w, .h = 1 }, " ", fg, bg);
-                a.ren.drawTextClipped(split_x + 2, layout.tab_bar.y, tab_w - 4, win.name, fg, bg, win.active, false);
-                const close_color = if (win.active) Color{ .rgb = .{ .r = 235, .g = 100, .b = 100 } } else t.fg_secondary;
-                const close_icon = if (a.settings_widget.config.nerd_fonts) "󰅖" else "x";
-                drawText(a.ren, split_x + tab_w - 2, layout.tab_bar.y, close_icon, close_color, bg, false, false);
-            }
-
-            // Draw split buttons at the top right of the editor (in tab bar)
-            if (layout.tab_bar.w > 15) {
-                const btn_y = layout.tab_bar.y;
-                const right_edge = layout.tab_bar.x + layout.tab_bar.w;
-                // Draw Split Vertically (Right) pill: "  |  " on editor bg
-                drawText(a.ren, right_edge - 13, btn_y, " ", t.fg_primary, t.bg_sidebar, false, false);
-                drawText(a.ren, right_edge - 12, btn_y, "  |  ", t.fg_primary, t.bg_editor, false, false);
-
-                // Draw Split Horizontally (Down) pill: "  -  " on editor bg
-                drawText(a.ren, right_edge - 7, btn_y, " ", t.fg_primary, t.bg_sidebar, false, false);
-                drawText(a.ren, right_edge - 6, btn_y, "  -  ", t.fg_primary, t.bg_editor, false, false);
-            }
-
-            // Draw Status Bar background
-            drawRect(a.ren, layout.status_bar, " ", t.fg_primary, t.bg_statusbar);
-
-            // Draw mode indicator
-            const mode_str = switch (a.mode) {
-                .ide => if (a.settings_widget.config.nerd_fonts) " V_  IDE " else " IDE ",
-                .normal => if (a.settings_widget.config.nerd_fonts) " V_  NORMAL " else " NORMAL ",
-                .zen => if (a.settings_widget.config.nerd_fonts) " V_  ZEN " else " ZEN ",
-            };
-            drawText(a.ren, layout.status_bar.x + 1, layout.status_bar.y, mode_str, t.fg_statusbar, t.bg_statusbar, true, false);
-
-            // IDE actions stay visible and mouse-accessible without taking editor rows.
-            if (a.mode == .ide and layout.status_bar.w >= 48) {
-                const menu_labels = [_][]const u8{ " File ", " Edit ", " Selection ", " Buffer " };
-                const menu_xs = [_]u16{ 7, 13, 19, 30 };
-                for (menu_labels, 0..) |label, i| {
-                    const selected = a.ide_menu != null and a.ide_menu.? == @as(u8, @intCast(i));
-                    drawText(a.ren, layout.status_bar.x + menu_xs[i], layout.status_bar.y, label, if (selected) t.fg_primary else t.fg_statusbar, if (selected) t.bg_accent else t.bg_statusbar, selected, false);
-                }
-            }
-
-            // Draw Branch in Status Bar
-            const branch_name = a.git_panel.current_branch orelse "main";
-            var status_buf: [128]u8 = undefined;
-            const branch_display = if (a.settings_widget.config.nerd_fonts)
-                std.fmt.bufPrint(&status_buf, "  {s} ", .{branch_name}) catch "  main "
-            else
-                std.fmt.bufPrint(&status_buf, " * {s} ", .{branch_name}) catch " * main ";
-            if (a.mode != .ide and layout.status_bar.w > 30)
-                drawText(a.ren, layout.status_bar.x + 12, layout.status_bar.y, branch_display, t.fg_statusbar, t.bg_statusbar, true, false);
-
-            // Draw File in Status Bar
-            const file_x = 12 + @as(u16, @intCast(branch_display.len)) + 1;
-            var file_name_buf: [128]u8 = undefined;
-            const active_file_name = if (a.tabs.items.len > a.active_tab) a.tabs.items[a.active_tab].name else "No File";
-            const file_str = if (a.settings_widget.config.nerd_fonts)
-                std.fmt.bufPrint(&file_name_buf, "󰌆  {s}", .{active_file_name}) catch active_file_name
-            else
-                active_file_name;
-            if (a.mode != .ide and layout.status_bar.w > file_x + 20) {
-                const reserved_right: u16 = if (layout.status_bar.w > 55) 32 else 10;
-                const available = layout.status_bar.w -| file_x -| reserved_right;
-                a.ren.drawTextClipped(layout.status_bar.x + file_x, layout.status_bar.y, available, file_str, t.fg_statusbar, t.bg_statusbar, false, false);
-            }
-
-            // Draw Help Button in Status Bar (Right aligned)
-            const help_btn = if (a.settings_widget.config.nerd_fonts) " 󰋖 Help " else " [?] Help ";
-            const help_w: u16 = @intCast(help_btn.len);
-            if (layout.status_bar.w >= help_w) {
-                const help_x = layout.status_bar.w - help_w;
-                drawText(a.ren, layout.status_bar.x + help_x, layout.status_bar.y, help_btn, t.fg_statusbar, t.bg_statusbar, true, false);
-
-                const report_btn = " Report bug ";
-                const report_w: u16 = 14;
-                if (help_x >= report_w + 1) {
-                    drawText(a.ren, layout.status_bar.x + help_x - report_w, layout.status_bar.y, report_btn, t.fg_statusbar, t.bg_statusbar, true, false);
-                }
-
-                const focus_label = if (a.terminal_focus)
-                    "Focus: Terminal"
-                else if (a.sidebar_focus)
-                    "Focus: Sidebar"
-                else
-                    "Focus: Editor";
-                const focus_w: u16 = @intCast(focus_label.len);
-                const focus_end = help_x -| report_w;
-                if (focus_end > focus_w + 2 and layout.status_bar.w > 55) {
-                    drawText(a.ren, layout.status_bar.x + focus_end - focus_w - 2, layout.status_bar.y, focus_label, t.fg_statusbar, t.bg_statusbar, false, false);
-                }
-            }
-        }
         if (plan.drawer) {
             if (layout.panel) |panel| {
                 // Draw terminal panel background
@@ -491,13 +335,13 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
                 const output_header_fg = if (a.active_terminal_panel_idx == 2) t.fg_primary else t.fg_secondary;
 
                 if (panel.w >= 40) {
-                    drawText(a.ren, panel.x + 2, panel.y, "[Terminal]", term_header_fg, if (a.active_terminal_panel_idx == 0) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 0, false);
-                    drawText(a.ren, panel.x + 13, panel.y, "[Debug console]", debug_header_fg, if (a.active_terminal_panel_idx == 1) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 1, false);
-                    drawText(a.ren, panel.x + 30, panel.y, "[Output]", output_header_fg, if (a.active_terminal_panel_idx == 2) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 2, false);
+                    a.ren.drawControlText(panel.x + 2, panel.y, "[Terminal]", term_header_fg, if (a.active_terminal_panel_idx == 0) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 0, false);
+                    a.ren.drawControlText(panel.x + 13, panel.y, "[Debug console]", debug_header_fg, if (a.active_terminal_panel_idx == 1) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 1, false);
+                    a.ren.drawControlText(panel.x + 30, panel.y, "[Output]", output_header_fg, if (a.active_terminal_panel_idx == 2) t.bg_editor else t.bg_sidebar, a.active_terminal_panel_idx == 2, false);
                 } else if (panel.w >= 23) {
-                    drawText(a.ren, panel.x + 1, panel.y, "[Term]", term_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 0, false);
-                    drawText(a.ren, panel.x + 8, panel.y, "[Debug]", debug_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 1, false);
-                    drawText(a.ren, panel.x + 17, panel.y, "[Out]", output_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 2, false);
+                    a.ren.drawControlText(panel.x + 1, panel.y, "[Term]", term_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 0, false);
+                    a.ren.drawControlText(panel.x + 8, panel.y, "[Debug]", debug_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 1, false);
+                    a.ren.drawControlText(panel.x + 17, panel.y, "[Out]", output_header_fg, t.bg_sidebar, a.active_terminal_panel_idx == 2, false);
                 } else {
                     const compact_title = switch (a.active_terminal_panel_idx) {
                         1 => "[Debug]",
@@ -629,7 +473,8 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
             }
         }
     }
-    if (plan.chrome and (a.mode != .ide or a.ui_state.native_picker_chrome)) workspace.drawChrome(a, layout);
+    if (plan.chrome) workspace.drawChrome(a, layout);
+    a.ren.pointer_position = pointer;
     if (plan.overlays and a.workspace.palette) workspace.drawPalette(a, layout);
     if (plan.overlays and a.settings_widget.is_open) {
         a.settings_widget.draw(a.ren, a.ren.width, a.ren.height, .{
@@ -756,29 +601,6 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
             drawText(a.ren, mx + 2, my + 2, "  Terminal (Top)   ", t.fg_primary, t.bg_sidebar, false, false);
             drawText(a.ren, mx + 2, my + 3, "󰝒  Editor (Bottom)  ", t.fg_primary, t.bg_sidebar, false, false);
             drawText(a.ren, mx + 2, my + 4, "󰝒  Editor (Top)     ", t.fg_primary, t.bg_sidebar, false, false);
-        }
-    }
-
-    if (plan.overlays) {
-        if (a.ide_menu) |menu| {
-            const labels: []const []const u8 = switch (menu) {
-                0 => &[_][]const u8{ "New buffer", "Save", "Close buffer" },
-                1 => &[_][]const u8{ "Undo", "Redo", "Cut", "Copy", "Paste", "Find", "Replace" },
-                2 => &[_][]const u8{ "Select all", "Select line" },
-                else => &[_][]const u8{ "Previous buffer", "Next buffer", "Close buffer" },
-            };
-            const widths = [_]u16{ 18, 12, 16, 19 };
-            const status_xs = [_]u16{ 7, 13, 19, 30 };
-            const mw = widths[menu];
-            const mh: u16 = @intCast(labels.len + 2);
-            const mx = @min(layout.status_bar.x + status_xs[menu], a.ren.width -| mw);
-            const my = layout.status_bar.y -| mh;
-            drawRect(a.ren, .{ .x = mx, .y = my, .w = mw, .h = mh }, " ", t.fg_primary, t.bg_sidebar);
-            drawText(a.ren, mx, my, "┌", t.border_color, t.bg_sidebar, false, false);
-            drawText(a.ren, mx + mw - 1, my, "┐", t.border_color, t.bg_sidebar, false, false);
-            for (labels, 0..) |label, i| drawText(a.ren, mx + 2, my + 1 + @as(u16, @intCast(i)), label, t.fg_primary, t.bg_sidebar, false, false);
-            drawText(a.ren, mx, my + mh - 1, "└", t.border_color, t.bg_sidebar, false, false);
-            drawText(a.ren, mx + mw - 1, my + mh - 1, "┘", t.border_color, t.bg_sidebar, false, false);
         }
     }
 

@@ -704,10 +704,14 @@ local ide_mappings = {
     },
 }
 
+local save_prompt_buffer = nil
+
 local function ide_startinsert()
-    if vim.g.vide_ide_mode and vim.bo.modifiable and
+    if not save_prompt_buffer and vim.g.vide_ide_mode and vim.bo.modifiable and
         (vim.bo.buftype == '' or vim.bo.buftype == 'acwrite') then
-        vim.schedule(function() pcall(vim.cmd, 'startinsert') end)
+        vim.schedule(function()
+            if not save_prompt_buffer then pcall(vim.cmd, 'startinsert') end
+        end)
     end
 end
 
@@ -833,10 +837,56 @@ _G.vide_close_split = function(winid, bufnr)
     return ok
 end
 
+-- All native save actions share first-save naming, including offline sessions.
+_G.vide_save_file = function()
+    if save_prompt_buffer then return end
+    local bufnr = vim.api.nvim_get_current_buf()
+    local function write(path)
+        if not vim.api.nvim_buf_is_valid(bufnr) then return end
+        local was_unnamed = vim.api.nvim_buf_get_name(bufnr) == ''
+        local ok, err = pcall(vim.api.nvim_buf_call, bufnr, function()
+            vim.cmd('write' .. (path and (' ' .. vim.fn.fnameescape(path)) or ''))
+        end)
+        if ok then
+            _G.vide_native_notice('info', 'Saved ' .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ':~:.'))
+        else
+            -- A failed :write may assign the name before discovering an I/O error.
+            -- Keep first-save naming available so the user can correct the path.
+            if was_unnamed then pcall(vim.api.nvim_buf_set_name, bufnr, '') end
+            _G.vide_native_notice('error', 'Could not save file: ' .. tostring(err))
+        end
+    end
+    if vim.api.nvim_buf_get_name(bufnr) ~= '' or vim.bo[bufnr].buftype ~= '' then
+        write()
+        return
+    end
+
+    save_prompt_buffer = bufnr
+    local ok, err = pcall(vim.ui.input, {
+        prompt = 'Save new file as (Enter to save, Esc to cancel): ',
+        completion = 'file',
+    }, function(path)
+        save_prompt_buffer = nil
+        if path and path ~= '' then
+            if vim.uv.fs_stat(path) then
+                _G.vide_native_notice('warning', 'That path already exists. Press Ctrl+S and choose another filename.')
+            else
+                write(path)
+            end
+        end
+        ide_startinsert()
+    end)
+    if not ok then
+        save_prompt_buffer = nil
+        _G.vide_native_notice('error', 'Could not open filename prompt: ' .. tostring(err))
+        ide_startinsert()
+    end
+end
+
 _G.vide_ide_action = function(action)
     local mode = vim.api.nvim_get_mode().mode
     local visual = mode:match('[vV\22]') ~= nil
-    if action == 'save' then vim.cmd('write')
+    if action == 'save' then _G.vide_save_file()
     elseif action == 'undo' then pcall(vim.cmd, 'undo')
     elseif action == 'redo' then pcall(vim.cmd, 'redo')
     elseif action == 'select_all' then vim.cmd('normal! ggVG'); return

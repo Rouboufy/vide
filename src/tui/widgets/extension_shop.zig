@@ -214,6 +214,7 @@ pub const ExtensionShop = struct {
 
             // Highlight full selected block
             const highlight_rect = Rect{ .x = rect.x, .y = cy, .w = rect.w - 1, .h = 1 };
+            defer rend.highlightHover(highlight_rect, colors.bg_sidebar, colors.fg_primary);
             rend.drawRect(highlight_rect, " ", colors.fg_secondary, row_bg);
 
             if (is_selected) {
@@ -237,6 +238,9 @@ pub const ExtensionShop = struct {
     }
 
     pub fn drawPopup(self: *ExtensionShop, rend: *renderer.Renderer, screen_w: u16, screen_h: u16, colors: anytype) void {
+        const pointer = rend.pointer_position;
+        defer rend.pointer_position = pointer;
+        if (self.is_detail_open or self.show_reload_confirm) rend.pointer_position = null;
         const modal = primitives.Modal.centered(screen_w, screen_h, 80, 24, 5);
         const x = modal.rect.x;
         const y = modal.rect.y;
@@ -249,7 +253,7 @@ pub const ExtensionShop = struct {
         primitives.drawModalFrame(rend, modal, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
 
         // Draw close cross (Top Right)
-        rend.drawText(x + w - 4, y, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
+        rend.drawControlText(x + w - 4, y, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
 
         // Title
         var title_buf: [128]u8 = undefined;
@@ -290,6 +294,7 @@ pub const ExtensionShop = struct {
         }
 
         // Instruction Hint
+        rend.highlightHover(.{ .x = x + 2, .y = input_y, .w = w - 4, .h = 1 }, colors.bg_sidebar, colors.fg_primary);
         rend.drawText(x + 2, input_y + 1, "[/] to type, <Esc> to list/close, <Enter> to toggle install", colors.fg_secondary, colors.bg_sidebar, false, false);
 
         // Separator
@@ -320,6 +325,7 @@ pub const ExtensionShop = struct {
 
             // Highlight full selected block
             const highlight_rect = Rect{ .x = x + 1, .y = py, .w = w - 2, .h = 3 };
+            defer rend.highlightHover(highlight_rect, colors.bg_sidebar, colors.fg_primary);
             rend.drawRect(highlight_rect, " ", colors.fg_secondary, row_bg);
             if (is_selected) {
                 rend.drawText(x + 1, py, "▋", colors.fg_accent, row_bg, true, false);
@@ -351,6 +357,7 @@ pub const ExtensionShop = struct {
         }
 
         if (self.is_detail_open) {
+            if (!self.show_reload_confirm) rend.pointer_position = pointer;
             const detail = primitives.Modal.centered(screen_w, screen_h, 60, 14, 7);
             const dx = detail.rect.x;
             const dy = detail.rect.y;
@@ -359,7 +366,7 @@ pub const ExtensionShop = struct {
             primitives.drawModalFrame(rend, detail, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
 
             // Red cross (Top Right)
-            rend.drawText(dx + dw - 4, dy, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
+            rend.drawControlText(dx + dw - 4, dy, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
 
             const p = self.plugins.items[self.detail_plugin_idx];
 
@@ -416,14 +423,14 @@ pub const ExtensionShop = struct {
                 for (btn1_x..btn1_x + btn1_w) |bx| {
                     rend.drawText(@intCast(bx), btn_y, " ", colors.fg_primary, colors.bg_editor, false, false);
                 }
-                rend.drawText(btn1_x + 1, btn_y, "[ Edit Config ]", colors.fg_accent, colors.bg_editor, true, false);
+                rend.drawControlText(btn1_x + 1, btn_y, "[ Edit Config ]", colors.fg_accent, colors.bg_editor, true, false);
 
                 const btn2_w: u16 = 22;
                 const btn2_x: u16 = dx + (dw / 2) + 2;
                 for (btn2_x..btn2_x + btn2_w) |bx| {
                     rend.drawText(@intCast(bx), btn_y, " ", colors.fg_primary, colors.bg_editor, false, false);
                 }
-                rend.drawText(btn2_x + 1, btn_y, "[ Uninstall Plugin ]", colors.fg_accent, colors.bg_editor, true, false);
+                rend.drawControlText(btn2_x + 1, btn_y, "[ Uninstall Plugin ]", colors.fg_accent, colors.bg_editor, true, false);
             } else {
                 const btn_w: u16 = 22;
                 const btn_x: u16 = dx + (dw -| btn_w) / 2;
@@ -431,11 +438,12 @@ pub const ExtensionShop = struct {
                 for (btn_x..btn_x + btn_w) |bx| {
                     rend.drawText(@intCast(bx), btn_y, " ", colors.fg_primary, colors.bg_editor, false, false);
                 }
-                rend.drawText(btn_x + 1, btn_y, "[ Install Plugin ]", colors.fg_accent, colors.bg_editor, true, false);
+                rend.drawControlText(btn_x + 1, btn_y, "[ Install Plugin ]", colors.fg_accent, colors.bg_editor, true, false);
             }
         }
 
         if (self.show_reload_confirm) {
+            rend.pointer_position = pointer;
             const confirm = primitives.Modal.centered(screen_w, screen_h, 36, 7, 0);
             const px = confirm.rect.x;
             const py = confirm.rect.y;

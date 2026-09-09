@@ -941,8 +941,13 @@ pub const SettingsWidget = struct {
         const title = std.fmt.bufPrint(&settings_title_buf, " Vide Settings v{s} ", .{build_options.version}) catch " Vide Settings ";
         ren.drawText(x + 2, y, title, theme.fg_accent, theme.bg_sidebar, true, false);
 
+        const pointer = ren.pointer_position;
+        defer ren.pointer_position = pointer;
+        if (self.active_dropdown != .none or self.popup_active or self.duplicate_warning or self.selected_plugin != null)
+            ren.pointer_position = null;
+
         // Close button
-        ren.drawText(x + w - 4, y, if (self.config.nerd_fonts) " 󰅖 " else " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
+        ren.drawControlText(x + w - 4, y, if (self.config.nerd_fonts) " 󰅖 " else " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
 
         // Save button
         const save_button = primitives.Button{
@@ -969,6 +974,7 @@ pub const SettingsWidget = struct {
                 }
             }
             ren.drawText(x + 4, tab_y, tab, fg, theme.bg_sidebar, is_active, false);
+            ren.highlightHover(.{ .x = x + 1, .y = tab_y, .w = 18, .h = 2 }, theme.bg_sidebar, theme.fg_primary);
             tab_y += 2;
         }
 
@@ -988,21 +994,21 @@ pub const SettingsWidget = struct {
 
                 const clip_t = if (self.config.clip) "[x]" else "[ ]";
                 const clip_str = std.fmt.bufPrint(&buf, "{s} System Clipboard", .{clip_t}) catch "System Clipboard";
-                ren.drawText(content_x, content_y + 2, clip_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 2, clip_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const mode_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Mode:  [ {s} ▾ ]", .{self.config.mode}) catch "Mode: normal"
                 else
                     std.fmt.bufPrint(&buf, "Mode:  [ {s} v ]", .{self.config.mode}) catch "Mode: normal";
-                ren.drawText(content_x, content_y + 4, mode_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 4, mode_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const auto_t = if (self.config.autocomplete) "[x]" else "[ ]";
                 const auto_str = std.fmt.bufPrint(&buf, "{s} Autocomplete", .{auto_t}) catch "Autocomplete";
-                ren.drawText(content_x, content_y + 6, auto_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 6, auto_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const indent_t = if (self.config.autoindent) "[x]" else "[ ]";
                 const indent_str = std.fmt.bufPrint(&buf, "{s} Autoindent", .{indent_t}) catch "Autoindent";
-                ren.drawText(content_x, content_y + 8, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 8, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 ren.drawText(content_x, content_y + 11, "Normal: full Vim-style editing and modes", theme.fg_secondary, theme.bg_sidebar, false, false);
                 ren.drawText(content_x, content_y + 12, "IDE: familiar modeless text editing", theme.fg_secondary, theme.bg_sidebar, false, false);
@@ -1015,17 +1021,17 @@ pub const SettingsWidget = struct {
                     std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{themeLabel(self.config.theme)}) catch "Theme: VS Code Dark Modern"
                 else
                     std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{themeLabel(self.config.theme)}) catch "Theme: VS Code Dark Modern";
-                ren.drawText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const sep_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Split Separator:  [ {s} ▾ ]", .{self.config.split_separator}) catch "Split Separator: │"
                 else
                     std.fmt.bufPrint(&buf, "Split Separator:  [ {s} v ]", .{self.config.split_separator}) catch "Split Separator: │";
-                ren.drawText(content_x, content_y + 4, sep_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 4, sep_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const nf_t = if (self.config.nerd_fonts) "[x]" else "[ ]";
                 const nf_str = std.fmt.bufPrint(&buf, "{s} Use Nerd Fonts (Icons)", .{nf_t}) catch "Use Nerd Fonts (Icons)";
-                ren.drawText(content_x, content_y + 6, nf_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 6, nf_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             2 => {
                 ren.drawText(content_x, content_y, "Editor", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -1034,30 +1040,30 @@ pub const SettingsWidget = struct {
                     std.fmt.bufPrint(&buf, "Indent Type:  [ {s} ▾ ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces"
                 else
                     std.fmt.bufPrint(&buf, "Indent Type:  [ {s} v ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces";
-                ren.drawText(content_x, content_y + 2, type_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 2, type_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const indent_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Indent Size:  [ {d} ▾ ]", .{self.config.indent_size}) catch "Indent Size: 4"
                 else
                     std.fmt.bufPrint(&buf, "Indent Size:  [ {d} v ]", .{self.config.indent_size}) catch "Indent Size: 4";
-                ren.drawText(content_x, content_y + 4, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 4, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const wrap_t = if (self.config.wrap) "[x]" else "[ ]";
                 const wrap_str = std.fmt.bufPrint(&buf, "{s} Text Wrap", .{wrap_t}) catch "Text Wrap";
-                ren.drawText(content_x, content_y + 6, wrap_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 6, wrap_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const line_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} ▾ ]", .{self.config.line_numbers}) catch "Line Numbers: relative"
                 else
                     std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} v ]", .{self.config.line_numbers}) catch "Line Numbers: relative";
-                ren.drawText(content_x, content_y + 8, line_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 8, line_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const ruler_value = if (self.config.colorcolumn.len == 0) "off" else self.config.colorcolumn;
                 const ruler_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Column Ruler:  [ {s} ▾ ]", .{ruler_value}) catch "Column Ruler: off"
                 else
                     std.fmt.bufPrint(&buf, "Column Ruler:  [ {s} v ]", .{ruler_value}) catch "Column Ruler: off";
-                ren.drawText(content_x, content_y + 10, ruler_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 10, ruler_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             3 => {
                 ren.drawText(content_x, content_y, "Plugins", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -1065,12 +1071,12 @@ pub const SettingsWidget = struct {
                 // Mason Button
                 const mason_btn = " [ Mason Settings... ] ";
                 const is_mason_hover = (self.keyboard_focus == .content and self.hover_row == 0);
-                ren.drawText(content_x, content_y + 2, mason_btn, if (is_mason_hover) theme.fg_primary else theme.bg_sidebar, if (is_mason_hover) theme.fg_accent else theme.fg_accent, true, false);
+                ren.drawControlText(content_x, content_y + 2, mason_btn, if (is_mason_hover) theme.fg_primary else theme.bg_sidebar, if (is_mason_hover) theme.fg_accent else theme.fg_accent, true, false);
 
                 // Plugin Manager Button
                 const lazy_btn = " [ Plugin Manager... ] ";
                 const is_lazy_hover = (self.keyboard_focus == .content and self.hover_row == 1);
-                ren.drawText(content_x, content_y + 4, lazy_btn, if (is_lazy_hover) theme.fg_primary else theme.bg_sidebar, if (is_lazy_hover) theme.fg_accent else theme.fg_accent, true, false);
+                ren.drawControlText(content_x, content_y + 4, lazy_btn, if (is_lazy_hover) theme.fg_primary else theme.bg_sidebar, if (is_lazy_hover) theme.fg_accent else theme.fg_accent, true, false);
 
                 // Installed Plugins Title
                 ren.drawText(content_x, content_y + 6, "Installed Plugins:", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -1088,7 +1094,7 @@ pub const SettingsWidget = struct {
                     var plugin_line_buf: [128]u8 = undefined;
                     const plugin_line = std.fmt.bufPrint(&plugin_line_buf, "  • {s}", .{p.full_name}) catch p.full_name;
 
-                    ren.drawText(content_x, content_y + py_offset, plugin_line, if (is_hovered) theme.fg_accent else theme.fg_secondary, theme.bg_sidebar, is_hovered, false);
+                    ren.drawControlText(content_x, content_y + py_offset, plugin_line, if (is_hovered) theme.fg_accent else theme.fg_secondary, theme.bg_sidebar, is_hovered, false);
                     py_offset += 1;
                 }
 
@@ -1128,10 +1134,12 @@ pub const SettingsWidget = struct {
 
                     const draw_str = std.fmt.bufPrint(&buf, "{s}:  [ {s} ]", .{ action, key_str }) catch action;
                     const color = if (self.active_binding == i) theme.fg_accent else theme.fg_primary;
-                    ren.drawText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
+                    ren.drawControlText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
                 }
 
-                ren.drawText(content_x, content_y + 12, "v Vim-safe   p Familiar   r Reset selected", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 12, "v Vim-safe", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x + 13, content_y + 12, "p Familiar", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x + 26, content_y + 12, "r Reset selected", theme.fg_secondary, theme.bg_sidebar, false, false);
                 ren.drawText(content_x, content_y + 13, "Presets replace bindings; Ctrl+S saves", theme.fg_secondary, theme.bg_sidebar, false, false);
             },
             5 => {
@@ -1210,6 +1218,7 @@ pub const SettingsWidget = struct {
             }
         }
 
+        ren.pointer_position = pointer;
         // Draw active dropdown if any
         if (self.active_dropdown != .none) {
             const drop_x = content_x + 10;
@@ -1265,6 +1274,7 @@ pub const SettingsWidget = struct {
                         const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, themeLabel(t) }) catch " error";
                         ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                         if (i == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                        ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     }
                     item_y += 1;
                 }
@@ -1284,6 +1294,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, s }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .indent_size) {
@@ -1294,6 +1305,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, i }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .indent_type) {
@@ -1304,6 +1316,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, t }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .line_numbers) {
@@ -1314,6 +1327,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, ln }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .colorcolumn) {
@@ -1325,6 +1339,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, label }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .mode) {
@@ -1335,6 +1350,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, m }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             }

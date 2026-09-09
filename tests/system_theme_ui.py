@@ -96,7 +96,7 @@ def run(capture=None):
         try:
             tmux("new-session", "-d", "-s", "ui", "-x", "100", "-y", "30", "-c", str(base), command)
             tmux("set-option", "-t", "ui", "remain-on-exit", "on")
-            wait_for(lambda s: "WORKSPACE" in s and "sample.zig" in s, "Workspace did not render")
+            wait_for(lambda s: ("WORKSPACE" in s or "EXPLORER" in s) and "sample.zig" in s, "Workspace did not render")
             choose_system()
             colors.write_text('mode = "light"\nbackground = "#f8f4ee"\nforeground = "#242424"\naccent = "#805020"\ndark_background = "#eee4d8"\n')
             wait_for(lambda _: "48;2;248;244;238m" in ansi() and "48;2;5;24;46m" not in ansi(), "Desktop change did not update editor and sidebar")
@@ -107,7 +107,7 @@ def run(capture=None):
                 time.sleep(0.05)
             assert tmux("display-message", "-p", "-t", "ui", "#{pane_dead}").strip() == "1"
             tmux("respawn-pane", "-t", "ui", "-c", str(base), command)
-            wait_for(lambda s: "WORKSPACE" in s and "48;2;248;244;238m" in ansi(), "System theme did not survive restart")
+            wait_for(lambda s: ("WORKSPACE" in s or "EXPLORER" in s) and "48;2;248;244;238m" in ansi(), "System theme did not survive restart")
             send("C-q")
         finally:
             save_capture("last-screen")

@@ -59,7 +59,7 @@ pub const Layout = struct {
     status_bar: Rect,
     panel: ?Rect,
 
-    /// Normal mode uses a single workspace sidebar; IDE retains its legacy shell.
+    /// Normal and IDE modes share a single workspace sidebar.
     pub fn workspace(cols: u16, rows: u16, show_sidebar: bool, sidebar_width: u16, content_tree: ?*SplitNode) Layout {
         const sidebar_w = if (show_sidebar and cols >= 40) @min(sidebar_width, cols - 24) else 0;
         var result = compute(cols, rows, false, false, 0, null);

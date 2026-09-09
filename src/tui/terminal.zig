@@ -142,6 +142,7 @@ pub const Terminal = struct {
 
         try term.writer().writeAll("\x1b[?1049h\x1b[?25l");
         if (term.mouse_enabled) try term.writer().writeAll("\x1b[?1002h\x1b[?1006h");
+        term.setHoverMouse(true);
         if (term.paste_enabled) try term.writer().writeAll("\x1b[?2004h");
 
         return term;

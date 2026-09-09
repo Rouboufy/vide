@@ -277,3 +277,12 @@ pub fn readEvent(fd: posix.fd_t, seq_buf: []u8, allocator: std.mem.Allocator) !E
 
     return Event{ .key = .{ .char = first_byte, .raw = seq_buf[0..len] } };
 }
+
+test "passive SGR motion is distinct from a left button drag" {
+    const hover = parseSgrMouse("\x1b[<35;3;2M").?;
+    try std.testing.expectEqual(MouseAction.move, hover.action);
+    try std.testing.expectEqual(MouseButton.none, hover.button);
+    const drag = parseSgrMouse("\x1b[<32;3;2M").?;
+    try std.testing.expectEqual(MouseAction.move, drag.action);
+    try std.testing.expectEqual(MouseButton.left, drag.button);
+}

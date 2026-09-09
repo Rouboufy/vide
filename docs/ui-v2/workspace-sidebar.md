@@ -1,19 +1,19 @@
 # Workspace sidebar selection
 
 The user selected design 1, Workspace sidebar, on 2026-09-05. This is the
-product direction for Normal and Zen; it does not constitute completion of
+product direction for Normal, IDE, and Zen; it does not constitute completion of
 the earlier participant study in 01C.
 
-Normal replaces the icon activity rail and horizontal buffer tabs with one
+Normal and IDE replace the icon activity rail and horizontal buffer tabs with one
 24-column sidebar (clamped to preserve at least 24 editor columns). Open files
 and eight tools share one scrollable list. Tools reuse the existing explorer,
 Git, AI, and extension views; their header returns to the workspace list.
-Below 40 columns the sidebar yields its space to the editor. The IDE mode
-keeps the existing shell.
+Below 40 columns the sidebar yields its space to the editor. IDE shares this
+shell while retaining modeless editing and desktop-style shortcuts.
 
 The editor header shows the current file and the command-menu binding. The
-footer uses the editor background and shows Neovim's editing mode, the focused
-region, and the configured Zen binding. Unsaved buffers have an asterisk in
+footer uses the editor background and shows Neovim's editing mode (or the IDE
+badge), the focused region, and the configured Zen binding. Unsaved buffers have an asterisk in
 the open-files list. Existing theme colors remain authoritative.
 
 The searchable native command menu works without plugins and uses the same
@@ -93,3 +93,11 @@ keyboard focus uses an accent background and a leading arrow independently.
 Rendering and mouse targets share the same row mapping, and the workspace
 integration test covers non-action section rows and scrolling in short windows.
 Alternative project-tree/minimal layouts remain proposals.
+
+Run `python3 tests/workspace_ui.py --mode ide` to exercise the same workspace
+interactions in IDE mode, including direct typing and returning from Zen.
+
+Explorer is the default startup panel. The header returns to the workspace
+overview. Native panel actions, selectable rows, settings, and dialog controls
+highlight on passive mouse movement without changing selection or focus.
+`python3 tests/hover_ui.py` checks hover colors, clearing, and passive behavior.
