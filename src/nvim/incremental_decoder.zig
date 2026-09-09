@@ -1,4 +1,4 @@
-//! Bounded, allocation-safe incremental MessagePack framing for Prompt 05A.
+//! Bounded, allocation-safe incremental MessagePack framing.
 //!
 //! `feed` only retains bytes. `next` first scans a complete frame without
 //! allocating, then decodes exactly that frame. Incomplete input therefore

@@ -1,4 +1,4 @@
-//! Bounded poll-driven RPC transport introduced by Prompt 05B.
+//! Bounded poll-driven RPC transport.
 const std = @import("std");
 const msgpack = @import("msgpack.zig");
 const incremental = @import("incremental_decoder.zig");

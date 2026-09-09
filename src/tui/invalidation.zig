@@ -15,8 +15,7 @@ pub const CompositionDamage = packed struct {
     }
 };
 
-/// Independent reasons for doing work in a frame. Damage is intentionally
-/// coarse until retained composition is introduced by Prompt 07.
+/// Independent layout, sizing, and coarse composition reasons for frame work.
 pub const Invalidations = struct {
     layout: bool = true,
     composition: CompositionDamage = .{ .chrome = true, .sidebar = true, .editor = true, .drawer = true, .overlay = true },

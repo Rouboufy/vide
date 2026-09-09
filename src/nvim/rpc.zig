@@ -8,8 +8,7 @@ const incremental = @import("incremental_decoder.zig");
 const async_transport = @import("async_transport.zig");
 
 pub const compatibility = struct {
-    /// Prompt 05A rollback seam. Prompt 05B will make this the transport's
-    /// sole decoder after reactor integration is accepted.
+    /// Compatibility switches for startup decoding and interactive transport.
     pub const incremental_decoder = false;
     pub const async_transport_enabled = true;
 };
@@ -503,8 +502,7 @@ pub const RpcClient = struct {
         return true;
     }
 
-    /// One bounded transport read per dispatch turn. Prompt 05B will move this
-    /// operation into the reactor transport phase.
+    /// Result of one bounded compatibility-transport read.
     const PumpResult = enum { progress, would_block, eof };
 
     fn pumpIncrementalOnce(self: *RpcClient) !PumpResult {
