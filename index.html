@@ -3,100 +3,74 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111214">
-  <meta name="description" content="Vide is a terminal-native editor and IDE with Normal, IDE, and Zen modes, powered by an isolated Neovim runtime.">
-  <meta property="og:title" content="Vide — a terminal-native editor and IDE">
-  <meta property="og:description" content="A fast Zig interface around an isolated Neovim runtime, with Normal, IDE, and Zen editing modes.">
+  <meta name="theme-color" content="#17191a">
+  <meta name="description" content="Vide brings a workspace sidebar, Git, terminals, and mouse-friendly controls to an isolated Neovim editor. Written in Zig. Runs in your terminal.">
+  <meta property="og:title" content="Vide — Your editor. Your terminal.">
+  <meta property="og:description" content="A Neovim-powered workspace with three editing modes, native tools, and room to focus.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://rouboufy.github.io/vide/">
   <meta property="og:image" content="https://rouboufy.github.io/vide/docs/screenshots/normal.webp">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="canonical" href="https://rouboufy.github.io/vide/">
-  <title>Vide — a terminal-native editor and IDE</title>
+  <title>Vide — Your editor. Your terminal.</title>
   <link rel="icon" href="packaging/vide.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/site.css">
 </head>
-<body>
+<body id="top">
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="nav">
-    <a class="brand" href="#top"><img src="packaging/vide.svg" alt="" width="36" height="36">Vide</a>
-    <nav aria-label="Primary">
-      <a href="#modes">Modes</a><a href="#features">Features</a><a href="#install">Install</a><a href="#support">Support</a>
-      <a href="https://github.com/Rouboufy/vide">GitHub</a><a class="nav-release" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.9">v0.2.9</a>
-    </nav>
+    <a class="brand" href="#top" aria-label="Vide home"><img src="packaging/vide.svg" alt="" width="32" height="32">vide<span class="brand-dot">.</span></a>
+    <nav aria-label="Primary"><a href="#features">Workspace</a><a href="#modes">Modes</a><a href="https://github.com/Rouboufy/vide#readme">Docs</a><a class="nav-install" href="#install">Get Vide <span aria-hidden="true">↗</span></a></nav>
   </header>
-
   <main id="main">
-    <section class="hero" id="top">
-      <div>
-        <a class="release-pill" href="https://github.com/Rouboufy/vide/releases/tag/v0.2.9"><span>Latest</span> Vide 0.2.9 is available <span aria-hidden="true">→</span></a>
-        <p class="eyebrow">Terminal-native. Neovim-powered. No Electron.</p>
-        <h1>The IDE that hides a terminal.<br>The terminal that wears an IDE.</h1>
-        <p class="lede">Vide combines a native Zig interface, an isolated Neovim editor, mouse-driven tools, and an agent-ready AI coding workspace in one lightweight terminal application.</p>
-        <div class="actions"><a class="button primary" href="#install">Install Vide</a><a class="button" href="#download-options">Download v0.2.9</a></div>
-        <ul class="hero-facts" aria-label="Vide highlights"><li>Zig-native UI</li><li>Isolated Neovim</li><li>Linux &amp; macOS builds</li></ul>
+    <section class="hero" aria-labelledby="hero-title">
+      <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> A workspace for your terminal</p>
+      <div class="hero-copy">
+        <h1 id="hero-title">Your editor.<br>Your <em>terminal.</em></h1>
+        <div class="hero-description"><p>Neovim at the center. Files, Git, and a shell within reach. Vide brings it all together in a native Zig interface, with room to work your way.</p><div class="actions"><a class="button primary" href="#install">Install Vide <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/Rouboufy/vide">Explore the source <span aria-hidden="true">→</span></a></div><p class="fine-print">Open source · Linux &amp; macOS releases · MIT license</p></div>
       </div>
-      <figure class="terminal-frame"><div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>vide — normal</span></div><img class="hero-shot" src="docs/screenshots/normal.webp" alt="Vide Normal mode showing the editor dashboard and activity bar" width="1920" height="1153"></figure>
+      <figure class="product-shot hero-shot"><a href="docs/screenshots/explorer.webp" aria-label="View the Vide editor screenshot at full size"><img src="docs/screenshots/explorer.webp" alt="Vide editing its build.zig file with the current Explorer sidebar, command button, and Normal mode footer" width="1584" height="950" fetchpriority="high"></a><figcaption><span><span class="status-dot" aria-hidden="true"></span> Actual Vide application · Explorer + editor</span><span>Open image <span aria-hidden="true">↗</span></span></figcaption></figure>
+      <div class="principles"><span><b>01 /</b> Written in Zig</span><span><b>02 /</b> Powered by Neovim</span><span><b>03 /</b> Keyboard &amp; mouse</span><span><b>04 /</b> Separate configuration</span></div>
     </section>
 
-    <aside class="shortcut-strip" aria-label="Popular keyboard shortcuts">
-      <span><kbd>Ctrl</kbd> + <kbd>E</kbd> Explorer</span><span><kbd>Ctrl</kbd> + <kbd>T</kbd> Terminal</span><span><kbd>Right click</kbd> Editor actions</span><span><kbd>F11</kbd> Zen mode</span><span><kbd>F12</kbd> Report a bug</span>
-    </aside>
-
-    <section id="modes">
-      <p class="eyebrow">One application, three workflows</p><h2>Choose the editing model that fits the moment</h2>
-      <div class="cards modes">
-        <article><div class="mode-label">01</div><img src="docs/screenshots/normal.webp" alt="Vide Normal mode" width="1920" height="1153" loading="lazy"><h3>Normal</h3><p>Full Vim-style modal editing surrounded by Vide’s explorer, Git, terminal, settings, and tooling panels.</p></article>
-        <article><div class="mode-label">02</div><img src="docs/screenshots/ide-mode.webp" alt="Vide IDE mode showing its modeless editor dashboard and workspace explorer" width="1917" height="1154" loading="lazy"><h3>IDE</h3><p>Predictable modeless editing with desktop selection, clipboard, navigation, find, replace, and mouse-accessible menus.</p></article>
-        <article><div class="mode-label">03</div><img src="docs/screenshots/zen.webp" alt="Vide Zen mode" width="1917" height="1153" loading="lazy"><h3>Zen</h3><p>A distraction-free Neovim viewport. Leave Zen to return to the exact Normal or IDE mode used before it.</p></article>
-      </div>
-    </section>
-
-    <section id="features">
-      <p class="eyebrow">Shipped today</p><h2>Native workspace tools around a real editor</h2>
-      <div class="feature-grid">
-        <article><span class="feature-icon" aria-hidden="true">⌘</span><h3>Workspace navigation</h3><p>Keyboard and mouse file explorer, visual buffers, split controls, search actions, and project-aware language recommendations.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">›_</span><h3>Integrated terminal and Git</h3><p>Resizable terminal, debug and output panels, Git status, staging, commits, branch history, and detailed repository actions.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">{ }</span><h3>Language tooling</h3><p>Bundled completion, Treesitter, LSP integration, Mason package management, diagnostics, formatting, and health reporting.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">AI</span><h3>Agent coding workspace</h3><p>Launch Codex, Claude Code, Gemini, OpenCode, Copilot, or Antigravity with selected code, files, diagnostics, and Git changes attached as focused context.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">↗</span><h3>Native editor interactions</h3><p>Right-click editing and AI actions, visible mouse selection, scrollable menus, and split-owned tabs keep common workflows direct and discoverable.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">!</span><h3>Private bug reporting</h3><p>Report issues inside Vide with explicit log consent, credential and home-path redaction, and privacy-conscious system diagnostics.</p></article>
-        <article><span class="feature-icon" aria-hidden="true">◇</span><h3>Isolated by design</h3><p>Vide never loads or rewrites the user’s unrelated system-Neovim configuration. Settings, plugins, logs, and sessions have separate XDG paths.</p></article>
+    <section id="features" aria-labelledby="features-title">
+      <div class="section-heading"><div><p class="eyebrow">The workspace</p><h2 id="features-title">Less switching.<br>More making.</h2></div><p>A compact sidebar keeps your files and tools together. Open commands with <kbd>F1</kbd>, or use the mouse to find your next action.</p></div>
+      <div class="workspace-layout">
+        <figure class="product-shot"><a href="docs/screenshots/normal.webp" aria-label="View the workspace screenshot at full size"><img src="docs/screenshots/normal.webp" alt="Vide workspace sidebar with open files and project tools beside the editor" width="1584" height="950" loading="lazy"></a><figcaption>Open files, project tools, and settings in one sidebar</figcaption></figure>
+        <div class="feature-list"><article><span class="number">01</span><div><h3>Find your place</h3><p>Browse the Explorer, switch open files, search commands, and move between editor, sidebar, and terminal with <kbd>F6</kbd>.</p></div></article><article><span class="number">02</span><div><h3>Keep your editing habits</h3><p>Use Vim motions or modeless text editing. Split the editor, select with the mouse, and right-click for common actions.</p></div></article><article><span class="number">03</span><div><h3>Bring your tools</h3><p>Manage plugins and language servers through Lazy and Mason. Launch installed coding assistants from the AI panel.</p></div></article></div>
       </div>
       <div class="gallery">
-        <figure><img src="docs/screenshots/explorer.webp" alt="Vide workspace explorer showing project files" width="1919" height="1156" loading="lazy"><figcaption>Workspace explorer</figcaption></figure>
-        <figure><img src="docs/screenshots/source-control.webp" alt="Vide source-control panel showing repository history" width="1918" height="1155" loading="lazy"><figcaption>Source control</figcaption></figure>
-        <figure><img src="docs/screenshots/ai-assistants.webp" alt="Vide AI Assistants panel listing supported coding tools" width="1919" height="1155" loading="lazy"><figcaption>AI assistants</figcaption></figure>
-        <figure><img src="docs/screenshots/extension-shop.webp" alt="Vide Extension Shop browsing themes and colors" width="1916" height="1153" loading="lazy"><figcaption>Extension Shop</figcaption></figure>
-        <figure><img src="docs/screenshots/settings.webp" alt="Vide native Settings dialog open on the General section" width="1916" height="1157" loading="lazy"><figcaption>Native settings</figcaption></figure>
-        <figure><img src="docs/media/terminal.svg" alt="Vide integrated terminal panel" loading="lazy"><figcaption>Integrated terminal</figcaption></figure>
+        <figure class="product-shot"><a href="docs/screenshots/terminal.webp" aria-label="View the integrated terminal screenshot at full size"><img src="docs/screenshots/terminal.webp" alt="Vide with its integrated shell open below the code editor" width="1584" height="950" loading="lazy"></a><figcaption><strong>A shell beside your code</strong><span>Toggle with Ctrl+T. Your session stays alive while you focus on editing.</span></figcaption></figure>
+        <figure class="product-shot"><a href="docs/screenshots/source-control.webp" aria-label="View the source control screenshot at full size"><img src="docs/screenshots/source-control.webp" alt="Vide Git panel showing a modified build.zig file in the demo repository" width="1584" height="950" loading="lazy"></a><figcaption><strong>Changes you can act on</strong><span>Review files, stage or unstage changes, and write a commit from the Git panel.</span></figcaption></figure>
       </div>
-      <p class="demo"><a href="docs/media/normal.cast">Play or download the short asciinema-compatible terminal recording</a></p>
     </section>
 
-    <section id="install">
-      <p class="eyebrow">Installation</p><h2>Release binaries first, source builds when needed</h2>
-      <div class="install-box"><div><span>Recommended installer</span><small>Detects your platform and verifies release checksums</small></div><code>curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash</code></div>
+    <section id="modes" aria-labelledby="modes-title">
+      <div class="section-heading"><div><p class="eyebrow">Three editing modes</p><h2 id="modes-title">Same engine.<br>Your own rhythm.</h2></div><p>Switch from the mode badge in the footer. Press <kbd>F11</kbd> to enter Zen and return to your previous mode.</p></div>
+      <div class="mode-grid">
+        <article><div class="mode-heading"><h3>Normal</h3><span>Vim, with a workspace</span></div><a href="docs/screenshots/normal.webp" aria-label="View Normal mode at full size"><img src="docs/screenshots/normal.webp" alt="Normal mode with the workspace sidebar and Vim editing" width="1584" height="950" loading="lazy"></a><p>Modal editing, Vim motions, and Neovim commands, surrounded by Vide’s native tools.</p></article>
+        <article><div class="mode-heading"><h3>IDE</h3><span>Type and go</span></div><a href="docs/screenshots/ide-mode.webp" aria-label="View IDE mode at full size"><img src="docs/screenshots/ide-mode.webp" alt="IDE mode using the same workspace interface with modeless editing" width="1584" height="950" loading="lazy"></a><p>Modeless editing with familiar save, undo, search, clipboard, and selection shortcuts.</p></article>
+        <article><div class="mode-heading"><h3>Zen</h3><span>Make room to think</span></div><a href="docs/screenshots/zen.webp" aria-label="View Zen mode at full size"><img src="docs/screenshots/zen.webp" alt="Zen mode displaying the code editor without the sidebar and terminal, with a small return footer" width="1584" height="950" loading="lazy"></a><p>The editor takes the viewport, with a quiet footer to get you back. Your terminal session is preserved.</p></article>
+      </div>
+      <p class="capture-note">These are terminal captures from the current source build, using a demo project and portable symbols. VS Code Dark Modern and Treesitter highlighting are enabled. Open any image for the full view; release builds may differ.</p>
+    </section>
+
+    <section class="settings-section" aria-labelledby="settings-title">
+      <div><p class="eyebrow">Make it yours</p><h2 id="settings-title">Your setup.<br>In its own space.</h2><p>Change themes, indentation, line numbers, and shortcuts from native settings. Vide keeps its configuration, plugins, and state in separate XDG directories, leaving your regular Neovim configuration alone.</p><a class="text-link" href="https://github.com/Rouboufy/vide#configuration">Read about configuration <span aria-hidden="true">→</span></a></div>
+      <figure class="product-shot"><a href="docs/screenshots/settings.webp" aria-label="View Vide settings at full size"><img src="docs/screenshots/settings.webp" alt="Vide Appearance settings with VS Code Dark Modern selected and portable font symbols enabled" width="1584" height="950" loading="lazy"></a><figcaption>Settings that belong to Vide</figcaption></figure>
+    </section>
+
+    <section id="install" aria-labelledby="install-title">
+      <p class="eyebrow">Installation</p><h2 id="install-title">Meet your next workspace.</h2><p>The installer selects your platform’s release bundle and verifies its checksum.<br>Native bundles include Neovim. Setup installs dependencies and prepares Treesitter highlighting.</p>
+      <div class="install-box"><span class="code-label">Run in your terminal</span><pre><code>curl -fsSL https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh | bash</code></pre><p>Then run <code>vide</code>. <a href="https://github.com/Rouboufy/vide/blob/main/setup.sh">Inspect the installer <span aria-hidden="true">↗</span></a></p></div>
       <details class="download-menu" id="download-options">
-        <summary><span><strong>Choose a download</strong><small>Native releases, AppImage, or source</small></span></summary>
-        <div class="download-options">
-          <a href="https://github.com/Rouboufy/vide/releases/tag/v0.2.9"><span class="install-tag">Linux + macOS</span><strong>Native releases</strong><small>Checksum-verified x86-64 and ARM64 binaries. Requires Neovim 0.10+.</small></a>
-          <a href="https://github.com/Rouboufy/vide/releases/latest/download/Vide-linux-x86_64.AppImage"><span class="install-tag">Linux x86-64</span><strong>Portable AppImage</strong><small>Bundles Neovim 0.12.4, desktop metadata, and its own checksum.</small></a>
-          <a href="https://github.com/Rouboufy/vide#build-from-source"><span class="install-tag">Developers</span><strong>Build from source</strong><small>Use <code>setup.sh --source</code> with the pinned Zig 0.16.0 toolchain.</small></a>
-        </div>
+        <summary>Other ways to install <span aria-hidden="true">+</span></summary>
+        <div class="download-options"><a href="https://github.com/Rouboufy/vide/releases/latest"><span class="install-tag">Linux + macOS</span><strong>Native bundles <span aria-hidden="true">↗</span></strong><small>x86-64 and ARM64 builds with a private Neovim runtime.</small></a><a href="https://github.com/Rouboufy/vide/releases/latest/download/Vide-linux-x86_64.AppImage"><span class="install-tag">Linux x86-64</span><strong>Portable AppImage <span aria-hidden="true">↗</span></strong><small>Vide and Neovim in one portable package.</small></a><a href="https://github.com/Rouboufy/vide#build-from-source"><span class="install-tag">Developers</span><strong>Build from source <span aria-hidden="true">↗</span></strong><small>Requires Zig 0.16.0 and Neovim 0.12 or newer.</small></a></div>
       </details>
     </section>
 
-    <section id="support">
-      <p class="eyebrow">Platform status and limitations</p><h2>Clear about what has been verified</h2>
-      <div class="support-grid">
-        <div><h3>Observed</h3><ul><li>Arch Linux, Ubuntu 24.04, and Debian 12 AppImage startup</li><li>Alacritty, tmux 3.7b, and real OpenSSH PTY paths</li><li>Unicode, mouse, paste, resize, and terminal restoration regression suites</li></ul></div>
-        <div><h3>Still being verified</h3><ul><li>macOS and WSL end-to-end workflows</li><li>Additional GUI terminal observations</li><li>Some terminals cannot distinguish every Cmd, Ctrl, Alt, and Shift sequence</li></ul></div>
-      </div>
-      <p>Plugins that need ownership of the outer terminal UI may be incompatible. See <a href="docs/plugin-compatibility.md">plugin compatibility</a>, <a href="docs/terminal-compatibility.md">terminal compatibility</a>, the <a href="README.md">complete documentation</a>, and <a href="https://github.com/Rouboufy/vide/issues">open issues</a>.</p>
-    </section>
+    <section id="support" class="support-section" aria-labelledby="support-title"><div><p class="eyebrow">Platform status &amp; limitations</p><h2 id="support-title">A few things to know.</h2></div><div><p>Linux is the primary tested platform. macOS and WSL workflows are still being verified across terminals. Mouse, clipboard, and modified keys depend on your terminal and transport.</p><p>Plugins that expect to control the outer terminal may need adjustments. Coding assistants require their own installed CLI and authentication.</p><div class="support-links"><a href="https://github.com/Rouboufy/vide/blob/main/docs/terminal-compatibility.md">Terminal compatibility ↗</a><a href="https://github.com/Rouboufy/vide/blob/main/docs/plugin-compatibility.md">Plugin compatibility ↗</a><a href="https://github.com/Rouboufy/vide/issues">Report an issue ↗</a></div></div></section>
   </main>
-
-  <footer><div><a class="brand" href="#top"><img src="packaging/vide.svg" alt="" width="32" height="32">Vide</a><p>Open source. Built with Zig and Neovim.</p></div><p><a href="https://github.com/Rouboufy/vide">Source</a> · <a href="https://github.com/Rouboufy/vide/issues">Issues</a> · <a href="https://github.com/Rouboufy/vide/releases">Releases</a></p></footer>
+  <footer><div><a class="brand" href="#top">vide<span class="brand-dot">.</span></a><p>Built with Zig. Powered by Neovim.</p></div><div><a href="https://github.com/Rouboufy/vide">GitHub</a><a href="https://github.com/Rouboufy/vide/releases">Releases</a><a href="https://github.com/Rouboufy/vide/blob/main/LICENSE">MIT license</a></div></footer>
 </body>
 </html>

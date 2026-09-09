@@ -12,7 +12,7 @@ fn isThemeHeading(theme_name: []const u8) bool {
 }
 
 fn themeLabel(name: []const u8) []const u8 {
-    return if (std.mem.eql(u8, name, "system")) "System (follow desktop)" else name;
+    return if (std.mem.eql(u8, name, "system")) "System (follow desktop)" else if (std.mem.eql(u8, name, "vscode")) "VS Code Dark Modern" else name;
 }
 
 fn scrollThemeList(themes: []const []const u8, hover_idx: *usize, scroll_offset: *usize, down: bool) void {
@@ -162,7 +162,7 @@ pub const SettingsConfig = struct {
     ide: bool = false,
     autocomplete: bool = true,
     autoindent: bool = true,
-    theme: []const u8 = "kanagawa",
+    theme: []const u8 = "vscode",
     indent_size: u8 = 4,
     use_tabs: bool = false,
     wrap: bool = false,
@@ -1012,9 +1012,9 @@ pub const SettingsWidget = struct {
                 ren.drawText(content_x, content_y, "Appearance", theme.fg_primary, theme.bg_sidebar, true, false);
 
                 const theme_str = if (self.config.nerd_fonts)
-                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{themeLabel(self.config.theme)}) catch "Theme: kanagawa"
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{themeLabel(self.config.theme)}) catch "Theme: VS Code Dark Modern"
                 else
-                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{themeLabel(self.config.theme)}) catch "Theme: kanagawa";
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{themeLabel(self.config.theme)}) catch "Theme: VS Code Dark Modern";
                 ren.drawText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const sep_str = if (self.config.nerd_fonts)
@@ -2141,7 +2141,7 @@ test "corrupt and truncated settings preserve source and widget uses defaults" {
         var widget = SettingsWidget.init(std.testing.allocator, path, std.testing.io, data_dir);
         defer widget.deinit();
         try std.testing.expect(widget.load_failed);
-        try std.testing.expectEqualStrings("kanagawa", widget.config.theme);
+        try std.testing.expectEqualStrings("vscode", widget.config.theme);
 
         const preserved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(SettingsConfig.max_document_bytes));
         defer std.testing.allocator.free(preserved);

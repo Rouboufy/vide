@@ -1,3 +1,6 @@
+-- Parser generators installed by setup.sh remain private to Vide.
+local tools_bin = vim.fn.stdpath("data") .. "/tools/bin"
+vim.env.PATH = tools_bin .. ":" .. (vim.env.PATH or "")
 local site = vim.fn.stdpath("data") .. "/site"
 vim.opt.rtp:prepend(site)
 
@@ -174,6 +177,23 @@ if up_f then
     local ok, decoded = pcall(vim.json.decode, content)
     if ok and type(decoded) == "table" then
         user_plugins = decoded
+    end
+end
+
+-- Keep this list available to the installer and the plugin build hook.
+_G.vide_default_parsers = {
+    "bash", "c", "cpp", "css", "go", "html", "javascript", "json", "lua",
+    "markdown", "markdown_inline", "python", "query", "rust", "tsx",
+    "typescript", "vim", "vimdoc", "zig",
+}
+_G.vide_install_parsers = function()
+    local ts = require("nvim-treesitter")
+    ts.setup({ install_dir = site })
+    ts.install(_G.vide_default_parsers):wait(300000)
+    vim.opt.rtp:prepend(site) -- refresh lookup after creating the parser directory
+    for _, lang in ipairs(_G.vide_default_parsers) do
+        assert(vim.treesitter.language.add(lang, { path = site .. "/parser/" .. lang .. ".so" }), "Treesitter parser unavailable: " .. lang)
+        assert(vim.treesitter.query.get(lang, "highlights"), "Treesitter highlights unavailable: " .. lang)
     end
 end
 
@@ -357,29 +377,24 @@ local plugins_setup = {
     },
     {
         "nvim-treesitter/nvim-treesitter",
-        build = function()
-            local ts = require("nvim-treesitter")
-            local site = vim.fn.stdpath("data") .. "/site"
-            ts.setup({ install_dir = site })
-            ts.install({ "c", "lua", "python", "vim", "vimdoc", "query", "zig", "markdown", "markdown_inline" }):wait()
-        end,
-        event = { "BufReadPost", "BufNewFile" },
+        branch = "main",
+        commit = "8b98b4470eb326f1c7b50dae79f8c963568e5720",
+        lazy = false,
+        build = function() _G.vide_install_parsers() end,
         config = function()
-            local ts = require("nvim-treesitter")
-            local site = vim.fn.stdpath("data") .. "/site"
-            ts.setup({
-                install_dir = site
-            })
-            vim.opt.rtp:prepend(site)
+            require("nvim-treesitter").setup({ install_dir = site })
             local function highlight(buf)
-                if vim.bo[buf].buftype == "" then pcall(vim.treesitter.start, buf) end
+                if vim.bo[buf].buftype ~= "" or vim.bo[buf].filetype == "" then return end
+                -- Uninstalled languages keep Vim's syntax fallback. Core parsers
+                -- are installed and verified synchronously by setup.sh.
+                pcall(vim.treesitter.start, buf)
             end
-            vim.api.nvim_create_autocmd('FileType', {
+            vim.api.nvim_create_autocmd({ 'FileType', 'BufWinEnter' }, {
                 group = vim.api.nvim_create_augroup('VideTreesitter', { clear = true }),
                 callback = function(event) highlight(event.buf) end,
             })
             highlight(vim.api.nvim_get_current_buf())
-        end
+        end,
     },
     {
         "williamboman/mason.nvim",
@@ -1077,9 +1092,63 @@ do
             signature = content
         end
     end
+    local function dark_modern()
+        vim.o.background = 'dark'
+        local ok, vscode = pcall(require, 'vscode')
+        if ok then
+            vscode.setup({
+                style = 'dark',
+                color_overrides = {
+                    vscBack = '#1F1F1F', vscFront = '#CCCCCC',
+                    vscLeftDark = '#181818', vscPopupBack = '#202020',
+                    vscLineNumber = '#6E7681',
+                },
+                group_overrides = {
+                    VideAccent = { fg = '#0078D4' },
+                    WinSeparator = { fg = '#2B2B2B' },
+                },
+            })
+            vscode.load('dark')
+        else
+            vim.cmd('highlight clear')
+            vim.g.colors_name = 'vscode'
+            local groups = {
+                Normal = { fg = '#CCCCCC', bg = '#1F1F1F' },
+                NormalNC = { fg = '#CCCCCC', bg = '#181818' },
+                LineNr = { fg = '#6E7681' }, CursorLineNr = { fg = '#CCCCCC' },
+                SignColumn = { bg = '#1F1F1F' }, EndOfBuffer = { fg = '#1F1F1F' },
+                WinSeparator = { fg = '#2B2B2B' }, VideAccent = { fg = '#0078D4' },
+                Visual = { bg = '#264F78' }, Search = { bg = '#9E6A03' },
+                Pmenu = { fg = '#CCCCCC', bg = '#202020' }, PmenuSel = { bg = '#04395E' },
+                Comment = { fg = '#6A9955' }, String = { fg = '#CE9178' },
+                Character = { fg = '#CE9178' }, Number = { fg = '#B5CEA8' },
+                Boolean = { fg = '#569CD6' }, Float = { fg = '#B5CEA8' },
+                Identifier = { fg = '#9CDCFE' }, Function = { fg = '#DCDCAA' },
+                Statement = { fg = '#C586C0' }, Keyword = { fg = '#569CD6' },
+                PreProc = { fg = '#C586C0' }, Type = { fg = '#4EC9B0' },
+                Special = { fg = '#D7BA7D' }, Constant = { fg = '#4FC1FF' },
+                Operator = { fg = '#D4D4D4' }, Delimiter = { fg = '#CCCCCC' },
+                DiagnosticError = { fg = '#F85149' }, DiagnosticWarn = { fg = '#CCA700' },
+                DiagnosticInfo = { fg = '#3794FF' }, DiagnosticHint = { fg = '#4EC9B0' },
+            }
+            for name, attrs in pairs(groups) do vim.api.nvim_set_hl(0, name, attrs) end
+            for capture, group in pairs({
+                comment = 'Comment', string = 'String', number = 'Number', boolean = 'Boolean',
+                variable = 'Identifier', ['variable.member'] = 'Identifier',
+                ['function'] = 'Function', ['function.call'] = 'Function',
+                ['function.method'] = 'Function', ['function.builtin'] = 'Function',
+                keyword = 'Keyword', ['keyword.return'] = 'Statement',
+                ['keyword.conditional'] = 'Statement', ['keyword.repeat'] = 'Statement',
+                type = 'Type', ['type.builtin'] = 'Type', constant = 'Constant',
+                operator = 'Operator', ['punctuation.bracket'] = 'Delimiter',
+            }) do vim.api.nvim_set_hl(0, '@' .. capture, { link = group }) end
+            vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'vscode', modeline = false })
+        end
+    end
     _G.vide_apply_theme = function(name)
         if name ~= 'system' then
             stop()
+            if name == 'vscode' then return dark_modern() end
             return vim.cmd.colorscheme(name)
         end
         if not enabled then
@@ -1231,7 +1300,7 @@ _G.vide_load_settings = function()
             if state.theme then
                 vim.schedule(function()
                     if not pcall(_G.vide_apply_theme, state.theme) then
-                        pcall(vim.cmd, "colorscheme vscode")
+                        pcall(_G.vide_apply_theme, "vscode")
                     end
                 end)
             end
@@ -1448,7 +1517,7 @@ function M.sync_theme()
     -- Some colorschemes make Visual indistinguishable from Normal once Vide
     -- normalizes editor backgrounds. Keep mouse and keyboard selections clear.
     local system = vim.g.colors_name == 'system' and _G.vide_system_palette or nil
-    local selection_bg = system and system.selection_background or get_contrast(bg_editor, 36) or "#264f78"
+    local selection_bg = system and system.selection_background or (vim.g.colors_name == "vscode" and "#264f78") or get_contrast(bg_editor, 36) or "#264f78"
     local selection_fg = system and system.selection_foreground or nil
     if not _G.vide_system_colorscheme then
         vim.api.nvim_set_hl(0, "Visual", { fg = selection_fg, bg = selection_bg, bold = true })
@@ -1591,6 +1660,8 @@ vim.api.nvim_create_autocmd("ColorScheme", {
 })
 vim.schedule(function() pcall(function() require("vide_settings").sync_theme() end) end)
 
+-- Apply the built-in default even when there is no saved settings file.
+_G.vide_apply_theme('vscode')
 if _G.vide_load_settings then _G.vide_load_settings() end
 
 -- Global function to restart dashboard when tabs close

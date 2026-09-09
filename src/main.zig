@@ -641,7 +641,6 @@ fn runNvimSession(
         cp[0] = .{ .string = "autocmd BufWritePost * let b:vide_session_saved = 1" };
         const r_au2 = try rpc.call("nvim_command", cp);
         msgpack.freeValue(r_au2, alloc);
-
     }
 
     var seq_buf: [4096]u8 = undefined;

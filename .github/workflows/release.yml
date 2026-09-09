@@ -56,6 +56,7 @@ jobs:
             cp packaging/vide-launcher "$bundle/bin/vide"
             chmod 755 "$bundle/bin/vide"
             cp "$prefix/bin/vide" "$bundle/lib/vide/vide"
+            cp src/nvim/vide_init.lua "$bundle/lib/vide/vide_init.lua"
             mv "$RUNNER_TEMP/$nvim_asset" "$bundle/lib/vide/nvim"
             tar -C "$RUNNER_TEMP/$asset-bundle" -czf "dist/$asset.tar.gz" "$asset"
           }

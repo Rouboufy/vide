@@ -76,8 +76,10 @@ user's Neovim init or LazyVim configuration. Other themes stay Vide-local.
 
 ## Dependencies
 
-At runtime VIDE requires Neovim. Git and network access are needed when
-installing or updating plugins. Zig is required only when building from source.
+At runtime VIDE requires Neovim 0.12 or newer; releases bundle it. Git and network access are needed when
+installing or updating plugins. Zig is required only when building from source. The installer provisions missing
+source toolchains and parser tools and installs the default Treesitter parsers.
+New settings default to the VS Code Dark Modern theme.
 Nerd Fonts are recommended and their icons are enabled by default; portable
 text symbols remain available from Settings.
 

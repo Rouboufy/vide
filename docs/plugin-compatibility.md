@@ -30,9 +30,17 @@ their public modules load:
 | blink.cmp | completion module availability |
 | Harpoon | mark module |
 
-Treesitter, LSP servers, formatters, and Mason packages also depend on external
-executables and parsers. Their presence in the bundled specification is not a
-claim that every language tool is installed or healthy.
+Treesitter is loaded eagerly and pinned to a tested revision. The default
+installer compiles and verifies parsers and highlight queries for Bash, C, C++,
+CSS, Go, HTML, JavaScript, JSON, Lua, Markdown (including inline Markdown),
+Python, Query, Rust, TSX, TypeScript, Vim, Vimdoc, and Zig. This requires
+Neovim 0.12+, a C compiler, and Tree-sitter CLI 0.26.1+; setup provisions the
+required tools. `--no-plugins` explicitly skips that bootstrap.
+
+LSP servers, formatters, and Mason packages are separate tools. Treesitter
+highlighting does not imply that every language server or formatter is installed.
+Run `VIDE_TEST_PLUGIN_DATA=~/.local/share/vide python3 tests/default_runtime.py`
+to verify installed parsers, queries, startup loading, and actual Zig highlighting.
 
 Run the smoke test after bootstrapping plugins:
 
