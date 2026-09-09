@@ -24,7 +24,9 @@ The 132 × 38 terminal grid is captured with its ANSI colors and rendered as a
 1584 × 950 lossless WebP image. Font appearance depends on the host monospace font.
 No UI elements or text are added to the captured grid.
 
-The set covers Explorer, workspace, terminal, Git, settings, IDE, and Zen.
+The set covers Explorer, workspace, terminal, Git, settings, Extensions, IDE, and Zen.
+The current Extensions preview uses an isolated recovery session to inspect the
+local plugin inventory without loading third-party plugin code.
 Regenerate after visible UI changes and inspect each image before publishing.
 The older [media fixtures](../media/README.md) serve terminal regression examples;
 they are not the website's current screenshot set.

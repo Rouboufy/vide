@@ -1,177 +1,167 @@
 #!/usr/bin/env python3
-import os
-import sys
+"""Vide marketplace and offline installed-plugin inventory."""
 import json
+import os
+import pathlib
+import re
+import sys
+import tempfile
 import time
 import urllib.request
 
-HOME = os.path.expanduser("~")
-VIDE_DIR = os.path.join(HOME, ".local", "share", "vide")
-DB_PATH = os.path.join(VIDE_DIR, "store_db.json")
-USER_PLUGINS_PATH = os.path.join(VIDE_DIR, "user_plugins.json")
+VIDE_DIR = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share")) / "vide"
+DB_PATH = VIDE_DIR / "store_db.json"
+USER_PLUGINS_PATH = VIDE_DIR / "user_plugins.json"
+STATE_PATH = VIDE_DIR / "plugin_states.json"
+INVENTORY_PATH = VIDE_DIR / "plugin_inventory.json"
+
+
+def read_json(path, default):
+    if not path.exists():
+        return default
+    with path.open(encoding="utf-8") as file:
+        value = json.load(file)
+    if not isinstance(value, type(default)):
+        raise ValueError(f"Invalid data in {path.name}; repair this file first")
+    return value
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(value, file, indent=2)
+            file.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
 
 def download_db():
-    os.makedirs(VIDE_DIR, exist_ok=True)
     url = "https://github.com/alex-popov-tech/store.nvim.crawler/releases/latest/download/db_minified.json"
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=10.0) as response:
-            data = response.read()
-            with open(DB_PATH, "wb") as f:
-                f.write(data)
+        request = urllib.request.Request(url, headers={"User-Agent": "Vide"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.load(response)
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise ValueError("Invalid marketplace catalog")
+        write_json(DB_PATH, data)
         return True
-    except Exception as e:
-        sys.stderr.write(f"Error downloading database: {e}\n")
+    except Exception as error:
+        sys.stderr.write(f"Catalog refresh failed: {error}\n")
         return False
 
-def check_cache():
-    if not os.path.exists(DB_PATH):
-        return download_db()
-    # If older than 24 hours, update
-    st = os.stat(DB_PATH)
-    if time.time() - st.st_mtime > 86400:
-        return download_db()
-    return True
 
-def search(query, category=None):
-    if not check_cache():
-        print(json.dumps([]))
-        return
-
-    try:
-        with open(DB_PATH, "r", encoding="utf-8") as f:
-            db = json.load(f)
-    except Exception as e:
-        sys.stderr.write(f"Error reading DB: {e}\n")
-        print(json.dumps([]))
-        return
-
-    items = db.get("items", [])
-
-    # Load installed user plugins to filter/mark them
-    installed = set()
-    if os.path.exists(USER_PLUGINS_PATH):
-        try:
-            with open(USER_PLUGINS_PATH, "r") as f:
-                installed = set(json.load(f))
-        except:
-            pass
-
-    # Filter by category if specified and not 'all'
-    if category and category != "all":
-        if category == "installed":
-            items = [item for item in items if item.get("full_name", "") in installed]
+def inventory():
+    states = read_json(STATE_PATH, {})
+    entries = {p["full_name"]: dict(p) for p in read_json(INVENTORY_PATH, [])}
+    for repo in read_json(USER_PLUGINS_PATH, []):
+        entries.setdefault(repo, {"name": repo.rsplit("/", 1)[-1], "full_name": repo, "source": "Marketplace"})
+    known_names = {p["name"] for p in entries.values()}
+    root = VIDE_DIR / "lazy"
+    if root.is_dir():
+        for path in sorted(root.iterdir()):
+            if path.is_dir() and path.name not in known_names and not path.name.startswith("."):
+                # Preserve visibility of local/orphaned plugins without inventing a repository.
+                entries["local:" + path.name] = {"name": path.name, "full_name": "local:" + path.name,
+                    "source": "Unmanaged", "description": "Local plugin; manage its source with Lazy."}
+    for repo, entry in entries.items():
+        state = states.get(repo, "enabled")
+        on_disk = (root / entry["name"]).is_dir()
+        runtime_enabled = entry.get("enabled", True)
+        entry.update(installed=state != "removed" and (on_disk or repo in states or entry.get("source") == "Marketplace"),
+                     enabled=state == "enabled", stars=0, protected=repo == "folke/lazy.nvim" or repo.startswith("local:"))
+        if state == "removed":
+            status = "Removal pending restart" if on_disk else "Not installed"
+        elif state == "disabled":
+            status = "Disabled"
+        elif not on_disk:
+            status = "Install pending restart"
         else:
-            category_tags = {
-                "colorscheme": ["colorscheme", "theme", "color-scheme"],
-                "lsp": ["lsp"],
-                "git": ["git"],
-                "ai": ["ai", "llm"],
-                "treesitter": ["treesitter", "tree-sitter"],
-                "telescope": ["telescope", "telescope-extension"],
-            }
-            target_tags = category_tags.get(category, [category])
-            items = [item for item in items if any(t.lower() in target_tags for t in item.get("tags", []))]
+            status = "Enabled"
+        if state != "removed" and entry["enabled"] != runtime_enabled:
+            status += " (restart)"
+        entry["status"] = status
+        required = entry.get("required_by", [])
+        entry["description"] = entry.get("source", "Plugin") + " | " + status + (" | Required by: " + ", ".join(required) if required else "")
+    return entries
 
-    if not query:
-        # Return top 50 plugins by stars
-        results = sorted(items, key=lambda x: x.get("stars", {}).get("curr", 0), reverse=True)[:50]
+
+def search(query, category="all"):
+    installed = inventory()
+    if category == "installed":
+        # No catalog or network required, and no 50-item cap.
+        items = [p for p in installed.values() if p["installed"] or p["status"] == "Removal pending restart"]
+        results = sorted(items, key=lambda p: p["name"].lower())
     else:
-        query = query.lower()
-        matches = []
-        for item in items:
-            name = item.get("name", "").lower()
-            full_name = item.get("full_name", "").lower()
-            desc = item.get("description", "") or ""
-            desc = desc.lower()
-            tags = [t.lower() for t in item.get("tags", [])]
-            
-            if (query in name or 
-                query in full_name or 
-                query in desc or 
-                any(query in t for t in tags)):
-                matches.append(item)
-        results = sorted(matches, key=lambda x: x.get("stars", {}).get("curr", 0), reverse=True)[:50]
+        if not DB_PATH.exists() or time.time() - DB_PATH.stat().st_mtime > 86400:
+            download_db()  # A stale cache remains usable offline.
+        items = read_json(DB_PATH, {"items": []}).get("items", [])
+        tags = {"colorscheme": ["colorscheme", "theme", "color-scheme"], "ai": ["ai", "llm"],
+                "treesitter": ["treesitter", "tree-sitter"], "telescope": ["telescope", "telescope-extension"]}
+        if category != "all":
+            items = [p for p in items if any(t.lower() in tags.get(category, [category]) for t in p.get("tags", []))]
+        results = []
+        for item in sorted(items, key=lambda p: p.get("stars", {}).get("curr", 0), reverse=True):
+            repo = item.get("full_name", "")
+            local = installed.get(repo, {})
+            results.append(dict(name=item.get("name", ""), full_name=repo,
+                                stars=item.get("stars", {}).get("curr", 0), description=item.get("description") or "",
+                                installed=local.get("installed", False), enabled=local.get("enabled", True),
+                                protected=local.get("protected", False), status=local.get("status", "Not installed")))
+    query = query.casefold()
+    results = [p for p in results if query in (p["name"] + " " + p["full_name"] + " " + p["description"]).casefold()]
+    return results if category == "installed" else results[:50]
 
-    out = []
-    for item in results:
-        repo = item.get("full_name", "")
-        out.append({
-            "name": item.get("name", ""),
-            "full_name": repo,
-            "stars": item.get("stars", {}).get("curr", 0),
-            "description": item.get("description", "") or "",
-            "installed": repo in installed
-        })
-    print(json.dumps(out))
 
-def add_plugin(repo):
-    os.makedirs(VIDE_DIR, exist_ok=True)
-    plugins = []
-    if os.path.exists(USER_PLUGINS_PATH):
-        try:
-            with open(USER_PLUGINS_PATH, "r") as f:
-                plugins = json.load(f)
-        except Exception:
-            plugins = []
-    
-    if repo not in plugins:
+def change_plugin(action, repo):
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or any(part in (".", "..") for part in repo.split("/")):
+        raise ValueError("Only repository plugins can be managed here")
+    if repo == "folke/lazy.nvim":
+        raise ValueError("Vide needs its plugin manager")
+    entries = inventory()
+    entry = entries.get(repo)
+    if action != "add" and (not entry or not entry["installed"]):
+        raise ValueError("Plugin is not installed")
+    if action in ("disable", "remove"):
+        required = [r for r in entry.get("required_by", []) if entries.get(r, {}).get("installed") and entries[r]["enabled"]]
+        if required:
+            raise ValueError("Required by: " + ", ".join(required) + ". Disable these plugins first.")
+    if action in ("add", "enable"):
+        disabled_deps = [r for r, p in entries.items() if repo in p.get("required_by", []) and (not p["enabled"] or not p["installed"])]
+        if disabled_deps:
+            raise ValueError("Enable or reinstall dependencies first: " + ", ".join(disabled_deps))
+    plugins = read_json(USER_PLUGINS_PATH, [])
+    if action == "add" and not entry and repo not in plugins:
         plugins.append(repo)
-        try:
-            with open(USER_PLUGINS_PATH, "w") as f:
-                json.dump(plugins, f, indent=2)
-            print(json.dumps({"success": True, "message": f"Added plugin {repo}"}))
-        except Exception as e:
-            print(json.dumps({"success": False, "message": str(e)}))
-    else:
-        print(json.dumps({"success": True, "message": "Already installed"}))
+        write_json(USER_PLUGINS_PATH, plugins)
+    states = read_json(STATE_PATH, {})
+    states[repo] = {"add": "enabled", "enable": "enabled", "disable": "disabled", "remove": "removed"}[action]
+    write_json(STATE_PATH, states)
+    return {"success": True, "message": "Saved. Restart Vide to apply; plugin configuration is kept."}
 
-def remove_plugin(repo):
-    if not os.path.exists(USER_PLUGINS_PATH):
-        print(json.dumps({"success": False, "message": "No plugins installed"}))
-        return
-
-    try:
-        with open(USER_PLUGINS_PATH, "r") as f:
-            plugins = json.load(f)
-    except Exception:
-        print(json.dumps({"success": False, "message": "Failed to read installed plugins"}))
-        return
-
-    if repo in plugins:
-        plugins.remove(repo)
-        try:
-            with open(USER_PLUGINS_PATH, "w") as f:
-                json.dump(plugins, f, indent=2)
-            print(json.dumps({"success": True, "message": f"Removed plugin {repo}"}))
-        except Exception as e:
-            print(json.dumps({"success": False, "message": str(e)}))
-    else:
-        print(json.dumps({"success": False, "message": "Plugin not installed"}))
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: store_search.py <search|add|remove|download> [args...]")
-        sys.exit(1)
+    try:
+        command = sys.argv[1] if len(sys.argv) > 1 else ""
+        if command == "search":
+            result = search(sys.argv[2] if len(sys.argv) > 2 else "", sys.argv[3] if len(sys.argv) > 3 else "all")
+        elif command in ("add", "remove", "enable", "disable") and len(sys.argv) == 3:
+            result = change_plugin(command, sys.argv[2])
+        elif command == "download":
+            result = {"success": download_db()}
+            if not result["success"]:
+                raise ValueError("Catalog download failed")
+        else:
+            raise ValueError("Usage: store_search.py search|add|remove|enable|disable|download [args]")
+        print(json.dumps(result))
+    except Exception as error:
+        print(json.dumps({"success": False, "message": str(error)}))
+        return 1
+    return 0
 
-    cmd = sys.argv[1]
-    if cmd == "search":
-        query = sys.argv[2] if len(sys.argv) > 2 else ""
-        category = sys.argv[3] if len(sys.argv) > 3 else "all"
-        search(query, category)
-    elif cmd == "add":
-        if len(sys.argv) < 3:
-            print(json.dumps({"success": False, "message": "Missing repo name"}))
-            sys.exit(1)
-        add_plugin(sys.argv[2])
-    elif cmd == "remove":
-        if len(sys.argv) < 3:
-            print(json.dumps({"success": False, "message": "Missing repo name"}))
-            sys.exit(1)
-        remove_plugin(sys.argv[2])
-    elif cmd == "download":
-        success = download_db()
-        print(json.dumps({"success": success}))
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

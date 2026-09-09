@@ -572,7 +572,7 @@ fn runNvimSession(
             app.activity_bar.active_idx = active;
             app.show_file_tree = true;
             app.sidebar_focus = true;
-            if (active == 4) app.extension_shop.triggerSearch() catch |err| {
+            if (active == 4) app.extension_shop.open() catch |err| {
                 std.log.err("Unable to populate startup Extension view: {}", .{err});
             };
         }

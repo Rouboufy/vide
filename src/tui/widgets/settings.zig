@@ -459,6 +459,7 @@ pub const SettingsWidget = struct {
 
     open_mason: bool = false,
     open_lazy: bool = false,
+    open_installed: bool = false,
     software_update_requested: bool = false,
     software_update_status: SoftwareUpdateStatus = .idle,
     software_update_progress: u8 = 0,
@@ -797,81 +798,6 @@ pub const SettingsWidget = struct {
             self.allocator.free(p.description);
         }
         self.installed_plugins.clearRetainingCapacity();
-
-        const user_plugins_path = std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "user_plugins.json" }) catch return;
-        defer self.allocator.free(user_plugins_path);
-
-        const user_plugins_data = readFileAlloc(self.allocator, user_plugins_path) catch |err| {
-            std.log.err("Failed to read user_plugins.json: {}", .{err});
-            return;
-        };
-        defer self.allocator.free(user_plugins_data);
-
-        const parsed_plugins = std.json.parseFromSlice([]const []const u8, self.allocator, user_plugins_data, .{ .ignore_unknown_fields = true }) catch |err| {
-            std.log.err("Failed to parse user_plugins.json: {}", .{err});
-            return;
-        };
-        defer parsed_plugins.deinit();
-
-        if (parsed_plugins.value.len == 0) return;
-
-        const store_db_path = std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "store_db.json" }) catch return;
-        defer self.allocator.free(store_db_path);
-
-        const DBItem = struct {
-            name: []const u8,
-            full_name: []const u8,
-            stars: struct {
-                curr: usize = 0,
-            } = .{},
-            description: ?[]const u8 = null,
-        };
-        const DB = struct {
-            items: []DBItem,
-        };
-
-        const store_db_data = readFileAlloc(self.allocator, store_db_path) catch null;
-        defer {
-            if (store_db_data) |data| self.allocator.free(data);
-        }
-
-        var db_items: ?std.json.Parsed(DB) = null;
-        if (store_db_data) |data| {
-            db_items = std.json.parseFromSlice(DB, self.allocator, data, .{ .ignore_unknown_fields = true }) catch null;
-        }
-        defer {
-            if (db_items) |db| db.deinit();
-        }
-
-        for (parsed_plugins.value) |repo_name| {
-            var stars: usize = 0;
-            var description: []const u8 = "";
-            var name: []const u8 = "";
-
-            if (std.mem.lastIndexOfScalar(u8, repo_name, '/')) |idx| {
-                name = repo_name[idx + 1 ..];
-            } else {
-                name = repo_name;
-            }
-
-            if (db_items) |db| {
-                for (db.value.items) |item| {
-                    if (std.mem.eql(u8, item.full_name, repo_name)) {
-                        stars = item.stars.curr;
-                        description = item.description orelse "";
-                        name = item.name;
-                        break;
-                    }
-                }
-            }
-
-            self.installed_plugins.append(.{
-                .full_name = self.allocator.dupe(u8, repo_name) catch continue,
-                .name = self.allocator.dupe(u8, name) catch continue,
-                .stars = stars,
-                .description = self.allocator.dupe(u8, description) catch continue,
-            }) catch {};
-        }
     }
 
     fn editConfig(self: *SettingsWidget, p: InstalledPlugin) !void {
@@ -1078,36 +1004,9 @@ pub const SettingsWidget = struct {
                 const is_lazy_hover = (self.keyboard_focus == .content and self.hover_row == 1);
                 ren.drawControlText(content_x, content_y + 4, lazy_btn, if (is_lazy_hover) theme.fg_primary else theme.bg_sidebar, if (is_lazy_hover) theme.fg_accent else theme.fg_accent, true, false);
 
-                // Installed Plugins Title
-                ren.drawText(content_x, content_y + 6, "Installed Plugins:", theme.fg_primary, theme.bg_sidebar, true, false);
-
-                const max_visible_plugins = 6;
-                const start_idx = self.plugin_scroll_offset;
-                const end_idx = @min(self.installed_plugins.items.len, start_idx + max_visible_plugins);
-
-                var idx = start_idx;
-                var py_offset: u16 = 8;
-                while (idx < end_idx) : (idx += 1) {
-                    const p = self.installed_plugins.items[idx];
-                    const is_hovered = (self.keyboard_focus == .content and self.hover_row == 2 + idx);
-
-                    var plugin_line_buf: [128]u8 = undefined;
-                    const plugin_line = std.fmt.bufPrint(&plugin_line_buf, "  • {s}", .{p.full_name}) catch p.full_name;
-
-                    ren.drawControlText(content_x, content_y + py_offset, plugin_line, if (is_hovered) theme.fg_accent else theme.fg_secondary, theme.bg_sidebar, is_hovered, false);
-                    py_offset += 1;
-                }
-
-                if (self.installed_plugins.items.len == 0) {
-                    ren.drawText(content_x + 2, content_y + 8, "No installed plugins found.", theme.fg_secondary, theme.bg_sidebar, false, false);
-                }
-
-                if (self.plugin_scroll_offset > 0) {
-                    ren.drawText(content_x + 35, content_y + 8, "▲", theme.fg_accent, theme.bg_sidebar, false, false);
-                }
-                if (self.plugin_scroll_offset + max_visible_plugins < self.installed_plugins.items.len) {
-                    ren.drawText(content_x + 35, content_y + 8 + @as(u16, @intCast(max_visible_plugins)) - 1, "▼", theme.fg_accent, theme.bg_sidebar, false, false);
-                }
+                ren.drawControlText(content_x, content_y + 6, " [ Installed Plugins... ] ", theme.bg_sidebar, theme.fg_accent, true, false);
+                ren.drawText(content_x, content_y + 9, "Configure, enable, disable, or uninstall.", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawText(content_x, content_y + 11, "Changes apply after restarting Vide.", theme.fg_secondary, theme.bg_sidebar, false, false);
             },
             4 => {
                 ren.drawText(content_x, content_y, "Keybindings / Enter or click to record", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -1204,10 +1103,7 @@ pub const SettingsWidget = struct {
                 } else if (self.hover_row == 1) {
                     row_y = content_y + 4;
                 } else {
-                    const plugin_idx = self.hover_row - 2;
-                    if (plugin_idx >= self.plugin_scroll_offset and plugin_idx < self.plugin_scroll_offset + 6) {
-                        row_y = content_y + 8 + @as(u16, @intCast(plugin_idx - self.plugin_scroll_offset));
-                    }
+                    row_y = content_y + 6;
                 }
             } else {
                 const step = if (self.active_tab == 4) @as(u16, 1) else @as(u16, 2);
@@ -1621,7 +1517,7 @@ pub const SettingsWidget = struct {
                 0 => 4,
                 1 => 3,
                 2 => 5,
-                3 => 2 + self.installed_plugins.items.len,
+                3 => 3,
                 4 => binding_fields.len,
                 5 => 1,
                 else => 0,
@@ -1694,13 +1590,7 @@ pub const SettingsWidget = struct {
                 } else if (self.active_tab == 3) {
                     if (self.hover_row == 0) self.open_mason = true;
                     if (self.hover_row == 1) self.open_lazy = true;
-                    if (self.hover_row >= 2) {
-                        const plugin_idx = self.hover_row - 2;
-                        if (plugin_idx < self.installed_plugins.items.len) {
-                            self.selected_plugin = self.installed_plugins.items[plugin_idx];
-                            self.popup_btn_idx = 0;
-                        }
-                    }
+                    if (self.hover_row == 2) self.open_installed = true;
                 } else if (self.active_tab == 4) {
                     self.active_binding = self.hover_row;
                     return true;
@@ -2022,12 +1912,8 @@ pub const SettingsWidget = struct {
                             self.open_mason = true;
                         } else if (my == content_y + 4) {
                             self.open_lazy = true;
-                        } else if (my >= content_y + 8 and my < content_y + 14) {
-                            const click_idx = self.plugin_scroll_offset + (my - (content_y + 8));
-                            if (click_idx < self.installed_plugins.items.len) {
-                                self.selected_plugin = self.installed_plugins.items[click_idx];
-                                self.popup_btn_idx = 0;
-                            }
+                        } else if (my == content_y + 6) {
+                            self.open_installed = true;
                         }
                     },
                     4 => {

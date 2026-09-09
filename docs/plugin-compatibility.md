@@ -11,7 +11,12 @@ plugin is written in Lua or Vimscript.
   Vide's data directory, and tested with the shipped configuration.
 - User-installed Vide plugins are listed in
   `$XDG_DATA_HOME/vide/user_plugins.json`. Their optional configuration files
-  live under `$XDG_DATA_HOME/vide/plugin_configs/`.
+  live under `$XDG_DATA_HOME/vide/plugin_configs/` and return lazy.nvim spec overrides.
+- Desired enable/disable/removal state lives in `plugin_states.json` in the same
+  data directory. `plugin_inventory.json` is a generated inventory, not a user
+  configuration file. The installed menu also scans Vide's own plugin directories.
+- Manage plugins directly in Extensions > Installed. State changes apply
+  after restarting; config files are preserved when uninstalling.
 - System-Neovim plugins and `~/.config/nvim` are unrelated. Vide starts Neovim
   with `--clean` and `NVIM_APPNAME=vide`; it neither loads nor modifies them.
 
@@ -75,7 +80,7 @@ and shutdown before adding it to the tested table.
 If a broken plugin prevents startup, launch Vide once with
 `VIDE_DISABLE_PLUGINS=1 vide`. This skips lazy.nvim bootstrap and all bundled
 and user plugin setup while preserving plugin files, allowing settings or the
-user plugin list to be repaired safely.
+plugin state and configuration to be repaired safely.
 
 Open Settings > Plugins > Plugin Manager and press `s` to synchronize. If
 bootstrap was interrupted or Vide started offline, the same action retries

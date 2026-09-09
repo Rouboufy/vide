@@ -8,7 +8,7 @@ launchers into one keyboard- and mouse-accessible interface. Vide uses its own
 configuration and plugin environment, separate from your regular Neovim setup.
 
 [Website](https://rouboufy.github.io/vide/) ·
-[Latest release](https://github.com/Rouboufy/vide/releases/latest) ·
+**v0.3.0** · [Release notes](docs/releases/v0.3.0.md) · [Latest release](https://github.com/Rouboufy/vide/releases/latest) ·
 [Usage guide](docs/usage.md) ·
 [Issues](https://github.com/Rouboufy/vide/issues)
 
@@ -99,7 +99,7 @@ If `vide` is not found, add `~/.local/bin` to your shell's `PATH`. Run
 ### Build from source
 
 Requires **Zig 0.16.0 exactly**, **Neovim 0.12.0 or newer**, and Git.
-Python 3 is needed for the optional Extension Shop. A Nerd Font is recommended;
+Python 3 is needed for the plugin marketplace and installed plugin menu. A Nerd Font is recommended;
 icons are enabled by default and can be replaced with portable symbols in Settings.
 
 ```bash
@@ -180,6 +180,10 @@ in the [usage guide](docs/usage.md).
 
 ## Troubleshooting and limitations
 
+- **Manage plugins:** open Extensions for the Installed and Discover views.
+  View bundled plugins and dependencies, search the marketplace, edit
+  configuration, enable/disable, and uninstall. Changes apply after restarting;
+  disabling keeps plugin files and uninstalling keeps your configuration.
 - **Plugins fail to load:** inspect the log path in Settings → About. Retry
   synchronization with `s` in Settings → Plugins → Plugin Manager. For recovery,
   run `VIDE_DISABLE_PLUGINS=1 vide`; this skips loading plugins without deleting them.

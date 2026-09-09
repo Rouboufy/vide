@@ -146,6 +146,64 @@ plugin and keeps `system` as the saved preference. If the palette is missing
 or invalid at startup, Vide reports that it is using default colors and keeps
 watching for a valid palette. Choosing another theme stops following the desktop.
 
+### Extensions
+
+Open **Extensions** from the workspace or the F1 command menu. It opens directly
+to **Installed**, your offline library of bundled plugins, dependencies,
+marketplace additions, and local plugin directories. Switch to **Discover** to
+browse the marketplace; choose categories in the sidebar.
+
+The panel shows a searchable plugin list and, on wide terminals, the selected
+plugin's details and actions alongside it. Compact terminals open details with
+Enter or a click. Use `1` for Installed, `2` for Discover, Tab to switch views,
+`c` to cycle discovery categories, `/` to search, and `r` to refresh. Up/Down
+select plugins. Settings > Plugins > Installed Plugins opens this same panel.
+
+![Extensions with installed plugins and inline controls](screenshots/extensions.webp)
+
+| Detail action | Key |
+| --- | --- |
+| Edit configuration | `e` |
+| Enable / disable | `d` |
+| Uninstall | `u`, then `y` to confirm or `n` to cancel |
+| Install / reinstall | Enter |
+| Return to list (compact), or return to editor | Escape |
+
+Restart Vide to apply installation, activation, and removal changes. Disabled
+plugins remain on disk. Uninstall removes only the selected plugin on the next
+normal startup and preserves its configuration for reinstallation. Dependencies
+required by enabled plugins must be kept; disable their dependents first.
+Vide's plugin manager and unmanaged local directories are protected.
+
+Configuration opens as a Lua file under `$XDG_DATA_HOME/vide/plugin_configs/`
+(default `~/.local/share/vide/plugin_configs/`). Save it and restart. Return a
+[lazy.nvim spec override](https://lazy.folke.io/spec), for example:
+
+```lua
+return {
+  opts = { -- options passed to plugins using automatic setup
+    -- plugin-specific values here
+  },
+}
+```
+
+For bundled plugins with a custom setup function, override `config` explicitly:
+
+```lua
+return {
+  config = function(plugin, opts)
+    require("plugin_module").setup(opts or {}) -- use the plugin's documented module
+  end,
+}
+```
+
+An explicit `config` replaces Vide's setup for that plugin. Repository identity,
+dependencies, and enable/disable state stay under the manager's control. Invalid
+configuration is reported without aborting the editor. Recovery mode
+(`VIDE_DISABLE_PLUGINS=1 vide`) skips user config execution so you can repair it.
+**Settings > Plugins > Plugin Manager** retains Lazy's update and sync tools;
+**Mason Settings** manages language servers and formatters separately.
+
 ### Language Tools
 
 Vide detects common project markers for Zig, Lua, Python, Rust,

@@ -83,4 +83,6 @@ jobs:
         with:
           files: |
             dist/*
+          name: Vide ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
           generate_release_notes: true

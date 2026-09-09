@@ -149,7 +149,7 @@ fn drawText(ren: *Renderer, x: u16, y: u16, text: []const u8, fg: Color, bg: Col
 fn overlayVisible(a: *App) bool {
     return a.ui_state.telescope_rects[0] != null or a.ui_state.telescope_rects[1] != null or
         a.settings_widget.is_open or a.mason_widget.is_open or a.lazy_widget.is_open or
-        a.git_detailed_widget.is_open or a.extension_shop.is_popup_open or a.show_split_menu or
+        a.git_detailed_widget.is_open or a.extension_shop.is_open or a.show_split_menu or
         a.activeNotice() != null or a.editor_context_menu.is_open or
         a.bug_report.is_open or a.workspace.palette;
 }
@@ -163,7 +163,7 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
     // A modal owns interaction; controls behind it must not respond to hover.
     if (a.workspace.palette or a.settings_widget.is_open or a.mason_widget.is_open or
         a.lazy_widget.is_open or a.git_detailed_widget.is_open or
-        a.extension_shop.is_popup_open or a.bug_report.is_open or a.editor_context_menu.is_open)
+        a.bug_report.is_open or a.editor_context_menu.is_open)
         a.ren.pointer_position = null;
 
     clearDamagedRegions(a.ren, layout, plan, t.fg_primary, t.bg_editor);
@@ -474,6 +474,19 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
         }
     }
     if (plan.chrome) workspace.drawChrome(a, layout);
+    if (plan.overlays and a.extension_shop.is_open) {
+        a.extension_shop.drawPanel(a.ren, layout.editor, .{
+            .bg_editor = t.bg_editor,
+            .bg_sidebar = t.bg_sidebar,
+            .bg_accent = t.bg_accent,
+            .fg_primary = t.fg_primary,
+            .fg_secondary = t.fg_secondary,
+            .border_color = t.border_color,
+            .fg_accent = t.fg_accent,
+            .nerd_fonts = a.settings_widget.config.nerd_fonts,
+        });
+    }
+
     a.ren.pointer_position = pointer;
     if (plan.overlays and a.workspace.palette) workspace.drawPalette(a, layout);
     if (plan.overlays and a.settings_widget.is_open) {
@@ -521,18 +534,6 @@ pub fn drawWorkspace(a: *App, layout: Layout, damage: CompositionDamage, cursor_
             .border_color = t.border_color,
             .fg_accent = t.fg_accent,
             .fg_comment = t.fg_secondary,
-        });
-    }
-    if (plan.overlays and a.extension_shop.is_popup_open) {
-        a.extension_shop.drawPopup(a.ren, a.ren.width, a.ren.height, .{
-            .bg_editor = t.bg_editor,
-            .bg_sidebar = t.bg_sidebar,
-            .bg_accent = t.bg_accent,
-            .fg_primary = t.fg_primary,
-            .fg_secondary = t.fg_secondary,
-            .border_color = t.border_color,
-            .fg_accent = t.fg_accent,
-            .nerd_fonts = a.settings_widget.config.nerd_fonts,
         });
     }
 

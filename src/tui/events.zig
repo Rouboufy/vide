@@ -119,6 +119,7 @@ fn openSettings(a: *App, keybindings: bool) void {
 
 fn workspaceAction(a: *App, action: workspace.Action, layout: Layout) anyerror!void {
     a.workspace.palette = false;
+    a.extension_shop.is_open = false;
     const kb = a.settings_widget.config.keybindings;
     const key: ?[]const u8 = switch (action) {
         .terminal => kb.toggle_terminal,
@@ -149,7 +150,7 @@ fn workspaceAction(a: *App, action: workspace.Action, layout: Layout) anyerror!v
                 .extensions => 4,
                 else => unreachable,
             };
-            if (action == .extensions) a.extension_shop.triggerSearch() catch {};
+            if (action == .extensions) a.extension_shop.open() catch {};
         },
         .settings => openSettings(a, false),
         .keys => openSettings(a, true),
@@ -461,6 +462,20 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                     a.settings_widget.is_open = false;
                     a.mason_widget.is_open = true;
                     a.mason_widget.refresh(a.rpc);
+                } else if (a.settings_widget.open_installed) {
+                    a.settings_widget.open_installed = false;
+                    a.settings_widget.is_open = false;
+                    a.activity_bar.active_idx = 4;
+                    a.workspace.overview = false;
+                    a.show_file_tree = true;
+                    a.sidebar_focus = true;
+                    a.terminal_focus = false;
+                    a.extension_shop.selected_category = .installed;
+                    a.extension_shop.search_query.clearRetainingCapacity();
+                    a.extension_shop.is_open = true;
+                    a.extension_shop.is_detail_open = false;
+                    a.extension_shop.is_searching = false;
+                    try a.extension_shop.triggerSearch();
                 } else if (a.settings_widget.open_lazy) {
                     a.settings_widget.open_lazy = false;
                     a.settings_widget.is_open = false;
@@ -498,9 +513,22 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             }
             return true;
         }
-        if (a.extension_shop.is_popup_open) {
-            if (try a.extension_shop.handlePopupKey(nk, a.ren.height)) {
+        if (a.extension_shop.is_open and !a.workspace.palette) {
+            if (std.mem.eql(u8, nk, "<F1>")) {
+                workspace.openPalette(a);
+                return true;
+            }
+            if (try a.extension_shop.handlePanelKey(nk)) {
                 a.invalidations.damageAll();
+                if (!a.extension_shop.is_open) a.sidebar_focus = false;
+                if (a.extension_shop.edit_config_path) |path| {
+                    @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
+                    a.extension_shop.allocator.free(path);
+                    a.extension_shop.edit_config_path = null;
+                    a.extension_shop.is_open = false;
+                    a.extension_shop.is_detail_open = false;
+                    a.sidebar_focus = false;
+                }
             }
             return true;
         }
@@ -740,7 +768,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             if (std.mem.eql(u8, nk, "<Tab>")) {
                 a.activity_bar.active_idx = (a.activity_bar.active_idx + 1) % 5;
                 if (a.activity_bar.active_idx == 4) {
-                    a.extension_shop.triggerSearch() catch {};
+                    a.extension_shop.open() catch {};
                 }
                 a.invalidations.damageAll();
                 return true;
@@ -748,7 +776,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             if (std.mem.eql(u8, nk, "<S-Tab>")) {
                 a.activity_bar.active_idx = if (a.activity_bar.active_idx == 0) 4 else a.activity_bar.active_idx - 1;
                 if (a.activity_bar.active_idx == 4) {
-                    a.extension_shop.triggerSearch() catch {};
+                    a.extension_shop.open() catch {};
                 }
                 a.invalidations.damageAll();
                 return true;
@@ -1099,20 +1127,22 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
             a.invalidations.damageAll();
         }
     }
-    if (a.extension_shop.is_popup_open) {
+    if (a.extension_shop.is_open) {
         if (m.action == .press or m.button == .wheel_up or m.button == .wheel_down) {
-            if (try a.extension_shop.handlePopupMouse(m, a.ren.width, a.ren.height)) {
+            if (try a.extension_shop.handlePanelMouse(m)) {
                 a.invalidations.damageAll();
+                if (!a.extension_shop.is_open) a.sidebar_focus = false;
                 if (a.extension_shop.edit_config_path) |path| {
                     @import("../nvim/helpers.zig").openFile(a.rpc, a.allocator, path) catch {};
                     a.extension_shop.allocator.free(path);
                     a.extension_shop.edit_config_path = null;
-                    a.extension_shop.is_popup_open = false;
+                    a.extension_shop.is_open = false;
                     a.extension_shop.is_detail_open = false;
                     a.sidebar_focus = false;
                 }
             } else if (m.action == .press) {
-                a.extension_shop.is_popup_open = false;
+                a.extension_shop.is_open = false;
+                a.sidebar_focus = false;
                 a.invalidations.damageAll();
             }
         }
@@ -1134,6 +1164,20 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                     a.settings_widget.is_open = false;
                     a.mason_widget.is_open = true;
                     a.mason_widget.refresh(a.rpc);
+                } else if (a.settings_widget.open_installed) {
+                    a.settings_widget.open_installed = false;
+                    a.settings_widget.is_open = false;
+                    a.activity_bar.active_idx = 4;
+                    a.workspace.overview = false;
+                    a.show_file_tree = true;
+                    a.sidebar_focus = true;
+                    a.terminal_focus = false;
+                    a.extension_shop.selected_category = .installed;
+                    a.extension_shop.search_query.clearRetainingCapacity();
+                    a.extension_shop.is_open = true;
+                    a.extension_shop.is_detail_open = false;
+                    a.extension_shop.is_searching = false;
+                    try a.extension_shop.triggerSearch();
                 } else if (a.settings_widget.open_lazy) {
                     a.settings_widget.open_lazy = false;
                     a.settings_widget.is_open = false;
@@ -1378,7 +1422,7 @@ pub fn handleMouse(a: *App, m: input.MouseEvent, layout: Layout) !void {
                         a.sidebar_focus = true;
                     }
                     if (new_idx == 4 and prev_idx != 4) {
-                        a.extension_shop.triggerSearch() catch {};
+                        a.extension_shop.open() catch {};
                     }
                     if (prev_idx != new_idx) a.invalidations.damageAll();
                     if (new_idx == 99) {

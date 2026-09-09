@@ -598,21 +598,143 @@ local plugins_setup = {
     { "EdenEast/nightfox.nvim", lazy = true },
     { "tahayvr/matteblack.nvim", lazy = true },
 }
-local config_dir = vim.fn.stdpath("data") .. "/plugin_configs/"
-for _, p in ipairs(user_plugins) do
-    local config_path = config_dir .. p:gsub("/", "_") .. ".lua"
-    local plugin_def = { p }
-    if vim.fn.filereadable(config_path) == 1 then
-        plugin_def.config = function()
-            local ok, err = pcall(dofile, config_path)
-            if not ok then
-                _G.vide_native_notice("error", "Plugin config failed for " .. p .. "; disable it or repair its config.")
-                vim.schedule(function() vim.notify(tostring(err), vim.log.levels.ERROR) end)
+-- Persist desired plugin state separately from plugin code and user options.
+local plugin_data = vim.fn.stdpath("data")
+local function read_plugin_json(name, fallback)
+    local file = io.open(plugin_data .. "/" .. name, "r")
+    if not file then return fallback end
+    local content = file:read("*a")
+    file:close()
+    local ok, result = pcall(vim.json.decode, content)
+    if ok and type(result) == "table" then return result end
+    _G.vide_native_notice("error", "Cannot read " .. name .. "; repair it before changing plugins.")
+    return fallback
+end
+local plugin_states = read_plugin_json("plugin_states.json", {})
+local plugin_inventory = {}
+local function register_spec(spec, source, parent)
+    if type(spec) == "string" then spec = { spec } end
+    if type(spec) ~= "table" or type(spec[1]) ~= "string" then return spec end
+    local repo = spec[1]
+    local name = spec.name or repo:match("([^/]+)$"):gsub("%.git$", "")
+    local entry = plugin_inventory[repo]
+    if not entry then
+        entry = { name = name, full_name = repo, source = source, required_by = {},
+            description = spec.desc or "", enabled = plugin_states[repo] ~= "disabled",
+            removed = plugin_states[repo] == "removed" }
+        plugin_inventory[repo] = entry
+    end
+    if parent and not vim.tbl_contains(entry.required_by, parent) then
+        table.insert(entry.required_by, parent)
+    end
+    local deps = spec.dependencies
+    if type(deps) == "string" then deps = { deps } end
+    if type(deps) == "table" then
+        for i, dep in ipairs(deps) do deps[i] = register_spec(dep, "Dependency", repo) end
+        spec.dependencies = deps
+    end
+    return spec
+end
+for i, spec in ipairs(plugins_setup) do plugins_setup[i] = register_spec(spec, "Bundled") end
+for _, repo in ipairs(user_plugins) do
+    if type(repo) == "string" and not plugin_inventory[repo] then
+        table.insert(plugins_setup, register_spec({ repo }, "Marketplace"))
+    end
+end
+-- Dependency specs discovered by Lazy can also receive persistent overrides.
+for repo, _ in pairs(plugin_states) do
+    if type(repo) == "string" and repo:match("^[%w_.-]+/[%w_.-]+$") and repo ~= "folke/lazy.nvim" and not plugin_inventory[repo] then
+        table.insert(plugins_setup, register_spec({ repo }, "Dependency"))
+    end
+end
+register_spec({ "folke/lazy.nvim" }, "Plugin manager")
+
+-- Overrides are lazy.nvim spec tables: opts, config, keys, events, etc.
+-- Keep repository identity and lifecycle controls owned by the manager.
+local function configure_spec(spec)
+    local repo = spec[1]
+    for _, dep in ipairs(spec.dependencies or {}) do configure_spec(dep) end
+    if plugin_states[repo] == "removed" then spec.enabled = false; return
+    elseif plugin_states[repo] == "disabled" then spec.cond = false; return end
+    local config_path = plugin_data .. "/plugin_configs/" .. repo:gsub("/", "_") .. ".lua"
+    if not plugins_disabled and vim.fn.filereadable(config_path) == 1 then
+        local ok, custom = pcall(dofile, config_path)
+        if ok and type(custom) == "table" then
+            for key, value in pairs(custom) do
+                if type(key) == "string" and not vim.tbl_contains({ "name", "dir", "url", "dependencies", "enabled", "cond" }, key) then
+                    if key == "opts" and type(value) == "table" and type(spec.opts) == "table" then
+                        spec.opts = vim.tbl_deep_extend("force", spec.opts, value)
+                    else spec[key] = value end
+                end
+            end
+        elseif not ok or custom ~= nil then
+            _G.vide_native_notice("error", "Plugin config failed for " .. repo .. ": " .. tostring(custom))
+        end
+    end
+end
+for _, spec in ipairs(plugins_setup) do configure_spec(spec) end
+_G.vide_plugin_specs = plugins_setup
+_G.vide_write_plugin_inventory = function()
+    local ok, config = pcall(require, "lazy.core.config")
+    if ok then
+        for name, plugin in pairs(config.plugins or {}) do
+            local repo = plugin[1]
+            if type(repo) == "string" then
+                if not plugin_inventory[repo] then
+                    plugin_inventory[repo] = { name = name, full_name = repo, source = "Dependency",
+                        required_by = {}, enabled = plugin_states[repo] ~= "disabled" }
+                end
+                local entry = plugin_inventory[repo]
+                entry.name = name
+                entry.loaded = plugin._ and plugin._.loaded ~= nil or false
+            end
+        end
+        for _, plugin in pairs(config.plugins or {}) do
+            for _, name in ipairs(plugin.dependencies or {}) do
+                local dep = config.plugins[name]
+                local entry = dep and plugin_inventory[dep[1]]
+                if entry and type(plugin[1]) == "string" and not vim.tbl_contains(entry.required_by, plugin[1]) then
+                    table.insert(entry.required_by, plugin[1])
+                end
             end
         end
     end
-    table.insert(plugins_setup, plugin_def)
+    local entries = {}
+    for _, entry in pairs(plugin_inventory) do table.insert(entries, entry) end
+    table.sort(entries, function(a, b) return a.name:lower() < b.name:lower() end)
+    vim.fn.mkdir(plugin_data, "p")
+    local path = plugin_data .. "/plugin_inventory.json"
+    local tmp = path .. "." .. vim.fn.getpid() .. ".tmp"
+    local file = io.open(tmp, "w")
+    if file then
+        file:write(vim.json.encode(entries)); file:close(); os.rename(tmp, path)
+    end
 end
+_G.vide_write_plugin_inventory()
+vim.api.nvim_create_autocmd("User", {
+    pattern = { "LazyDone", "LazyLoad", "LazyInstall", "LazyClean", "LazySync" },
+    callback = function() vim.schedule(_G.vide_write_plugin_inventory) end,
+})
+-- Clean only plugins explicitly uninstalled by the user, after the new spec loads.
+vim.api.nvim_create_autocmd("VimEnter", { once = true, callback = function()
+    if plugins_disabled then return end
+    local names = {}
+    for repo, entry in pairs(plugin_inventory) do
+        if plugin_states[repo] == "removed" and repo ~= "folke/lazy.nvim" then table.insert(names, entry.name) end
+    end
+    if #names > 0 then
+        vim.schedule(function()
+            local ok, lazy = pcall(require, "lazy")
+            if ok then
+                local targets = {}
+                for _, plugin in ipairs(require("lazy.core.config").to_clean or {}) do
+                    if vim.tbl_contains(names, plugin.name) then table.insert(targets, plugin) end
+                end
+                if #targets > 0 then lazy.clean({ plugins = targets, show = false }) end
+            end
+        end)
+    end
+end })
 if not plugins_disabled then
     local lazy_ok, lazy = pcall(require, "lazy")
     if lazy_ok then
