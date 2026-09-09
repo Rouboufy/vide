@@ -21,6 +21,14 @@ ENABLE_PASTE = b"\x1b[?2004h"
 DISABLE_PASTE = b"\x1b[?2004l"
 
 
+def disable_software_flow_control(fd):
+    attrs = termios.tcgetattr(fd)
+    attrs[0] &= ~termios.IXON
+    attrs[0] &= ~getattr(termios, "IXOFF", 0)
+    attrs[0] &= ~getattr(termios, "IXANY", 0)
+    termios.tcsetattr(fd, termios.TCSANOW, attrs)
+
+
 def read_available(fd, deadline):
     output = bytearray()
     while time.monotonic() < deadline:
@@ -71,6 +79,7 @@ def run_mode(mode):
             "TERM": "xterm-256color",
         })
         fd, slave_fd = pty.openpty()
+        disable_software_flow_control(slave_fd)
         child = subprocess.Popen(
             [str(BINARY)], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, env=env,
             start_new_session=True
