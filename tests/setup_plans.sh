@@ -16,6 +16,14 @@ check_plan Linux pacman "pacman -S"
 check_plan Linux dnf "dnf install"
 check_plan Linux zypper "zypper install"
 check_plan Darwin brew "brew install"
+for manager in apt pacman dnf zypper; do
+    tools_output=$(VIDE_TEST_PLATFORM=Linux VIDE_TEST_PACKAGE_MANAGER="$manager" \
+        VIDE_TEST_MISSING="python3 cc make unzip rg tar gzip" VIDE_TEST_ONLY=1 \
+        bash setup.sh --dry-run --yes)
+    grep -Fq gcc <<< "$tools_output"
+    grep -Fq ripgrep <<< "$tools_output"
+    grep -Fq unzip <<< "$tools_output"
+done
 
 wsl_output=$(VIDE_TEST_PLATFORM=Linux VIDE_TEST_PACKAGE_MANAGER=apt VIDE_TEST_WSL=1 \
     VIDE_TEST_MISSING="curl nvim git" VIDE_TEST_ONLY=1 \
@@ -36,9 +44,49 @@ check_asset Darwin x86_64 vide-macos-x86_64.tar.gz
 check_asset Darwin arm64 vide-macos-aarch64.tar.gz
 
 progress_file=$(mktemp "${TMPDIR:-/tmp}/vide-setup-progress.XXXXXX")
-trap 'rm -f "$progress_file"' EXIT
+fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/vide-setup-tests.XXXXXX")
+trap 'rm -f "$progress_file"; rm -rf "$fixture_dir"' EXIT
 VIDE_TEST_PLATFORM=Linux VIDE_TEST_ARCH=x86_64 VIDE_UPDATE_PROGRESS_FILE="$progress_file" \
     bash setup.sh --dry-run --no-plugins >/dev/null
-grep -Fxq 72 "$progress_file"
+[ ! -s "$progress_file" ] # --dry-run must not write update progress
+
+# Simulate macOS with Homebrew installed outside PATH and a broken system Git
+# shim. No host package manager or network access is used.
+bash_bin=$(command -v bash)
+mkdir -p "$fixture_dir/bin" "$fixture_dir/homebrew/bin"
+for utility in uname dirname grep awk; do
+    ln -s "$(command -v "$utility")" "$fixture_dir/bin/$utility"
+done
+for utility in python3 tar gzip make unzip rg cc xcrun; do
+    printf '#!/bin/sh\nexit 0\n' > "$fixture_dir/bin/$utility"
+    chmod +x "$fixture_dir/bin/$utility"
+done
+printf '#!/bin/sh\nexit 0\n' > "$fixture_dir/bin/curl"
+printf '#!/bin/sh\nexit 1\n' > "$fixture_dir/bin/git"
+printf '#!/bin/sh\nexit 0\n' > "$fixture_dir/homebrew/bin/brew"
+chmod +x "$fixture_dir/bin/curl" "$fixture_dir/bin/git" "$fixture_dir/homebrew/bin/brew"
+brew_output=$(PATH="$fixture_dir/bin" HOMEBREW_PREFIX="$fixture_dir/homebrew" \
+    VIDE_TEST_PLATFORM=Darwin VIDE_TEST_ARCH=arm64 VIDE_TEST_ONLY=1 \
+    "$bash_bin" setup.sh --dry-run --yes)
+grep -Fq 'brew install git' <<< "$brew_output"
+if grep -Fq neovim <<< "$brew_output"; then exit 1; fi
+
+no_plugins_output=$(PATH="$fixture_dir/bin" HOMEBREW_PREFIX="$fixture_dir/homebrew" \
+    VIDE_TEST_PLATFORM=Darwin VIDE_TEST_ARCH=arm64 VIDE_TEST_ONLY=1 \
+    "$bash_bin" setup.sh --dry-run --yes --no-plugins)
+[ -z "$no_plugins_output" ]
+
+# Homebrew-provided dependencies must be visible before probing for them.
+printf '#!/bin/sh\nexit 0\n' > "$fixture_dir/homebrew/bin/git"
+chmod +x "$fixture_dir/homebrew/bin/git"
+installed_output=$(PATH="$fixture_dir/bin" HOMEBREW_PREFIX="$fixture_dir/homebrew" \
+    VIDE_TEST_PLATFORM=Darwin VIDE_TEST_ARCH=arm64 VIDE_TEST_ONLY=1 \
+    "$bash_bin" setup.sh --dry-run --yes)
+[ -z "$installed_output" ]
+
+bootstrap_output=$(VIDE_TEST_PLATFORM=Darwin VIDE_TEST_ARCH=arm64 \
+    XDG_DATA_HOME="$fixture_dir/data" bash setup.sh --dry-run --yes)
+grep -Fq "$fixture_dir/data/vide/runtime/lib/vide/nvim/bin/nvim --clean --headless" <<< "$bootstrap_output"
+grep -Fq vide-macos-aarch64.tar.gz <<< "$bootstrap_output"
 
 echo "Installer package-manager and release-asset plans passed"

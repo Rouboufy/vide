@@ -1,0 +1,12 @@
+VIDE | C | Emergency                    
+[FOCUS: Help]                           
++--------------------------------------+
+|FOCUS and states                      |
+|> selected  ! Error                   |
+|1 unread  Loading...                  |
+|disabled [? why]                      |
+|Quit: app.quit                        |
++--------------------------------------+
+                                        
+Resize >=60x15 restores surfaces        
+State and sessions retained             

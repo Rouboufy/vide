@@ -1,0 +1,24 @@
+Editor overlay | [FOCUS: Editor grid]                                           
++ Neovim-owned Telescope +                                                      
+> first result                                                                  
+  second result                                                                 
+Move: Down                                                                      
+Escape cancels in Neovim                                                        
+Enter accepts first                                                             
+Shell input pass-through                                                        
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+~                                                                               
+F1 Help | Ctrl-Shift-P Commands                                                 

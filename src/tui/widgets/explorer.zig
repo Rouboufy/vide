@@ -563,13 +563,18 @@ pub const Explorer = struct {
     pub fn draw(self: *Explorer, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
         rend.drawRect(rect, " ", colors.fg_primary, colors.bg_sidebar);
 
+        const pointer = rend.pointer_position;
+        defer rend.pointer_position = pointer;
+        if (self.show_menu) rend.pointer_position = null;
+
         // Draw title and buttons
+        if (rect.w == 0 or rect.h == 0) return;
         drawTextClipped(rend, rect.x + 1, rect.y, "EXPLORER", rect.w - 1, colors.fg_secondary, colors.bg_sidebar, true, false);
 
         if (rect.w >= 8) {
-            drawTextClipped(rend, rect.x + rect.w - 8, rect.y, "+F", 2, colors.fg_accent, colors.bg_sidebar, true, false);
-            drawTextClipped(rend, rect.x + rect.w - 5, rect.y, "+D", 2, colors.fg_accent, colors.bg_sidebar, true, false);
-            drawTextClipped(rend, rect.x + rect.w - 2, rect.y, " X", 2, colors.fg_accent, colors.bg_sidebar, true, false);
+            rend.drawButtonText(rect.x + rect.w - 8, rect.y, 2, "+F", colors.fg_accent, colors.bg_sidebar, true, false);
+            rend.drawButtonText(rect.x + rect.w - 5, rect.y, 2, "+D", colors.fg_accent, colors.bg_sidebar, true, false);
+            rend.drawButtonText(rect.x + rect.w - 2, rect.y, 2, " X", colors.fg_accent, colors.bg_sidebar, true, false);
         }
 
         const max_items = if (rect.h > 0) @max(1, rect.h - 1) else 0;
@@ -582,6 +587,7 @@ pub const Explorer = struct {
             y += 1;
         }) {
             const item = self.items.items[i];
+            defer rend.highlightHover(.{ .x = rect.x, .y = rect.y + y, .w = rect.w -| 1, .h = 1 }, colors.bg_sidebar, colors.fg_primary);
             const is_selected = (self.selected_idx != null and self.selected_idx.? == i);
             const bg = if (is_selected) colors.bg_editor else colors.bg_sidebar;
 
@@ -657,6 +663,7 @@ pub const Explorer = struct {
 
         // Draw context menu if show_menu == true
         if (self.show_menu) {
+            rend.pointer_position = pointer;
             const mx = self.menu_x;
             const my = self.menu_y;
 
@@ -670,19 +677,19 @@ pub const Explorer = struct {
             // Draw options
             if (self.selected_idx) |idx| {
                 if (self.items.items[idx].is_dir) {
-                    rend.drawText(mx, my + 1, if (colors.nerd_fonts) "│ 󰝒 New File   │" else "│ + New File   │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 2, if (colors.nerd_fonts) "│ 󰉋 New Folder │" else "│ + New Folder │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 3, if (colors.nerd_fonts) "│ 󰏫 Rename     │" else "│ ~ Rename     │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 4, if (colors.nerd_fonts) "│ 󰆴 Delete     │" else "│ - Delete     │", fg_menu, bg_menu, false, false);
+                    rend.drawControlText(mx, my + 1, if (colors.nerd_fonts) "│ 󰝒 New File   │" else "│ + New File   │", fg_menu, bg_menu, false, false);
+                    rend.drawControlText(mx, my + 2, if (colors.nerd_fonts) "│ 󰉋 New Folder │" else "│ + New Folder │", fg_menu, bg_menu, false, false);
+                    rend.drawControlText(mx, my + 3, if (colors.nerd_fonts) "│ 󰏫 Rename     │" else "│ ~ Rename     │", fg_menu, bg_menu, false, false);
+                    rend.drawControlText(mx, my + 4, if (colors.nerd_fonts) "│ 󰆴 Delete     │" else "│ - Delete     │", fg_menu, bg_menu, false, false);
                     rend.drawText(mx, my + 5, "└──────────────┘", border_fg, bg_menu, false, false);
                 } else {
-                    rend.drawText(mx, my + 1, if (colors.nerd_fonts) "│ 󰏫 Rename     │" else "│ ~ Rename     │", fg_menu, bg_menu, false, false);
-                    rend.drawText(mx, my + 2, if (colors.nerd_fonts) "│ 󰆴 Delete     │" else "│ - Delete     │", fg_menu, bg_menu, false, false);
+                    rend.drawControlText(mx, my + 1, if (colors.nerd_fonts) "│ 󰏫 Rename     │" else "│ ~ Rename     │", fg_menu, bg_menu, false, false);
+                    rend.drawControlText(mx, my + 2, if (colors.nerd_fonts) "│ 󰆴 Delete     │" else "│ - Delete     │", fg_menu, bg_menu, false, false);
                     rend.drawText(mx, my + 3, "└──────────────┘", border_fg, bg_menu, false, false);
                 }
             } else {
-                rend.drawText(mx, my + 1, if (colors.nerd_fonts) "│ 󰝒 New File   │" else "│ + New File   │", fg_menu, bg_menu, false, false);
-                rend.drawText(mx, my + 2, if (colors.nerd_fonts) "│ 󰉋 New Folder │" else "│ + New Folder │", fg_menu, bg_menu, false, false);
+                rend.drawControlText(mx, my + 1, if (colors.nerd_fonts) "│ 󰝒 New File   │" else "│ + New File   │", fg_menu, bg_menu, false, false);
+                rend.drawControlText(mx, my + 2, if (colors.nerd_fonts) "│ 󰉋 New Folder │" else "│ + New Folder │", fg_menu, bg_menu, false, false);
                 rend.drawText(mx, my + 3, "└──────────────┘", border_fg, bg_menu, false, false);
             }
         }

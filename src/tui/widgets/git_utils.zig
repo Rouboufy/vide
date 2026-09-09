@@ -1,6 +1,9 @@
 const std = @import("std");
+const metrics = @import("../../metrics.zig");
 
 pub fn runGitCommand(allocator: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]const u8 {
+    var timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.blocking_io_git);
+    defer timer.stop();
     var child = try std.process.spawn(io, .{
         .argv = argv,
         .stdout = .pipe,
@@ -24,6 +27,7 @@ pub fn runGitCommand(allocator: std.mem.Allocator, io: std.Io, argv: []const []c
         }
     }
 
-    _ = try child.wait(io);
+    const term = try child.wait(io);
+    if (term != .exited or term.exited != 0) return error.GitCommandFailed;
     return try stdout.toOwnedSlice();
 }

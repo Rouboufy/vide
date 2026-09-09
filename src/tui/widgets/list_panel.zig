@@ -44,6 +44,7 @@ pub fn ListPanel(comptime items: []const Item, comptime header_text: []const u8)
                 const fg = if (is_sep) colors.border_color else (if (is_hover) colors.fg_primary else colors.fg_secondary);
 
                 if (!is_sep) {
+                    defer rend.highlightHover(.{ .x = rect.x, .y = rect.y + y, .w = rect.w -| 1, .h = 1 }, colors.bg_sidebar, colors.fg_primary);
                     var row_rect = rect;
                     row_rect.y = rect.y + y;
                     row_rect.h = 1;

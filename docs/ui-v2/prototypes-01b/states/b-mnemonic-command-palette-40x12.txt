@@ -1,0 +1,12 @@
+VIDE | B | Emergency                    
+[FOCUS: Command Palette]                
++--------------------------------------+
+|file.open  file.save                  |
+|terminal.toggle                       |
+|help.open  mode.zen                   |
+|focus.editor  app.quit                |
+|[Run] [Close]                         |
++--------------------------------------+
+                                        
+Resize >=60x15 restores surfaces        
+State and sessions retained             

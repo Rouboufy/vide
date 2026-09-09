@@ -4,6 +4,12 @@ const Value = msgpack.Value;
 const Color = @import("../tui/renderer.zig").Color;
 const Cell = @import("../tui/renderer.zig").Cell;
 
+fn blankCell() Cell {
+    var cell = Cell{};
+    cell.setChar(" ");
+    return cell;
+}
+
 fn gridCellRepeat(has_repeat: bool, repeat_value: i64) usize {
     if (!has_repeat) return 1;
     return if (repeat_value > 0) @as(usize, @intCast(repeat_value)) else 0;
@@ -47,7 +53,7 @@ pub const GridData = struct {
     pub fn resize(self: *GridData, new_w: u16, new_h: u16) !void {
         const size = @as(usize, new_w) * @as(usize, new_h);
         const new_cells = try self.allocator.alloc(Cell, size);
-        @memset(new_cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
+        @memset(new_cells, blankCell());
         const min_h = @min(self.height, new_h);
         const min_w = @min(self.width, new_w);
         for (0..min_h) |y| {
@@ -62,7 +68,7 @@ pub const GridData = struct {
     }
 
     pub fn clear(self: *GridData) void {
-        @memset(self.cells, Cell{ .char = [_]u8{ ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 1, .fg = .none, .bg = .none });
+        @memset(self.cells, blankCell());
     }
 };
 
@@ -85,8 +91,10 @@ pub const UiState = struct {
     cursor_y: u16 = 0,
     /// Which grid currently has the cursor
     cursor_grid: i64 = 1,
+    editor_mode: u8 = 'n',
     allocator: std.mem.Allocator,
     telescope_rects: [2]?@import("../tui/layout.zig").Rect = .{ null, null },
+    native_picker_chrome: bool = false,
     widget_title: [32]u8 = undefined,
     widget_title_len: usize = 0,
     toggle_zen_requested: bool = false,
@@ -380,32 +388,29 @@ pub const UiState = struct {
             const left: u16 = @as(u16, @intCast(@max(0, arg.array[3].integer)));
             const right: u16 = @as(u16, @intCast(@max(0, arg.array[4].integer)));
             const rows: i64 = arg.array[5].integer;
+            const cols: i64 = arg.array[6].integer;
             if (top >= target.height or bot > target.height or
                 left >= target.width or right > target.width or
                 top >= bot or left >= right) continue;
-            if (rows > 0) {
-                var y = top;
-                const ur = @as(u16, @intCast(rows));
-                if (bot > ur) {
-                    while (y < bot - ur) : (y += 1) {
-                        const src_y = y + ur;
-                        for (left..right) |x| {
-                            target.cells[@as(usize, y) * @as(usize, target.width) + x] =
-                                target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
-                        }
-                    }
-                }
-            } else if (rows < 0) {
-                const abs_rows = @as(u16, @intCast(-rows));
-                if (bot > 0) {
-                    var y = bot;
-                    while (y > top + abs_rows) {
-                        y -= 1;
-                        const src_y = y - abs_rows;
-                        for (left..right) |x| {
-                            target.cells[@as(usize, y) * @as(usize, target.width) + x] =
-                                target.cells[@as(usize, src_y) * @as(usize, target.width) + x];
-                        }
+            const region_h = bot - top;
+            const region_w = right - left;
+            var yi: u16 = 0;
+            while (yi < region_h) : (yi += 1) {
+                const y = if (rows >= 0) top + yi else bot - 1 - yi;
+                var xi: u16 = 0;
+                while (xi < region_w) : (xi += 1) {
+                    const x = if (cols >= 0) left + xi else right - 1 - xi;
+                    const src_y = @as(i128, y) + @as(i128, rows);
+                    const src_x = @as(i128, x) + @as(i128, cols);
+                    const dst_index = @as(usize, y) * @as(usize, target.width) + x;
+                    if (src_y >= @as(i128, top) and src_y < @as(i128, bot) and
+                        src_x >= @as(i128, left) and src_x < @as(i128, right))
+                    {
+                        const sy: usize = @intCast(src_y);
+                        const sx: usize = @intCast(src_x);
+                        target.cells[dst_index] = target.cells[sy * @as(usize, target.width) + sx];
+                    } else {
+                        target.cells[dst_index] = blankCell();
                     }
                 }
             }
@@ -443,7 +448,13 @@ pub const UiState = struct {
                 while (rep < repeat) : (rep += 1) {
                     if (row < target.height and col < target.width) {
                         var cell = Cell{ .fg = hl.fg, .bg = hl.bg, .bold = hl.bold, .italic = hl.italic, .reverse = hl.reverse };
-                        cell.setChar(text);
+                        if (text.len == 0) {
+                            @memset(&cell.char, 0);
+                            cell.len = 0;
+                            cell.continuation = true;
+                        } else {
+                            cell.setChar(text);
+                        }
                         target.cells[@as(usize, row) * @as(usize, target.width) + col] = cell;
                     }
                     col += 1;
@@ -452,40 +463,77 @@ pub const UiState = struct {
         }
     }
 
-    pub fn handleRedraw(self: *UiState, events: []const Value) !void {
+    pub const RedrawDamage = struct {
+        grid: bool = false,
+        cursor: bool = false,
+        lifecycle: bool = false,
+        composition_uncertain: bool = false,
+    };
+
+    /// Applies a complete redraw batch and reports conservative grid-space
+    /// damage. The caller maps it to a screen region only after all positions
+    /// and z-order changes in the batch have landed.
+    pub fn handleRedraw(self: *UiState, events: []const Value) !RedrawDamage {
+        var damage = RedrawDamage{};
         for (events) |ev| {
             if (ev != .array or ev.array.len < 2) continue;
             const name = ev.array[0].string;
             const args = ev.array[1..];
 
-            if (std.mem.eql(u8, name, "default_colors_set")) {
+            if (std.mem.eql(u8, name, "mode_change")) {
+                if (args.len > 0 and args[0] == .array and args[0].array.len > 0 and args[0].array[0] == .string and args[0].array[0].string.len > 0) {
+                    self.editor_mode = args[0].array[0].string[0];
+                }
+            } else if (std.mem.eql(u8, name, "default_colors_set")) {
                 self.handleDefaultColorsSet(args);
+                damage.grid = true;
             } else if (std.mem.eql(u8, name, "hl_attr_define")) {
                 try self.handleHlAttrDefine(args);
+                damage.grid = true;
             } else if (std.mem.eql(u8, name, "grid_resize")) {
                 try self.handleGridResize(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "grid_clear")) {
                 self.handleGridClear(args);
+                damage.grid = true;
             } else if (std.mem.eql(u8, name, "grid_destroy")) {
                 self.handleGridDestroy(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_pos")) {
                 try self.handleWinPos(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "msg_set_pos")) {
                 try self.handleMsgSetPos(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_float_pos")) {
                 try self.handleWinFloatPos(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_hide")) {
                 self.handleWinHide(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "win_close")) {
                 self.handleWinClose(args);
+                damage.lifecycle = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "grid_cursor_goto")) {
                 self.handleGridCursorGoto(args);
+                damage.cursor = true;
             } else if (std.mem.eql(u8, name, "grid_scroll")) {
                 self.handleGridScroll(args);
+                damage.grid = true;
+                damage.composition_uncertain = true;
             } else if (std.mem.eql(u8, name, "grid_line")) {
                 try self.handleGridLine(args);
+                damage.grid = true;
             }
         }
+        return damage;
     }
 };
 
@@ -493,6 +541,33 @@ test "grid cell repeat distinguishes omitted and explicit zero" {
     try std.testing.expectEqual(@as(usize, 1), gridCellRepeat(false, 0));
     try std.testing.expectEqual(@as(usize, 0), gridCellRepeat(true, 0));
     try std.testing.expectEqual(@as(usize, 3), gridCellRepeat(true, 3));
+}
+
+test "redraw damage separates cursor updates from grid lifecycle" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+
+    const cursor_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_cursor_goto" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 2 }, .{ .integer = 3 } }) },
+        }) },
+    };
+    const cursor_damage = try state.handleRedraw(&cursor_events);
+    try std.testing.expect(cursor_damage.cursor);
+    try std.testing.expect(!cursor_damage.grid);
+    try std.testing.expect(!cursor_damage.lifecycle);
+
+    const lifecycle_events = [_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 80 }, .{ .integer = 24 } }) },
+        }) },
+    };
+    const lifecycle_damage = try state.handleRedraw(&lifecycle_events);
+    try std.testing.expect(lifecycle_damage.lifecycle);
+    try std.testing.expect(lifecycle_damage.composition_uncertain);
+    try std.testing.expect(!lifecycle_damage.cursor);
 }
 
 test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" {
@@ -507,7 +582,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             .{ .array = values(&[_]Value{ .{ .integer = 3 }, .{ .integer = 4 }, .{ .integer = 2 } }) },
         }) },
     };
-    try state.handleRedraw(&resize_events);
+    _ = try state.handleRedraw(&resize_events);
 
     const hl_events = [_]Value{
         .{ .array = values(&[_]Value{
@@ -527,7 +602,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             }) },
         }) },
     };
-    try state.handleRedraw(&hl_events);
+    _ = try state.handleRedraw(&hl_events);
 
     const line_events = [_]Value{
         .{ .array = values(&[_]Value{
@@ -552,7 +627,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             }) },
         }) },
     };
-    try state.handleRedraw(&line_events);
+    _ = try state.handleRedraw(&line_events);
 
     const live_grid = state.get(2).?;
     try std.testing.expectEqualStrings("A", live_grid.cells[0].char[0..live_grid.cells[0].len]);
@@ -599,7 +674,7 @@ test "ui protocol replays grid line, scroll, cursor, and grid lifecycle events" 
             .{ .array = values(&[_]Value{.{ .integer = 2 }}) },
         }) },
     };
-    try state.handleRedraw(&lifecycle_events);
+    _ = try state.handleRedraw(&lifecycle_events);
     try std.testing.expectEqual(@as(i64, 2), state.cursor_grid);
     const cursor_pos = state.cursorScreenPos();
     try std.testing.expectEqual(@as(i32, 2), cursor_pos.x);
@@ -632,7 +707,7 @@ test "ui protocol resolves legacy float positions without absolute coordinates" 
             }) },
         }) },
     };
-    try state.handleRedraw(&events);
+    _ = try state.handleRedraw(&events);
 
     const float = state.get(3).?;
     try std.testing.expectEqual(@as(i32, 8), float.row);
@@ -647,7 +722,7 @@ test "ui protocol resolves legacy float positions without absolute coordinates" 
             }) },
         }) },
     };
-    try state.handleRedraw(&anchored_events);
+    _ = try state.handleRedraw(&anchored_events);
     try std.testing.expectEqual(@as(i32, 8), float.row);
     try std.testing.expectEqual(@as(i32, 17), float.col);
 }
@@ -677,10 +752,158 @@ test "ui protocol preserves width after scrolling and keeps explicit zero repeat
             }) },
         }) },
     };
-    try state.handleRedraw(&events);
+    _ = try state.handleRedraw(&events);
 
     try std.testing.expectEqualStrings("1", state.grid.cells[0].char[0..state.grid.cells[0].len]);
     try std.testing.expectEqualStrings("3", state.grid.cells[1].char[0..state.grid.cells[1].len]);
     try std.testing.expectEqualStrings("4", state.grid.cells[2].char[0..state.grid.cells[2].len]);
     try std.testing.expectEqualStrings("5", state.grid.cells[3].char[0..state.grid.cells[3].len]);
+}
+
+test "grid scroll translates both axes and blanks exposed cells" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+    try state.grid.resize(4, 3);
+    for (state.grid.cells, 0..) |*cell, i| cell.setChar(&[_]u8{@as(u8, @intCast('A' + i))});
+
+    const diagonal = [_]Value{.{ .array = values(&[_]Value{
+        .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 3 }, .{ .integer = 0 },
+        .{ .integer = 4 }, .{ .integer = 1 }, .{ .integer = 1 },
+    }) }};
+    state.handleGridScroll(&diagonal);
+
+    try std.testing.expectEqual(@as(u8, 'F'), state.grid.cells[0].char[0]);
+    try std.testing.expectEqual(@as(u8, 'K'), state.grid.cells[5].char[0]);
+    for ([_]usize{ 3, 7, 8, 9, 10, 11 }) |index| {
+        const cell = state.grid.cells[index];
+        try std.testing.expectEqual(@as(u8, ' '), cell.char[0]);
+        try std.testing.expectEqual(Color.none, cell.fg);
+        try std.testing.expectEqual(Color.none, cell.bg);
+        try std.testing.expect(!cell.continuation);
+    }
+}
+
+test "grid scroll supports negative and oversized displacement in a partial region" {
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+    try state.grid.resize(4, 3);
+    for (state.grid.cells, 0..) |*cell, i| cell.setChar(&[_]u8{@as(u8, @intCast('A' + i))});
+
+    const negative = [_]Value{.{ .array = values(&[_]Value{
+        .{ .integer = 1 }, .{ .integer = 0 },  .{ .integer = 3 },  .{ .integer = 0 },
+        .{ .integer = 4 }, .{ .integer = -1 }, .{ .integer = -1 },
+    }) }};
+    state.handleGridScroll(&negative);
+    try std.testing.expectEqual(@as(u8, 'A'), state.grid.cells[5].char[0]);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[0].char[0]);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[4].char[0]);
+
+    for (state.grid.cells, 0..) |*cell, i| cell.setChar(&[_]u8{@as(u8, @intCast('A' + i))});
+    const oversized_partial = [_]Value{.{ .array = values(&[_]Value{
+        .{ .integer = 1 }, .{ .integer = 1 },                    .{ .integer = 3 },                    .{ .integer = 1 },
+        .{ .integer = 3 }, .{ .integer = std.math.maxInt(i64) }, .{ .integer = std.math.minInt(i64) },
+    }) }};
+    state.handleGridScroll(&oversized_partial);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[5].char[0]);
+    try std.testing.expectEqual(@as(u8, ' '), state.grid.cells[6].char[0]);
+    try std.testing.expectEqual(@as(u8, 'D'), state.grid.cells[3].char[0]);
+    try std.testing.expectEqual(@as(u8, 'L'), state.grid.cells[11].char[0]);
+}
+
+test "deterministic msgpack redraw replay produces canonical styled unicode cell grid" {
+    // This is a decoded Neovim redraw batch first serialized through msgpack,
+    // ensuring the replay fixture exercises the wire representation as well as
+    // the protocol state machine.
+    const fixture = Value{ .array = values(&[_]Value{
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_resize" },
+            .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 6 }, .{ .integer = 3 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 2 }, .{ .integer = 2 } }) },
+            .{ .array = values(&[_]Value{ .{ .integer = 3 }, .{ .integer = 2 }, .{ .integer = 1 } }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "hl_attr_define" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 7 },
+                .{ .map = kvs(&[_]Value.KV{
+                    .{ .key = .{ .string = "foreground" }, .value = .{ .integer = 0x112233 } },
+                    .{ .key = .{ .string = "background" }, .value = .{ .integer = 0x445566 } },
+                    .{ .key = .{ .string = "bold" }, .value = .{ .bool = true } },
+                    .{ .key = .{ .string = "italic" }, .value = .{ .bool = true } },
+                    .{ .key = .{ .string = "reverse" }, .value = .{ .bool = true } },
+                }) },
+                .nil,
+                .{ .array = values(&[_]Value{}) },
+            }) },
+        }) },
+        .{ .array = values(&[_]Value{
+            .{ .string = "grid_line" },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{ .{ .string = "A" }, .{ .integer = 7 } }) },
+                    .{ .array = values(&[_]Value{.{ .string = "界" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "🚀" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "" }}) },
+                    .{ .array = values(&[_]Value{.{ .string = "Z" }}) },
+                }) },
+            }) },
+            .{ .array = values(&[_]Value{
+                .{ .integer = 1 }, .{ .integer = 1 }, .{ .integer = 0 },
+                .{ .array = values(&[_]Value{
+                    .{ .array = values(&[_]Value{ .{ .string = "á" }, .{ .integer = 7 } }) },
+                    .{ .array = values(&[_]Value{ .{ .string = "s" }, .{ .integer = 0 }, .{ .integer = 5 } }) },
+                }) },
+            }) },
+        }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_cursor_goto" }, .{ .array = values(&[_]Value{ .{ .integer = 1 }, .{ .integer = 1 }, .{ .integer = 0 } }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_pos" }, .{ .array = values(&[_]Value{ .{ .integer = 2 }, .{ .integer = 20 }, .{ .integer = 1 }, .{ .integer = 2 } }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_float_pos" }, .{ .array = values(&[_]Value{
+            .{ .integer = 3 }, .{ .integer = 30 }, .{ .string = "NW" }, .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 0 }, .{ .bool = true }, .{ .integer = 50 },
+        }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_hide" }, .{ .array = values(&[_]Value{.{ .integer = 3 }}) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_clear" }, .{ .array = values(&[_]Value{.{ .integer = 2 }}) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_scroll" }, .{ .array = values(&[_]Value{
+            .{ .integer = 1 }, .{ .integer = 0 }, .{ .integer = 3 }, .{ .integer = 0 }, .{ .integer = 6 }, .{ .integer = 1 }, .{ .integer = 0 },
+        }) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "win_close" }, .{ .array = values(&[_]Value{.{ .integer = 3 }}) } }) },
+        .{ .array = values(&[_]Value{ .{ .string = "grid_destroy" }, .{ .array = values(&[_]Value{.{ .integer = 2 }}) } }) },
+    }) };
+
+    var encoded = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer encoded.deinit();
+    try msgpack.encode(&encoded.writer, fixture);
+    var reader = std.Io.Reader.fixed(encoded.written());
+    const decoded = try msgpack.decode(&reader, std.testing.allocator);
+    defer msgpack.freeValue(decoded, std.testing.allocator);
+
+    var state = UiState.init(std.testing.allocator);
+    defer state.deinit();
+    _ = try state.handleRedraw(decoded.array);
+
+    // Canonical final grid after the one-row scroll. Every cell is asserted.
+    const expected = [_][]const u8{ "á", "s", "s", "s", "s", "s", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " " };
+    for (state.grid.cells, expected) |cell, text| {
+        try std.testing.expectEqualStrings(text, cell.char[0..cell.len]);
+    }
+    const styled = state.grid.cells[0];
+    try std.testing.expectEqual(Color{ .rgb = .{ .r = 0x11, .g = 0x22, .b = 0x33 } }, styled.fg);
+    try std.testing.expectEqual(Color{ .rgb = .{ .r = 0x44, .g = 0x55, .b = 0x66 } }, styled.bg);
+    try std.testing.expect(styled.bold and styled.italic and styled.reverse);
+    try std.testing.expectEqual(@as(u16, 0), state.cursor_x);
+    try std.testing.expectEqual(@as(u16, 1), state.cursor_y);
+    try std.testing.expect(state.get(2) == null and state.get(3) == null);
+
+    // Verify the pre-scroll Unicode fixture separately, including explicit
+    // wide-cell continuations from Neovim's empty-string cells.
+    var unicode_state = UiState.init(std.testing.allocator);
+    defer unicode_state.deinit();
+    _ = try unicode_state.handleRedraw(decoded.array[0..3]);
+    try std.testing.expectEqualStrings("A", unicode_state.grid.cells[0].char[0..unicode_state.grid.cells[0].len]);
+    try std.testing.expectEqualStrings("界", unicode_state.grid.cells[1].char[0..unicode_state.grid.cells[1].len]);
+    try std.testing.expect(unicode_state.grid.cells[2].continuation and unicode_state.grid.cells[2].len == 0);
+    try std.testing.expectEqualStrings("🚀", unicode_state.grid.cells[3].char[0..unicode_state.grid.cells[3].len]);
+    try std.testing.expect(unicode_state.grid.cells[4].continuation and unicode_state.grid.cells[4].len == 0);
+    try std.testing.expectEqualStrings("Z", unicode_state.grid.cells[5].char[0..unicode_state.grid.cells[5].len]);
 }

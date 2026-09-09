@@ -1,3 +1,6 @@
+-- Parser generators installed by setup.sh remain private to Vide.
+local tools_bin = vim.fn.stdpath("data") .. "/tools/bin"
+vim.env.PATH = tools_bin .. ":" .. (vim.env.PATH or "")
 local site = vim.fn.stdpath("data") .. "/site"
 vim.opt.rtp:prepend(site)
 
@@ -30,7 +33,7 @@ if vim.uv.fs_stat(lazypath) then vim.opt.rtp:prepend(lazypath) end
 
 vim.g.mapleader = " "
 vim.opt.hidden = true
-vim.opt.shortmess:append("A")
+vim.opt.shortmess:append("AI")
 vim.opt.completeopt = { "menu", "menuone", "noselect" }
 
 local set = vim.opt
@@ -73,6 +76,99 @@ set.incsearch = true
 set.updatetime = 50
 
 local user_plugins_path = vim.fn.stdpath("data") .. "/user_plugins.json"
+
+-- One picker language for files, text, buffers and help. Neovim owns the
+-- thin borders so they resize and stack with the actual floating windows.
+local function configure_pickers()
+    local actions = require("telescope.actions")
+    local layout_actions = require("telescope.actions.layout")
+    local function picker_colors()
+        local function hl(name) return vim.api.nvim_get_hl(0, { name = name, link = false }) end
+        local normal, float = hl("Normal"), hl("NormalFloat")
+        local bg, fg = float.bg or normal.bg or 0x202328, normal.fg or 0xd7dce2
+        local accent = hl("Function").fg or hl("Identifier").fg or fg
+        local function blend(a, b, weight)
+            local value = 0
+            for _, shift in ipairs({ 16, 8, 0 }) do
+                local av, bv = math.floor(a / 2 ^ shift) % 256, math.floor(b / 2 ^ shift) % 256
+                value = value + math.floor(av * weight + bv * (1 - weight)) * 2 ^ shift
+            end
+            return value
+        end
+        local border = blend(fg, bg, 0.3)
+        for _, name in ipairs({ "TelescopeNormal", "TelescopePromptNormal", "TelescopeResultsNormal", "TelescopePreviewNormal" }) do
+            vim.api.nvim_set_hl(0, name, { fg = fg, bg = bg })
+        end
+        for _, name in ipairs({ "TelescopeBorder", "TelescopePromptBorder", "TelescopeResultsBorder", "TelescopePreviewBorder" }) do
+            vim.api.nvim_set_hl(0, name, { fg = border, bg = bg })
+        end
+        for _, name in ipairs({ "TelescopeTitle", "TelescopePromptTitle", "TelescopeResultsTitle", "TelescopePreviewTitle" }) do
+            vim.api.nvim_set_hl(0, name, { fg = fg, bg = bg, bold = true })
+        end
+        vim.api.nvim_set_hl(0, "TelescopeSelection", { fg = fg, bg = blend(accent, bg, 0.15), bold = true })
+        vim.api.nvim_set_hl(0, "TelescopeSelectionCaret", { fg = accent, bg = blend(accent, bg, 0.15), bold = true })
+        vim.api.nvim_set_hl(0, "TelescopeMatching", { fg = accent, bold = true })
+        vim.api.nvim_set_hl(0, "TelescopePromptPrefix", { fg = accent, bg = bg })
+    end
+    require("telescope").setup({
+        defaults = {
+            sorting_strategy = "ascending",
+            layout_strategy = "horizontal",
+            layout_config = {
+                width = function(_, columns) return math.min(140, math.max(1, columns - 4)) end,
+                height = function(_, _, lines) return math.min(26, math.max(1, lines - 4)) end,
+                horizontal = { prompt_position = "top", preview_width = 0.48, preview_cutoff = 110 },
+            },
+            border = true,
+            borderchars = { "─", "│", "─", "│", "╭", "╮", "╯", "╰" },
+            prompt_prefix = " > ",
+            selection_caret = "> ",
+            entry_prefix = "  ",
+            path_display = { "filename_first" },
+            results_title = false,
+            dynamic_preview_title = true,
+            winblend = 0,
+            mappings = {
+                i = { ["<Esc>"] = actions.close, ["<M-p>"] = layout_actions.toggle_preview },
+                n = { ["<Esc>"] = actions.close, ["<M-p>"] = layout_actions.toggle_preview },
+            },
+        },
+        pickers = {
+            find_files = { prompt_title = "Find files", hidden = true },
+            git_files = { prompt_title = "Project files" },
+            oldfiles = { prompt_title = "Recent files", cwd_only = true },
+            buffers = { prompt_title = "Open files", sort_mru = true, ignore_current_buffer = false },
+            live_grep = { prompt_title = "Search project" },
+            grep_string = { prompt_title = "Find text" },
+            current_buffer_fuzzy_find = { prompt_title = "Search this file", previewer = false },
+            help_tags = { prompt_title = "Help" },
+            commands = { prompt_title = "Commands", previewer = false },
+            diagnostics = { prompt_title = "Problems" },
+        },
+    })
+    picker_colors()
+    vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("VidePickerColors", { clear = true }),
+        callback = picker_colors,
+    })
+end
+_G.vide_configure_pickers = configure_pickers
+_G.vide_picker_action = function(action)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.bo[buf].filetype == "TelescopePrompt" then
+            if action == "preview" then
+                require("telescope.actions.layout").toggle_preview(buf)
+            else
+                local names = { open = "select_default", close = "close", mark = "toggle_selection" }
+                local name = names[action]
+                if name then require("telescope.actions")[name](buf) end
+            end
+            return
+        end
+    end
+end
+
 local user_plugins = {}
 local up_f = io.open(user_plugins_path, "r")
 if up_f then
@@ -84,6 +180,23 @@ if up_f then
     end
 end
 
+-- Keep this list available to the installer and the plugin build hook.
+_G.vide_default_parsers = {
+    "bash", "c", "cpp", "css", "go", "html", "javascript", "json", "lua",
+    "markdown", "markdown_inline", "python", "query", "rust", "tsx",
+    "typescript", "vim", "vimdoc", "zig",
+}
+_G.vide_install_parsers = function()
+    local ts = require("nvim-treesitter")
+    ts.setup({ install_dir = site })
+    ts.install(_G.vide_default_parsers):wait(300000)
+    vim.opt.rtp:prepend(site) -- refresh lookup after creating the parser directory
+    for _, lang in ipairs(_G.vide_default_parsers) do
+        assert(vim.treesitter.language.add(lang, { path = site .. "/parser/" .. lang .. ".so" }), "Treesitter parser unavailable: " .. lang)
+        assert(vim.treesitter.query.get(lang, "highlights"), "Treesitter highlights unavailable: " .. lang)
+    end
+end
+
 local plugins_setup = {
     {
         "goolord/alpha-nvim",
@@ -91,39 +204,15 @@ local plugins_setup = {
         priority = 1000,
         config = function()
             local dashboard = require("alpha.themes.dashboard")
-            local logo = {
-                "██╗   ██╗██╗██████╗ ███████╗",
-                "██║   ██║██║██╔══██╗██╔════╝",
-                "██║   ██║██║██║  ██║█████╗  ",
-                "╚██╗ ██╔╝██║██║  ██║██╔══╝  ",
-                " ╚████╔╝ ██║██████╔╝███████╗",
-                "  ╚═══╝  ╚═╝╚═════╝ ╚══════╝",
-            }
-            local colors = {
-                "DiagnosticError",
-                "DiagnosticWarning",
-                "DiagnosticInfo",
-                "DiagnosticHint",
-                "Type",
-                "String",
-            }
-            local header_elements = {}
-            for i, line in ipairs(logo) do
-                table.insert(header_elements, {
-                    type = "text",
-                    val = line,
-                    opts = {
-                        position = "center",
-                        hl = colors[i],
-                    }
-                })
+            dashboard.section.header.val = function()
+                return vim.fn.strcharpart('vide / ' .. vim.fn.fnamemodify(vim.fn.getcwd(), ':t'), 0, math.max(8, vim.api.nvim_win_get_width(0) - 6))
             end
-            dashboard.config.layout[2] = header_elements[1]
-            table.insert(dashboard.config.layout, 3, header_elements[2])
-            table.insert(dashboard.config.layout, 4, header_elements[3])
-            table.insert(dashboard.config.layout, 5, header_elements[4])
-            table.insert(dashboard.config.layout, 6, header_elements[5])
-            table.insert(dashboard.config.layout, 7, header_elements[6])
+            dashboard.section.header.opts.hl = 'Normal'
+            dashboard.section.buttons.opts.spacing = 0
+            dashboard.config.layout = {
+                { type = 'padding', val = 2 }, dashboard.section.header,
+                { type = 'padding', val = 2 }, dashboard.section.buttons,
+            }
 
             local function format_key(key)
                 if not key or key == "" then return "None" end
@@ -177,66 +266,57 @@ local plugins_setup = {
                 local raw_find = kb.find_file or "<C-f>"
                 local raw_quit = kb.quit or "<C-q>"
                 local raw_recent = "<C-r>"
-                local raw_explorer = "<C-e>"
-                local raw_help = "<C-v>"
-
-                local new_file_key = format_key(raw_new)
-                local find_file_key = format_key(raw_find)
-                local quit_key = format_key(raw_quit)
-                local recent_key = format_key(raw_recent)
-                local explorer_key = format_key(raw_explorer)
-                local help_key = format_key(raw_help)
-                
-                local term = os.getenv("TERM") or ""
-                local nerd_fonts = true
-                if state.nerd_fonts ~= nil then
-                    nerd_fonts = state.nerd_fonts
+                local raw_help = kb.help or "<F1>"
+                if raw_help == "" then raw_help = "<F1>" end
+                local width = math.max(12, math.min(44, vim.api.nvim_win_get_width(0) - 6))
+                local height = vim.api.nvim_win_get_height(0)
+                dashboard.config.layout[3].val = height < 18 and 1 or 2
+                local recent_limit = math.max(0, math.min(5, height - 13))
+                local function clip(text, limit)
+                    while vim.fn.strdisplaywidth(text) > limit do
+                        text = vim.fn.strcharpart(text, 0, vim.fn.strchars(text) - 1)
+                    end
+                    return text
                 end
-                if term == "linux" then
-                    nerd_fonts = false
-                end
-                vim.g.vide_nerd_fonts = nerd_fonts
-
-                local new_file_icon = nerd_fonts and "󰝒 " or "+ "
-                local find_file_icon = nerd_fonts and " " or "/ "
-                local quit_icon = nerd_fonts and "󰈆 " or "x "
-
-                local recent_icon = nerd_fonts and "󰄉 " or "r "
-                local explorer_icon = nerd_fonts and "󰙅 " or "e "
-
-                local function custom_button(key, display_text, cmd)
-                    local btn = dashboard.button(key, "", cmd)
-                    btn.val = display_text
+                local function button(key, label, command, muted)
+                    local btn = dashboard.button(key, label, command)
+                    local shortcut = format_key(key)
+                    btn.val = clip(label, math.max(1, width - #shortcut - 2))
+                    btn.opts.width = width
                     btn.opts.position = "center"
-                    btn.opts.hl = "Function"
-                    btn.opts.shortcut = ""
+                    btn.opts.hl = muted and "VideWelcomeMuted" or "Normal"
+                    btn.opts.hl_shortcut = "VideWelcomeMuted"
+                    btn.opts.shortcut = shortcut
+                    btn.opts.cursor = 0
                     return btn
                 end
-
                 local buttons = {
-                    custom_button(raw_new, string.format("%s New File       %-6s", new_file_icon, new_file_key), "<cmd>enew<cr>"),
-                    { type = "padding", val = 1 },
-                    custom_button(raw_find, string.format("%s Find File      %-6s", find_file_icon, find_file_key), "<cmd>Telescope find_files<cr>"),
-                    { type = "padding", val = 1 },
-                    custom_button(raw_recent, string.format("%s Recent Files   %-6s", recent_icon, recent_key), "<cmd>Telescope oldfiles<cr>"),
+                    button(raw_new, "New file", "<cmd>enew<cr>"),
+                    button(raw_find, "Find file", "<cmd>Telescope find_files<cr>"),
+                    button(raw_recent, "Recent files", "<cmd>Telescope oldfiles<cr>"),
                     { type = "padding", val = 1 },
                 }
-
-                local is_zen_mode = vim.g.vide_zen_mode
-                if is_zen_mode == nil then
-                    is_zen_mode = state.zen
+                local cwd, recent_count, seen = vim.fn.getcwd(), 0, {}
+                for _, path in ipairs(vim.v.oldfiles) do
+                    if recent_count >= recent_limit then break end
+                    if not seen[path] and vim.fn.filereadable(path) == 1 and path:sub(1, #cwd + 1) == cwd .. '/' then
+                        seen[path] = true
+                        recent_count = recent_count + 1
+                        local item = button(tostring(recent_count), vim.fn.fnamemodify(path, ':.'), nil)
+                        item.on_press = function() vim.cmd.edit(vim.fn.fnameescape(path)) end
+                        item.opts.keymap = { 'n', tostring(recent_count), item.on_press, { silent = true } }
+                        table.insert(buttons, item)
+                    end
                 end
-
-                if is_zen_mode then
-                    table.insert(buttons, custom_button(raw_explorer, string.format("%s File Explorer  %-6s", explorer_icon, explorer_key), "<cmd>Ex<cr>"))
-                    table.insert(buttons, { type = "padding", val = 1 })
+                if recent_count == 0 and recent_limit > 0 then
+                    table.insert(buttons, { type = 'text', val = clip('No recent files in this project', width), opts = { position = 'center', hl = 'VideWelcomeMuted' } })
                 end
-
-                table.insert(buttons, custom_button(raw_help, string.format("󰌌  Help Bindings  %-6s", help_key), "<cmd>HelpMenu<cr>"))
                 table.insert(buttons, { type = "padding", val = 1 })
-                table.insert(buttons, custom_button(raw_quit, string.format("%s Quit           %-6s", quit_icon, quit_key), "<cmd>qa<cr>"))
-
+                table.insert(buttons, button(raw_help, "Help", "<cmd>HelpMenu<cr>", true))
+                table.insert(buttons, button(raw_quit, "Quit", "<cmd>qa<cr>", true))
                 dashboard.section.buttons.val = buttons
+                local content_height = 1 + dashboard.config.layout[3].val + #buttons
+                dashboard.config.layout[1].val = math.max(0, math.floor((height - content_height) / 2))
             end
 
             _G.vide_update_dashboard_keys()
@@ -246,6 +326,28 @@ local plugins_setup = {
             }
             require("alpha").setup(dashboard.config)
             local group = vim.api.nvim_create_augroup("VideDashboard", { clear = true })
+            local function welcome_colors()
+                local normal = vim.api.nvim_get_hl(0, { name = 'Normal', link = false })
+                local fg, bg = normal.fg or 0xd4d4d4, normal.bg or 0x1e1e1e
+                local muted = 0
+                for _, shift in ipairs({16, 8, 0}) do
+                    local f = bit.band(bit.rshift(fg, shift), 255)
+                    local b = bit.band(bit.rshift(bg, shift), 255)
+                    muted = muted + bit.lshift(math.floor(b + (f - b) * 0.7), shift)
+                end
+                vim.api.nvim_set_hl(0, 'VideWelcomeMuted', { fg = muted })
+            end
+            welcome_colors()
+            vim.api.nvim_create_autocmd('ColorScheme', { group = group, callback = welcome_colors })
+            vim.api.nvim_create_autocmd({ 'VimResized', 'WinResized', 'DirChanged' }, {
+                group = group,
+                callback = function()
+                    if vim.bo.filetype == 'alpha' then
+                        _G.vide_update_dashboard_keys()
+                        pcall(function() require('alpha').redraw() end)
+                    end
+                end,
+            })
             vim.api.nvim_create_autocmd({ "FileType" }, {
                 group = group,
                 pattern = "alpha",
@@ -264,6 +366,8 @@ local plugins_setup = {
     {
         "nvim-telescope/telescope.nvim",
         cmd = "Telescope",
+        dependencies = { "nvim-lua/plenary.nvim" },
+        config = configure_pickers,
         keys = {
             { "<leader>ff", "<cmd>Telescope find_files<cr>" },
             { "<leader>fg", "<cmd>Telescope live_grep<cr>" },
@@ -273,21 +377,24 @@ local plugins_setup = {
     },
     {
         "nvim-treesitter/nvim-treesitter",
-        build = function()
-            local ts = require("nvim-treesitter")
-            local site = vim.fn.stdpath("data") .. "/site"
-            ts.setup({ install_dir = site })
-            ts.install({ "c", "lua", "vim", "vimdoc", "query", "zig", "markdown", "markdown_inline" }):wait()
-        end,
-        event = { "BufReadPost", "BufNewFile" },
+        branch = "main",
+        commit = "8b98b4470eb326f1c7b50dae79f8c963568e5720",
+        lazy = false,
+        build = function() _G.vide_install_parsers() end,
         config = function()
-            local ts = require("nvim-treesitter")
-            local site = vim.fn.stdpath("data") .. "/site"
-            ts.setup({
-                install_dir = site
+            require("nvim-treesitter").setup({ install_dir = site })
+            local function highlight(buf)
+                if vim.bo[buf].buftype ~= "" or vim.bo[buf].filetype == "" then return end
+                -- Uninstalled languages keep Vim's syntax fallback. Core parsers
+                -- are installed and verified synchronously by setup.sh.
+                pcall(vim.treesitter.start, buf)
+            end
+            vim.api.nvim_create_autocmd({ 'FileType', 'BufWinEnter' }, {
+                group = vim.api.nvim_create_augroup('VideTreesitter', { clear = true }),
+                callback = function(event) highlight(event.buf) end,
             })
-            vim.opt.rtp:prepend(site)
-        end
+            highlight(vim.api.nvim_get_current_buf())
+        end,
     },
     {
         "williamboman/mason.nvim",
@@ -491,21 +598,143 @@ local plugins_setup = {
     { "EdenEast/nightfox.nvim", lazy = true },
     { "tahayvr/matteblack.nvim", lazy = true },
 }
-local config_dir = vim.fn.stdpath("data") .. "/plugin_configs/"
-for _, p in ipairs(user_plugins) do
-    local config_path = config_dir .. p:gsub("/", "_") .. ".lua"
-    local plugin_def = { p }
-    if vim.fn.filereadable(config_path) == 1 then
-        plugin_def.config = function()
-            local ok, err = pcall(dofile, config_path)
-            if not ok then
-                _G.vide_native_notice("error", "Plugin config failed for " .. p .. "; disable it or repair its config.")
-                vim.schedule(function() vim.notify(tostring(err), vim.log.levels.ERROR) end)
+-- Persist desired plugin state separately from plugin code and user options.
+local plugin_data = vim.fn.stdpath("data")
+local function read_plugin_json(name, fallback)
+    local file = io.open(plugin_data .. "/" .. name, "r")
+    if not file then return fallback end
+    local content = file:read("*a")
+    file:close()
+    local ok, result = pcall(vim.json.decode, content)
+    if ok and type(result) == "table" then return result end
+    _G.vide_native_notice("error", "Cannot read " .. name .. "; repair it before changing plugins.")
+    return fallback
+end
+local plugin_states = read_plugin_json("plugin_states.json", {})
+local plugin_inventory = {}
+local function register_spec(spec, source, parent)
+    if type(spec) == "string" then spec = { spec } end
+    if type(spec) ~= "table" or type(spec[1]) ~= "string" then return spec end
+    local repo = spec[1]
+    local name = spec.name or repo:match("([^/]+)$"):gsub("%.git$", "")
+    local entry = plugin_inventory[repo]
+    if not entry then
+        entry = { name = name, full_name = repo, source = source, required_by = {},
+            description = spec.desc or "", enabled = plugin_states[repo] ~= "disabled",
+            removed = plugin_states[repo] == "removed" }
+        plugin_inventory[repo] = entry
+    end
+    if parent and not vim.tbl_contains(entry.required_by, parent) then
+        table.insert(entry.required_by, parent)
+    end
+    local deps = spec.dependencies
+    if type(deps) == "string" then deps = { deps } end
+    if type(deps) == "table" then
+        for i, dep in ipairs(deps) do deps[i] = register_spec(dep, "Dependency", repo) end
+        spec.dependencies = deps
+    end
+    return spec
+end
+for i, spec in ipairs(plugins_setup) do plugins_setup[i] = register_spec(spec, "Bundled") end
+for _, repo in ipairs(user_plugins) do
+    if type(repo) == "string" and not plugin_inventory[repo] then
+        table.insert(plugins_setup, register_spec({ repo }, "Marketplace"))
+    end
+end
+-- Dependency specs discovered by Lazy can also receive persistent overrides.
+for repo, _ in pairs(plugin_states) do
+    if type(repo) == "string" and repo:match("^[%w_.-]+/[%w_.-]+$") and repo ~= "folke/lazy.nvim" and not plugin_inventory[repo] then
+        table.insert(plugins_setup, register_spec({ repo }, "Dependency"))
+    end
+end
+register_spec({ "folke/lazy.nvim" }, "Plugin manager")
+
+-- Overrides are lazy.nvim spec tables: opts, config, keys, events, etc.
+-- Keep repository identity and lifecycle controls owned by the manager.
+local function configure_spec(spec)
+    local repo = spec[1]
+    for _, dep in ipairs(spec.dependencies or {}) do configure_spec(dep) end
+    if plugin_states[repo] == "removed" then spec.enabled = false; return
+    elseif plugin_states[repo] == "disabled" then spec.cond = false; return end
+    local config_path = plugin_data .. "/plugin_configs/" .. repo:gsub("/", "_") .. ".lua"
+    if not plugins_disabled and vim.fn.filereadable(config_path) == 1 then
+        local ok, custom = pcall(dofile, config_path)
+        if ok and type(custom) == "table" then
+            for key, value in pairs(custom) do
+                if type(key) == "string" and not vim.tbl_contains({ "name", "dir", "url", "dependencies", "enabled", "cond" }, key) then
+                    if key == "opts" and type(value) == "table" and type(spec.opts) == "table" then
+                        spec.opts = vim.tbl_deep_extend("force", spec.opts, value)
+                    else spec[key] = value end
+                end
+            end
+        elseif not ok or custom ~= nil then
+            _G.vide_native_notice("error", "Plugin config failed for " .. repo .. ": " .. tostring(custom))
+        end
+    end
+end
+for _, spec in ipairs(plugins_setup) do configure_spec(spec) end
+_G.vide_plugin_specs = plugins_setup
+_G.vide_write_plugin_inventory = function()
+    local ok, config = pcall(require, "lazy.core.config")
+    if ok then
+        for name, plugin in pairs(config.plugins or {}) do
+            local repo = plugin[1]
+            if type(repo) == "string" then
+                if not plugin_inventory[repo] then
+                    plugin_inventory[repo] = { name = name, full_name = repo, source = "Dependency",
+                        required_by = {}, enabled = plugin_states[repo] ~= "disabled" }
+                end
+                local entry = plugin_inventory[repo]
+                entry.name = name
+                entry.loaded = plugin._ and plugin._.loaded ~= nil or false
+            end
+        end
+        for _, plugin in pairs(config.plugins or {}) do
+            for _, name in ipairs(plugin.dependencies or {}) do
+                local dep = config.plugins[name]
+                local entry = dep and plugin_inventory[dep[1]]
+                if entry and type(plugin[1]) == "string" and not vim.tbl_contains(entry.required_by, plugin[1]) then
+                    table.insert(entry.required_by, plugin[1])
+                end
             end
         end
     end
-    table.insert(plugins_setup, plugin_def)
+    local entries = {}
+    for _, entry in pairs(plugin_inventory) do table.insert(entries, entry) end
+    table.sort(entries, function(a, b) return a.name:lower() < b.name:lower() end)
+    vim.fn.mkdir(plugin_data, "p")
+    local path = plugin_data .. "/plugin_inventory.json"
+    local tmp = path .. "." .. vim.fn.getpid() .. ".tmp"
+    local file = io.open(tmp, "w")
+    if file then
+        file:write(vim.json.encode(entries)); file:close(); os.rename(tmp, path)
+    end
 end
+_G.vide_write_plugin_inventory()
+vim.api.nvim_create_autocmd("User", {
+    pattern = { "LazyDone", "LazyLoad", "LazyInstall", "LazyClean", "LazySync" },
+    callback = function() vim.schedule(_G.vide_write_plugin_inventory) end,
+})
+-- Clean only plugins explicitly uninstalled by the user, after the new spec loads.
+vim.api.nvim_create_autocmd("VimEnter", { once = true, callback = function()
+    if plugins_disabled then return end
+    local names = {}
+    for repo, entry in pairs(plugin_inventory) do
+        if plugin_states[repo] == "removed" and repo ~= "folke/lazy.nvim" then table.insert(names, entry.name) end
+    end
+    if #names > 0 then
+        vim.schedule(function()
+            local ok, lazy = pcall(require, "lazy")
+            if ok then
+                local targets = {}
+                for _, plugin in ipairs(require("lazy.core.config").to_clean or {}) do
+                    if vim.tbl_contains(names, plugin.name) then table.insert(targets, plugin) end
+                end
+                if #targets > 0 then lazy.clean({ plugins = targets, show = false }) end
+            end
+        end)
+    end
+end })
 if not plugins_disabled then
     local lazy_ok, lazy = pcall(require, "lazy")
     if lazy_ok then
@@ -597,10 +826,14 @@ local ide_mappings = {
     },
 }
 
+local save_prompt_buffer = nil
+
 local function ide_startinsert()
-    if vim.g.vide_ide_mode and vim.bo.modifiable and
+    if not save_prompt_buffer and vim.g.vide_ide_mode and vim.bo.modifiable and
         (vim.bo.buftype == '' or vim.bo.buftype == 'acwrite') then
-        vim.schedule(function() pcall(vim.cmd, 'startinsert') end)
+        vim.schedule(function()
+            if not save_prompt_buffer then pcall(vim.cmd, 'startinsert') end
+        end)
     end
 end
 
@@ -691,6 +924,19 @@ _G.vide_close_buffer = function(bufnr)
         return not vim.api.nvim_buf_is_valid(bufnr)
     end
 
+    if vim.bo[bufnr].buftype == 'terminal' then
+        local windows = vim.fn.win_findbuf(bufnr)
+        -- Closing a terminal buffer explicitly ends its job. Delete first so
+        -- Neovim can retain a usable buffer when this is the last window.
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+        for _, win in ipairs(windows) do
+            if vim.api.nvim_win_is_valid(win) and #vim.api.nvim_list_wins() > 1 then
+                pcall(vim.api.nvim_win_close, win, false)
+            end
+        end
+        return not vim.api.nvim_buf_is_valid(bufnr)
+    end
+
     if vim.bo[bufnr].modified then
         if vim.api.nvim_get_current_buf() ~= bufnr then _G.vide_select_buffer(bufnr) end
         vim.cmd('confirm bdelete ' .. bufnr)
@@ -713,10 +959,56 @@ _G.vide_close_split = function(winid, bufnr)
     return ok
 end
 
+-- All native save actions share first-save naming, including offline sessions.
+_G.vide_save_file = function()
+    if save_prompt_buffer then return end
+    local bufnr = vim.api.nvim_get_current_buf()
+    local function write(path)
+        if not vim.api.nvim_buf_is_valid(bufnr) then return end
+        local was_unnamed = vim.api.nvim_buf_get_name(bufnr) == ''
+        local ok, err = pcall(vim.api.nvim_buf_call, bufnr, function()
+            vim.cmd('write' .. (path and (' ' .. vim.fn.fnameescape(path)) or ''))
+        end)
+        if ok then
+            _G.vide_native_notice('info', 'Saved ' .. vim.fn.fnamemodify(vim.api.nvim_buf_get_name(bufnr), ':~:.'))
+        else
+            -- A failed :write may assign the name before discovering an I/O error.
+            -- Keep first-save naming available so the user can correct the path.
+            if was_unnamed then pcall(vim.api.nvim_buf_set_name, bufnr, '') end
+            _G.vide_native_notice('error', 'Could not save file: ' .. tostring(err))
+        end
+    end
+    if vim.api.nvim_buf_get_name(bufnr) ~= '' or vim.bo[bufnr].buftype ~= '' then
+        write()
+        return
+    end
+
+    save_prompt_buffer = bufnr
+    local ok, err = pcall(vim.ui.input, {
+        prompt = 'Save new file as (Enter to save, Esc to cancel): ',
+        completion = 'file',
+    }, function(path)
+        save_prompt_buffer = nil
+        if path and path ~= '' then
+            if vim.uv.fs_stat(path) then
+                _G.vide_native_notice('warning', 'That path already exists. Press Ctrl+S and choose another filename.')
+            else
+                write(path)
+            end
+        end
+        ide_startinsert()
+    end)
+    if not ok then
+        save_prompt_buffer = nil
+        _G.vide_native_notice('error', 'Could not open filename prompt: ' .. tostring(err))
+        ide_startinsert()
+    end
+end
+
 _G.vide_ide_action = function(action)
     local mode = vim.api.nvim_get_mode().mode
     local visual = mode:match('[vV\22]') ~= nil
-    if action == 'save' then vim.cmd('write')
+    if action == 'save' then _G.vide_save_file()
     elseif action == 'undo' then pcall(vim.cmd, 'undo')
     elseif action == 'redo' then pcall(vim.cmd, 'redo')
     elseif action == 'select_all' then vim.cmd('normal! ggVG'); return
@@ -777,6 +1069,284 @@ _G.vide_disable_ide_mode = function()
         for _, mode in ipairs({ 'i', 'n', 'v', 's' }) do pcall(vim.keymap.del, mode, lhs) end
     end
     pcall(vim.api.nvim_del_augroup_by_name, "VideIdeMode")
+end
+
+-- System reads only the desktop theme spec, never the user's Neovim init.
+do
+    local enabled, timer, signature, applying = false, nil, nil, false
+    local theme_runtime
+    local function system_highlight(buf)
+        if not enabled or vim.bo[buf].buftype ~= '' then return end
+        local lang = vim.treesitter.language.get_lang(vim.bo[buf].filetype)
+        if not lang then return end
+        local ok, loaded = pcall(vim.treesitter.language.add, lang)
+        if not ok or not loaded then
+            local data = vim.env.XDG_DATA_HOME or ((vim.env.HOME or vim.fn.expand('~')) .. '/.local/share')
+            local site = data .. '/nvim/site'
+            -- Reuse only installed parser/query assets, without loading nvim's config.
+            ok, loaded = pcall(vim.treesitter.language.add, lang, { path = site .. '/parser/' .. lang .. '.so' })
+            if not ok or not loaded then return end
+            local query = site .. '/queries/' .. lang .. '/highlights.scm'
+            if vim.fn.filereadable(query) == 1 then
+                pcall(vim.treesitter.query.set, lang, 'highlights', table.concat(vim.fn.readfile(query), '\n'))
+            end
+        end
+        pcall(vim.treesitter.start, buf, lang)
+    end
+    local function stop()
+        enabled, signature = false, nil
+        if timer then timer:stop(); timer:close(); timer = nil end
+        _G.vide_system_palette = nil
+        _G.vide_system_colorscheme = nil
+        if theme_runtime then vim.opt.rtp:remove(theme_runtime); theme_runtime = nil end
+    end
+    local function desktop_theme(path)
+        local file = io.open(path, 'r')
+        if not file then return nil, '' end
+        local content = file:read(65537) or ''
+        file:close()
+        if #content > 65536 then return nil, '' end
+        -- Desktop theme files are declarative Lazy specs. An empty environment
+        -- excludes config side effects; unsupported specs use the palette.
+        local chunk = loadstring(content, '@' .. path)
+        if not chunk then return nil, content end
+        setfenv(chunk, {})
+        local ok, specs = pcall(chunk)
+        if not ok or type(specs) ~= 'table' then return nil, content end
+        local name
+        for _, spec in ipairs(specs) do
+            if type(spec) == 'table' and spec[1] == 'LazyVim/LazyVim' and type(spec.opts) == 'table' then
+                name = spec.opts.colorscheme
+            end
+        end
+        if type(name) ~= 'string' or not name:match('^[%w_.-]+$') then return nil, content end
+        local data = vim.env.XDG_DATA_HOME or ((vim.env.HOME or vim.fn.expand('~')) .. '/.local/share')
+        for _, spec in ipairs(specs) do
+            local repo = type(spec) == 'table' and spec[1] or spec
+            if type(repo) == 'string' and repo ~= 'LazyVim/LazyVim' then
+                local directory = repo:match('^[%w_.-]+/([%w_.-]+)$')
+                if directory then
+                    for _, root in ipairs({ vim.fn.stdpath('data'), data .. '/nvim' }) do
+                        local runtime = root .. '/lazy/' .. directory
+                        if vim.uv.fs_stat(runtime .. '/colors/' .. name .. '.lua') or vim.uv.fs_stat(runtime .. '/colors/' .. name .. '.vim') then
+                            return { name = name, runtime = runtime }, content .. runtime
+                        end
+                    end
+                end
+            end
+        end
+        return nil, content
+    end
+    local function mix(a, b, amount)
+        local out = '#'
+        for i = 2, 6, 2 do
+            local x, y = tonumber(a:sub(i, i + 1), 16), tonumber(b:sub(i, i + 1), 16)
+            out = out .. string.format('%02x', math.floor(x + (y - x) * amount + 0.5))
+        end
+        return out
+    end
+    local function read_palette()
+        local home = vim.env.HOME or vim.fn.expand('~')
+        local state = vim.env.XDG_STATE_HOME or (home .. '/.local/state')
+        local config = vim.env.XDG_CONFIG_HOME or (home .. '/.config')
+        for _, root in ipairs({ state, config }) do
+            local path = root .. '/omarchy/current/theme/colors.toml'
+            local file = io.open(path, 'r')
+            if file then
+                local content = file:read(65537) or ''
+                file:close()
+                if #content <= 65536 then
+                    local p = {}
+                    for line in content:gmatch('[^\r\n]+') do
+                        local key, value = line:match('^%s*([%w_]+)%s*=%s*["\'](#[%x]+)["\']')
+                        if key and #value == 7 then p[key] = value end
+                        local mode = line:match('^%s*mode%s*=%s*["\'](%a+)["\']')
+                        if mode == 'dark' or mode == 'light' then p.mode = mode end
+                    end
+                    if p.background and p.foreground then
+                        local theme, spec = desktop_theme(root .. '/omarchy/current/theme/neovim.lua')
+                        p.desktop_theme = theme
+                        return p, path .. '\n' .. content .. '\n' .. spec
+                    end
+                end
+            end
+        end
+    end
+    local function apply(p)
+        applying = true
+        local bg, fg = p.background, p.foreground
+        local brightness = tonumber(bg:sub(2, 3), 16) * 0.299
+            + tonumber(bg:sub(4, 5), 16) * 0.587 + tonumber(bg:sub(6, 7), 16) * 0.114
+        vim.g.colors_name = nil
+        vim.o.background = p.mode or (brightness > 128 and 'light' or 'dark')
+        vim.cmd('highlight clear')
+        if vim.g.syntax_on then vim.cmd('syntax reset') end
+        local accent = p.accent or p.blue or p.color4 or fg
+        local sidebar = p.dark_background or mix(bg, fg, 0.04)
+        local raised = p.lighter_background or mix(bg, fg, 0.08)
+        local muted = p.light_foreground or mix(bg, fg, 0.6)
+        local border = p.muted or mix(bg, fg, 0.3)
+        local red, green = p.red or p.color1 or accent, p.green or p.color2 or accent
+        local yellow, blue = p.yellow or p.color3 or accent, p.blue or p.color4 or accent
+        local magenta, cyan = p.magenta or p.color5 or accent, p.cyan or p.color6 or accent
+        p.selection_background = p.selection_background or p.selection or mix(bg, accent, 0.35)
+        p.selection_foreground = p.selection_foreground or fg
+        p.terminal_colors = { p.color0 or bg, red, green, yellow, blue, magenta, cyan,
+            p.color7 or fg, p.color8 or muted, p.bright_red or p.color9 or red,
+            p.bright_green or p.color10 or green, p.bright_yellow or p.color11 or yellow,
+            p.bright_blue or p.color12 or blue, p.bright_magenta or p.color13 or magenta,
+            p.bright_cyan or p.color14 or cyan, p.bright_foreground or p.color15 or fg }
+        local highlights = {
+            Normal = { fg = fg, bg = bg }, NormalNC = { fg = fg, bg = bg },
+            NormalFloat = { fg = fg, bg = sidebar }, FloatBorder = { fg = border, bg = sidebar },
+            NeoTreeNormal = { fg = fg, bg = sidebar }, NeoTreeNormalNC = { fg = fg, bg = sidebar },
+            NvimTreeNormal = { fg = fg, bg = sidebar },
+            Comment = { fg = muted, italic = true }, Identifier = { fg = fg },
+            Constant = { fg = p.orange or yellow }, String = { fg = green },
+            Character = { fg = green }, Number = { fg = p.orange or yellow },
+            Boolean = { fg = p.orange or yellow }, Float = { fg = p.orange or yellow },
+            Function = { fg = blue }, Statement = { fg = magenta }, Keyword = { fg = magenta },
+            Operator = { fg = accent }, PreProc = { fg = cyan }, Type = { fg = yellow },
+            Special = { fg = cyan }, Delimiter = { fg = fg }, Underlined = { fg = blue, underline = true },
+            Error = { fg = red }, ErrorMsg = { fg = red }, WarningMsg = { fg = yellow },
+            Todo = { fg = bg, bg = accent, bold = true },
+            DiagnosticError = { fg = red }, DiagnosticWarn = { fg = yellow },
+            DiagnosticInfo = { fg = blue }, DiagnosticHint = { fg = cyan },
+            Cursor = { fg = bg, bg = p.cursor or fg },
+            CursorLine = { bg = raised }, CursorColumn = { bg = raised },
+            LineNr = { fg = muted, bg = bg }, CursorLineNr = { fg = accent, bold = true },
+            SignColumn = { bg = bg }, FoldColumn = { fg = muted, bg = bg },
+            Folded = { fg = muted, bg = raised }, EndOfBuffer = { fg = border },
+            WinSeparator = { fg = border, bg = bg }, VertSplit = { fg = border, bg = bg },
+            Visual = { fg = p.selection_foreground, bg = p.selection_background },
+            Search = { fg = bg, bg = yellow }, IncSearch = { fg = bg, bg = accent },
+            Pmenu = { fg = fg, bg = sidebar }, PmenuSel = { fg = bg, bg = accent },
+            PmenuSbar = { bg = raised }, PmenuThumb = { bg = muted },
+            StatusLine = { fg = bg, bg = accent }, StatusLineNC = { fg = muted, bg = sidebar },
+            TabLine = { fg = muted, bg = raised }, TabLineSel = { fg = accent, bg = bg, bold = true },
+            TabLineFill = { bg = sidebar }, VideAccent = { fg = accent },
+            DiffAdd = { bg = mix(bg, green, 0.2) }, DiffDelete = { fg = red, bg = mix(bg, red, 0.2) },
+            DiffChange = { bg = mix(bg, blue, 0.2) }, DiffText = { bg = mix(bg, blue, 0.35) },
+        }
+        for name, hl in pairs(highlights) do vim.api.nvim_set_hl(0, name, hl) end
+        for name, target in pairs({ ['@variable'] = 'Identifier', ['@function'] = 'Function',
+            ['@keyword'] = 'Keyword', ['@string'] = 'String', ['@type'] = 'Type',
+            ['@comment'] = 'Comment', ['@constant'] = 'Constant', ['@number'] = 'Number',
+            ['@boolean'] = 'Boolean', ['@operator'] = 'Operator' }) do
+            vim.api.nvim_set_hl(0, name, { link = target })
+        end
+        _G.vide_system_colorscheme = nil
+        if theme_runtime then vim.opt.rtp:remove(theme_runtime); theme_runtime = nil end
+        if p.desktop_theme then
+            theme_runtime = p.desktop_theme.runtime
+            vim.opt.rtp:prepend(theme_runtime)
+            _G.vide_system_colorscheme = p.desktop_theme.name
+            if not pcall(vim.cmd.colorscheme, p.desktop_theme.name) then
+                p.desktop_theme = nil
+                return apply(p)
+            end
+        end
+        _G.vide_system_palette = p
+        vim.g.colors_name = 'system'
+        vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'system', modeline = false })
+        applying = false
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_loaded(buf) then system_highlight(buf) end
+        end
+    end
+    local function refresh()
+        if not enabled then return end
+        local p, content = read_palette()
+        -- Omarchy replaces the theme directory during a switch. Retain the
+        -- last valid palette through that gap or an incomplete write.
+        if p and content ~= signature then
+            apply(p)
+            signature = content
+        end
+    end
+    local function dark_modern()
+        vim.o.background = 'dark'
+        local ok, vscode = pcall(require, 'vscode')
+        if ok then
+            vscode.setup({
+                style = 'dark',
+                color_overrides = {
+                    vscBack = '#1F1F1F', vscFront = '#CCCCCC',
+                    vscLeftDark = '#181818', vscPopupBack = '#202020',
+                    vscLineNumber = '#6E7681',
+                },
+                group_overrides = {
+                    VideAccent = { fg = '#0078D4' },
+                    WinSeparator = { fg = '#2B2B2B' },
+                },
+            })
+            vscode.load('dark')
+        else
+            vim.cmd('highlight clear')
+            vim.g.colors_name = 'vscode'
+            local groups = {
+                Normal = { fg = '#CCCCCC', bg = '#1F1F1F' },
+                NormalNC = { fg = '#CCCCCC', bg = '#181818' },
+                LineNr = { fg = '#6E7681' }, CursorLineNr = { fg = '#CCCCCC' },
+                SignColumn = { bg = '#1F1F1F' }, EndOfBuffer = { fg = '#1F1F1F' },
+                WinSeparator = { fg = '#2B2B2B' }, VideAccent = { fg = '#0078D4' },
+                Visual = { bg = '#264F78' }, Search = { bg = '#9E6A03' },
+                Pmenu = { fg = '#CCCCCC', bg = '#202020' }, PmenuSel = { bg = '#04395E' },
+                Comment = { fg = '#6A9955' }, String = { fg = '#CE9178' },
+                Character = { fg = '#CE9178' }, Number = { fg = '#B5CEA8' },
+                Boolean = { fg = '#569CD6' }, Float = { fg = '#B5CEA8' },
+                Identifier = { fg = '#9CDCFE' }, Function = { fg = '#DCDCAA' },
+                Statement = { fg = '#C586C0' }, Keyword = { fg = '#569CD6' },
+                PreProc = { fg = '#C586C0' }, Type = { fg = '#4EC9B0' },
+                Special = { fg = '#D7BA7D' }, Constant = { fg = '#4FC1FF' },
+                Operator = { fg = '#D4D4D4' }, Delimiter = { fg = '#CCCCCC' },
+                DiagnosticError = { fg = '#F85149' }, DiagnosticWarn = { fg = '#CCA700' },
+                DiagnosticInfo = { fg = '#3794FF' }, DiagnosticHint = { fg = '#4EC9B0' },
+            }
+            for name, attrs in pairs(groups) do vim.api.nvim_set_hl(0, name, attrs) end
+            for capture, group in pairs({
+                comment = 'Comment', string = 'String', number = 'Number', boolean = 'Boolean',
+                variable = 'Identifier', ['variable.member'] = 'Identifier',
+                ['function'] = 'Function', ['function.call'] = 'Function',
+                ['function.method'] = 'Function', ['function.builtin'] = 'Function',
+                keyword = 'Keyword', ['keyword.return'] = 'Statement',
+                ['keyword.conditional'] = 'Statement', ['keyword.repeat'] = 'Statement',
+                type = 'Type', ['type.builtin'] = 'Type', constant = 'Constant',
+                operator = 'Operator', ['punctuation.bracket'] = 'Delimiter',
+            }) do vim.api.nvim_set_hl(0, '@' .. capture, { link = group }) end
+            vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'vscode', modeline = false })
+        end
+    end
+    _G.vide_apply_theme = function(name)
+        if name ~= 'system' then
+            stop()
+            if name == 'vscode' then return dark_modern() end
+            return vim.cmd.colorscheme(name)
+        end
+        if not enabled then
+            enabled = true
+            refresh()
+            if not signature then
+                applying = true
+                vim.cmd.colorscheme('default')
+                vim.g.colors_name = 'system'
+                vim.api.nvim_exec_autocmds('ColorScheme', { pattern = 'system', modeline = false })
+                applying = false
+                _G.vide_native_notice('warning', 'System palette unavailable; using default colors until a desktop palette is available.')
+            end
+            timer = vim.uv.new_timer()
+            timer:start(1500, 1500, vim.schedule_wrap(refresh))
+        else
+            refresh()
+        end
+    end
+    local group = vim.api.nvim_create_augroup('VideSystemTheme', { clear = true })
+    vim.api.nvim_create_autocmd('FileType', { group = group, callback = function(event) system_highlight(event.buf) end })
+    vim.api.nvim_create_autocmd({ 'FocusGained', 'VimResume' }, { group = group, callback = refresh })
+    vim.api.nvim_create_autocmd('ColorScheme', { group = group, callback = function()
+        if not applying and vim.g.colors_name ~= 'system' then stop() end
+    end })
+    vim.api.nvim_create_autocmd('VimLeavePre', { group = group, callback = stop })
 end
 
 _G.vide_save_settings = function()
@@ -901,8 +1471,8 @@ _G.vide_load_settings = function()
             end
             if state.theme then
                 vim.schedule(function()
-                    if not pcall(vim.cmd, "colorscheme " .. state.theme) then
-                        pcall(vim.cmd, "colorscheme vscode")
+                    if not pcall(_G.vide_apply_theme, state.theme) then
+                        pcall(_G.vide_apply_theme, "vscode")
                     end
                 end)
             end
@@ -911,7 +1481,7 @@ _G.vide_load_settings = function()
 end
 
 local M = {}
-local themes = { "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
+local themes = { "system", "vscode", "matteblack", "tokyonight", "tokyonight-storm", "catppuccin", "gruvbox", "nord", "cyberdream", "rose-pine", "kanagawa", "nightfox" }
 function M.open()
     if vim.g.vide_zen_mode == nil then vim.g.vide_zen_mode = false end
     if vim.g.vide_ide_mode == nil then vim.g.vide_ide_mode = false end
@@ -1025,7 +1595,7 @@ function M.open()
     local function set_theme()
         local theme = vim.api.nvim_get_current_line():match("([%w%-]+)%s+%[t%]")
         if theme then 
-            vim.cmd("colorscheme " .. theme) 
+            _G.vide_apply_theme(theme)
             if _G.vide_save_settings then _G.vide_save_settings() end
             pcall(vim.api.nvim_win_close, win, true)
             require('vide_settings').open()
@@ -1118,9 +1688,13 @@ function M.sync_theme()
 
     -- Some colorschemes make Visual indistinguishable from Normal once Vide
     -- normalizes editor backgrounds. Keep mouse and keyboard selections clear.
-    local selection_bg = get_contrast(bg_editor, 36) or "#264f78"
-    vim.api.nvim_set_hl(0, "Visual", { bg = selection_bg, bold = true })
-    vim.api.nvim_set_hl(0, "VisualNOS", { bg = selection_bg, bold = true })
+    local system = vim.g.colors_name == 'system' and _G.vide_system_palette or nil
+    local selection_bg = system and system.selection_background or (vim.g.colors_name == "vscode" and "#264f78") or get_contrast(bg_editor, 36) or "#264f78"
+    local selection_fg = system and system.selection_foreground or nil
+    if not _G.vide_system_colorscheme then
+        vim.api.nvim_set_hl(0, "Visual", { fg = selection_fg, bg = selection_bg, bold = true })
+        vim.api.nvim_set_hl(0, "VisualNOS", { fg = selection_fg, bg = selection_bg, bold = true })
+    end
     
     local fg_statusbar = "#ffffff"
     do
@@ -1134,8 +1708,7 @@ function M.sync_theme()
     end
 
     -- Set terminal colors for the terminal panel so bash prompt ~ > is legible
-    local bg_terminal = get_contrast(bg_editor, 12) -- Lighten background slightly for contrast
-    if not bg_terminal then bg_terminal = bg_editor end
+    local bg_terminal = bg_editor
     
     vim.g.terminal_color_0  = get_color("Normal", "bg") or "#1e1e1e"
     vim.g.terminal_color_1  = get_color("Error", "fg") or "#f2495a"
@@ -1153,6 +1726,10 @@ function M.sync_theme()
     vim.g.terminal_color_13 = get_color("Statement", "fg") or "#c678dd"
     vim.g.terminal_color_14 = get_color("Special", "fg") or "#56b6c2"
     vim.g.terminal_color_15 = "#ffffff"
+
+    if system then
+        for i, color in ipairs(system.terminal_colors) do vim.g['terminal_color_' .. (i - 1)] = color end
+    end
 
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         if vim.bo[buf].buftype == "terminal" then
@@ -1255,6 +1832,8 @@ vim.api.nvim_create_autocmd("ColorScheme", {
 })
 vim.schedule(function() pcall(function() require("vide_settings").sync_theme() end) end)
 
+-- Apply the built-in default even when there is no saved settings file.
+_G.vide_apply_theme('vscode')
 if _G.vide_load_settings then _G.vide_load_settings() end
 
 -- Global function to restart dashboard when tabs close
@@ -1269,14 +1848,11 @@ _G.vide_alpha_start = function()
     vim.bo[buf].swapfile = false
     vim.bo[buf].filetype = 'vide_dashboard'
     local lines = {
-        '', '                         VIDE', '',
-        '              Terminal-native editor and IDE', '',
-        '              Ctrl+N   New file',
-        '              Ctrl+F   Find files',
-        '              Ctrl+E   Toggle explorer',
-        '              Ctrl+T   Toggle terminal',
-        '              F11      Zen / previous mode', '',
-        '              Plugins are offline for this session.',
+        '', '  vide / ' .. vim.fn.fnamemodify(vim.fn.getcwd(), ':t'), '',
+        '  New file          Ctrl+N',
+        '  Find file         Ctrl+F', '',
+        '  Commands          F1',
+        '  Quit              Ctrl+Q',
     }
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     vim.bo[buf].modifiable = false
@@ -1429,7 +2005,7 @@ local function notify_telescope()
                         if c < 0 then c = 0 end
 
                         found_mt = true
-                        widget_title = " Telescope "
+                        widget_title = picker.prompt_title or "Search"
                         if r < mt_top then mt_top = r end
                         if c < mt_left then mt_left = c end
                         if r + h > mt_bottom then mt_bottom = r + h end
@@ -1493,7 +2069,7 @@ local function notify_telescope()
                 telescope_timer:start(50, 50, vim.schedule_wrap(notify_telescope))
             end
             if not rects_eq(mt_rect, prev_mt_rect) or not rects_eq(pr_rect, prev_pr_rect) or widget_title ~= prev_widget_title then
-                vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect, widget_title)
+                vim.rpcnotify(1, "vide_telescope_rect", mt_rect, pr_rect, widget_title, picker ~= nil)
                 prev_mt_rect = mt_rect
                 prev_pr_rect = pr_rect
                 prev_widget_title = widget_title
@@ -1551,15 +2127,6 @@ vim.api.nvim_create_autocmd({"WinNew", "WinClosed", "WinEnter", "WinLeave", "Buf
     end
 })
 vim.schedule(notify_win_positions)
-
--- Configure Telescope to use no borders so Vide can draw its own widget frame
-pcall(function()
-    require('telescope').setup({
-        defaults = {
-            border = false,
-        }
-    })
-end)
 
 _G.vide_wincmd = function(dir)
     local current_win = vim.api.nvim_get_current_win()
@@ -2022,11 +2589,12 @@ _G.last_ai_win = nil
 _G.last_ai_source_win = nil
 _G.ai_generation = 0
 _G.ai_ready_at = 0
+_G.vide_ai_sessions = {}
 
 local ai_context_limit = 64 * 1024
 
 local function ai_notify_status(command, state)
-    pcall(vim.rpcnotify, 1, "vide_ai_status", command or "", state)
+    pcall(vim.rpcnotify, 1, "vide_ai_status", command or "", state, command == _G.last_ai_command)
 end
 
 local function ai_sanitize(text)
@@ -2262,7 +2830,15 @@ vim.keymap.set({ "n", "v", "i" }, "<C-M-f>", _G.SendFilePathToAI, { desc = "Send
 vim.keymap.set({ "n", "v", "i" }, "<C-M-c>", _G.SendFileContentToAI, { desc = "Send entire file content to AI terminal" })
 
 function _G.NotifyAIMissing(cmd)
-    vim.notify("AI agent '" .. cmd .. "' is not installed or not available on PATH.", vim.log.levels.WARN)
+    ai_notice("warning", "AI agent '" .. cmd .. "' is not installed or not available on PATH.")
+end
+
+function _G.OpenTerminalRight()
+    _G.vide_close_floating_windows()
+    vim.cmd('botright vnew')
+    vim.fn.termopen(vim.o.shell)
+    vim.bo.bufhidden = 'hide'
+    vim.cmd('startinsert')
 end
 
 local function configure_ai_winbar(win, command)
@@ -2293,9 +2869,11 @@ function _G.StopAITerminal()
     if not job_id then return end
     _G.ai_generation = _G.ai_generation + 1
     _G.last_ai_job_id = nil
+    local session = _G.vide_ai_sessions[_G.last_ai_command]
+    if session then session.job = nil end
     pcall(vim.fn.jobstop, job_id)
     ai_notify_status(_G.last_ai_command, "stopped")
-    vim.notify("AI session stopped", vim.log.levels.INFO)
+    ai_notice("info", "AI session stopped")
 end
 
 function _G.CloseAITerminal()
@@ -2311,6 +2889,7 @@ function _G.CloseAITerminal()
     _G.last_ai_win = nil
     _G.last_ai_buf = nil
     _G.ai_ready_at = 0
+    _G.vide_ai_sessions[_G.last_ai_command or ''] = nil
 
     if job_id then pcall(vim.fn.jobstop, job_id) end
     if win and vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
@@ -2330,7 +2909,7 @@ end
 function _G.RestartAITerminal()
     local command = _G.last_ai_command
     if not command then
-        vim.notify("No AI session to restart.", vim.log.levels.WARN)
+        ai_notice("warning", "No AI session to restart.")
         return
     end
     _G.StopAITerminal()
@@ -2339,40 +2918,58 @@ end
 
 function _G.OpenAITerminal(cmd)
     if vim.fn.executable(cmd) == 0 then _G.NotifyAIMissing(cmd); return end
-    local active = _G.GetActiveAIJob()
-    if active then _G.StopAITerminal() end
+    local session = _G.vide_ai_sessions[cmd]
+    if session and session.job and vim.fn.jobwait({ session.job }, 0)[1] ~= -1 then session.job = nil end
     local current_win = vim.api.nvim_get_current_win()
     local current_buf = vim.api.nvim_get_current_buf()
     if vim.bo[current_buf].buftype == "" then _G.last_ai_source_win = current_win end
     if _G.last_ai_win and vim.api.nvim_win_is_valid(_G.last_ai_win) then
         vim.api.nvim_set_current_win(_G.last_ai_win)
-        vim.cmd("enew")
     else
         vim.cmd("botright vsplit")
         vim.cmd("wincmd L")
-        vim.cmd("enew")
     end
     _G.ai_generation = _G.ai_generation + 1
     local generation = _G.ai_generation
+    _G.last_ai_command = cmd
+    _G.last_ai_win = vim.api.nvim_get_current_win()
+    if session and session.job and vim.api.nvim_buf_is_valid(session.buf) then
+        _G.last_ai_job_id, _G.last_ai_buf = session.job, session.buf
+        _G.ai_ready_at = session.ready_at
+        vim.api.nvim_win_set_buf(0, session.buf)
+        configure_ai_winbar(_G.last_ai_win, cmd)
+        ai_notify_status(cmd, 'running')
+        vim.cmd('startinsert')
+        return
+    end
+    if session and vim.api.nvim_buf_is_valid(session.buf) then
+        pcall(vim.api.nvim_buf_delete, session.buf, { force = true })
+    end
+    vim.cmd('enew')
+    session = { buf = vim.api.nvim_get_current_buf(), ready_at = vim.uv.now() + 900 }
+    _G.vide_ai_sessions[cmd] = session
+    vim.b[session.buf].vide_ai = true
     -- Launch the agent directly. Going through an interactive shell creates a
     -- race where the first AI prompt can be pasted into the shell before its
     -- `exec` command has replaced it with the agent.
     local job_id = vim.fn.termopen({ cmd }, {
         on_exit = function()
-            if generation ~= _G.ai_generation then return end
-            _G.last_ai_job_id = nil
+            if _G.vide_ai_sessions[cmd] ~= session then return end
+            session.job = nil
+            if _G.last_ai_command == cmd then _G.last_ai_job_id = nil end
             ai_notify_status(cmd, "stopped")
         end,
     })
     _G.last_ai_job_id = job_id
+    session.job = job_id > 0 and job_id or nil
     _G.last_ai_command = cmd
-    _G.ai_ready_at = vim.uv.now() + 900
+    _G.ai_ready_at = session.ready_at
     _G.last_ai_buf = vim.api.nvim_get_current_buf()
     _G.last_ai_win = vim.api.nvim_get_current_win()
     vim.bo[_G.last_ai_buf].bufhidden = "hide"
     vim.api.nvim_buf_set_name(_G.last_ai_buf, string.format("AI: %s [%d]", cmd, generation))
     configure_ai_winbar(_G.last_ai_win, cmd)
-    ai_notify_status(cmd, "running")
+    ai_notify_status(cmd, session.job and "running" or "stopped")
     vim.cmd("startinsert")
 end
 
@@ -2394,7 +2991,7 @@ local function vide_notify_buffers()
     for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
         -- Split-owned AI terminals have their own winbar tab and should not
         -- masquerade as files in Vide's global file tab strip.
-        if info.bufnr ~= _G.last_ai_buf then
+        if not vim.b[info.bufnr].vide_ai then
             local name = info.name or ""
             table.insert(buffers, {
                 bufnr = info.bufnr,

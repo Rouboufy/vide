@@ -1,0 +1,36 @@
+vim.rpcnotify = function() end
+vim.fn.mkdir(vim.fn.stdpath('data') .. '/lazy/lazy.nvim', 'p')
+vim.opt.rtp:prepend(assert(vim.env.VIDE_TEST_ALPHA))
+package.preload.lazy = function()
+    return { setup = function(specs)
+        for _, spec in ipairs(specs) do
+            if spec[1] == 'goolord/alpha-nvim' then spec.config() end
+        end
+    end }
+end
+local recent = vim.fn.getcwd() .. '/recent example.txt'
+vim.fn.writefile({'recent file content'}, recent)
+vim.v.oldfiles = {recent, recent, vim.fn.getcwd() .. '/missing.txt'}
+dofile(assert(vim.env.VIDE_TEST_ROOT) .. '/src/nvim/vide_init.lua')
+assert(vim.wait(1000, function() return vim.bo.filetype == 'alpha' end))
+local function content() return table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n') end
+assert(content():find('vide /', 1, true))
+assert(content():find('Ctrl+F', 1, true))
+assert(content():find('recent example.txt', 1, true))
+local dashboard = require('alpha.themes.dashboard')
+local recent_button
+for _, item in ipairs(dashboard.section.buttons.val) do
+    if item.type == 'button' and item.opts.shortcut == '1' then recent_button = item end
+end
+assert(recent_button)
+recent_button.on_press()
+assert(vim.api.nvim_buf_get_name(0) == recent)
+_G.vide_alpha_start()
+vim.o.columns = 36
+vim.api.nvim_exec_autocmds('VimResized', {})
+assert(content():find('New file', 1, true))
+for _, line in ipairs(vim.api.nvim_buf_get_lines(0, 0, -1, false)) do
+    assert(vim.fn.strdisplaywidth(line) <= vim.api.nvim_win_get_width(0), line)
+end
+print('Welcome passed: project title, Ctrl+F, deduplicated recent files, opening paths with spaces, narrow layout')
+vim.cmd('qa!')

@@ -11,6 +11,10 @@ fn isThemeHeading(theme_name: []const u8) bool {
     return std.mem.startsWith(u8, theme_name, "---");
 }
 
+fn themeLabel(name: []const u8) []const u8 {
+    return if (std.mem.eql(u8, name, "system")) "System (follow desktop)" else if (std.mem.eql(u8, name, "vscode")) "VS Code Dark Modern" else name;
+}
+
 fn scrollThemeList(themes: []const []const u8, hover_idx: *usize, scroll_offset: *usize, down: bool) void {
     if (themes.len <= max_visible_themes) return;
 
@@ -42,9 +46,69 @@ pub const Keybindings = struct {
     toggle_terminal: []const u8 = "<C-t>", // Ctrl-t
     toggle_zen: []const u8 = "<F11>",
     new_file: []const u8 = "<C-n>", // Ctrl-n
-    find_file: []const u8 = "<C-f>", // Ctrl-f
+    find_file: []const u8 = "<C-p>", // Quick Open; Ctrl-F remains Neovim's page motion.
     quit: []const u8 = "<C-q>", // Ctrl-q
+    save_file: []const u8 = "<C-s>",
+    commands: []const u8 = "<F1>",
+    focus_next: []const u8 = "<F6>",
+    close_buffer: []const u8 = "",
+    switch_buffers: []const u8 = "",
+    project_files: []const u8 = "",
+    changes: []const u8 = "",
+    problems: []const u8 = "",
+    ai_assistants: []const u8 = "",
+    extensions: []const u8 = "",
+    settings: []const u8 = "",
+    keyboard_shortcuts: []const u8 = "",
+    help: []const u8 = "",
+    split_right: []const u8 = "",
+    terminal_right: []const u8 = "",
+    split_down: []const u8 = "",
+    report_bug: []const u8 = "",
+
+    pub const Field = std.meta.FieldEnum(Keybindings);
+
+    pub fn get(self: Keybindings, field: Field) []const u8 {
+        inline for (std.meta.fields(Keybindings)) |f| {
+            if (field == @field(Field, f.name)) return @field(self, f.name);
+        }
+        unreachable;
+    }
+
+    pub fn ptr(self: *Keybindings, field: Field) *[]const u8 {
+        inline for (std.meta.fields(Keybindings)) |f| {
+            if (field == @field(Field, f.name)) return &@field(self, f.name);
+        }
+        unreachable;
+    }
+
+    pub fn conflict(self: Keybindings, field: ?Field, key: []const u8) bool {
+        if (key.len == 0) return false;
+        inline for (std.meta.fields(Keybindings)) |f| {
+            if (field != @field(Field, f.name) and std.mem.eql(u8, @field(self, f.name), key)) return true;
+        }
+        return false;
+    }
+
+    fn clone(self: Keybindings, allocator: std.mem.Allocator) !Keybindings {
+        var result = self;
+        var copied: usize = 0;
+        errdefer inline for (std.meta.fields(Keybindings), 0..) |f, i| {
+            if (i < copied) allocator.free(@field(result, f.name));
+        };
+        inline for (std.meta.fields(Keybindings)) |f| {
+            @field(result, f.name) = try allocator.dupe(u8, @field(self, f.name));
+            copied += 1;
+        }
+        return result;
+    }
+
+    fn deinit(self: Keybindings, allocator: std.mem.Allocator) void {
+        inline for (std.meta.fields(Keybindings)) |f| allocator.free(@field(self, f.name));
+    }
 };
+
+const binding_fields = [_][]const u8{ "toggle_terminal", "toggle_explorer", "toggle_zen", "new_file", "find_file", "quit", "save_file", "commands", "focus_next" };
 
 pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
     if (raw.len == 0) return "None";
@@ -72,13 +136,33 @@ pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
 }
 
 pub const SettingsConfig = struct {
+    // Persistence contract:
+    // - v0 (unversioned) and v1 are the support window; future schemas are
+    //   read-refused and therefore remain byte-for-byte available for a newer
+    //   Vide. Downgrade is an explicit export/save from that newer release.
+    // - Unknown fields in a supported document are accepted for forward
+    //   reading, but only future-version documents promise lossless retention.
+    // - Saves are atomic, process-local last-writer-wins transactions. There is
+    //   no in-place write window and no advisory lock contract.
+    // - One `<path>.bak` last-known-good document is retained. Backup refresh is
+    //   best effort and occurs only after the new primary validates and lands.
+    // - POSIX save destinations are never followed through symlinks. Existing
+    //   symlinks are rejected; a racing symlink is replaced, never followed.
+    /// Settings schema supported by this binary. Unversioned files are v0 and
+    /// are migrated in memory; future versions are never rewritten.
+    pub const current_version: u32 = 1;
+    /// Settings are intentionally small. Bounding the document at 64 KiB
+    /// prevents an accidental or hostile file from consuming unbounded memory.
+    pub const max_document_bytes: usize = 64 * 1024;
+
+    version: u32 = current_version,
     clip: bool = true,
     zen: bool = false,
     zen_handoff: bool = false,
     ide: bool = false,
     autocomplete: bool = true,
     autoindent: bool = true,
-    theme: []const u8 = "kanagawa",
+    theme: []const u8 = "vscode",
     indent_size: u8 = 4,
     use_tabs: bool = false,
     wrap: bool = false,
@@ -89,18 +173,82 @@ pub const SettingsConfig = struct {
     nerd_fonts: bool = true,
     mode: []const u8 = "normal",
 
+    const VersionHeader = struct { version: ?u32 = null };
+    const SaveFailurePoint = enum { none, after_create, after_write, after_sync, before_replace, after_replace };
+    var save_nonce: usize = 0;
+
+    fn migrateV0ToV1(config: SettingsConfig) SettingsConfig {
+        var migrated = config;
+        if (migrated.zen) {
+            migrated.mode = "zen";
+            migrated.ide = false;
+        } else if (migrated.ide) {
+            migrated.mode = "ide";
+            migrated.zen = false;
+        } else if (std.mem.eql(u8, migrated.mode, "zen")) {
+            migrated.zen = true;
+            migrated.ide = false;
+        } else if (std.mem.eql(u8, migrated.mode, "ide")) {
+            migrated.zen = false;
+            migrated.ide = true;
+        } else {
+            migrated.mode = "normal";
+            migrated.zen = false;
+            migrated.ide = false;
+        }
+        if (std.mem.eql(u8, migrated.keybindings.toggle_zen, "<C-z>"))
+            migrated.keybindings.toggle_zen = "<F11>";
+        migrated.version = 1;
+        return migrated;
+    }
+
+    /// Pure, deterministic migrations. Reapplying this function to a current
+    /// document is a no-op, which makes migrations idempotent.
+    fn migrateToCurrent(config: SettingsConfig, source_version: u32) !SettingsConfig {
+        if (source_version > current_version) return error.UnsupportedSettingsVersion;
+        var migrated = config;
+        var version = source_version;
+        while (version < current_version) : (version += 1) {
+            migrated = switch (version) {
+                0 => migrateV0ToV1(migrated),
+                else => return error.UnsupportedSettingsVersion,
+            };
+        }
+        // These normalizations predate the schema marker and are safe to
+        // reapply to early v1 writers that emitted the old values.
+        if (std.mem.eql(u8, migrated.keybindings.toggle_zen, "<C-z>"))
+            migrated.keybindings.toggle_zen = "<F11>";
+        migrated.version = current_version;
+        return migrated;
+    }
+
+    fn ownedDefaults(allocator: std.mem.Allocator) !SettingsConfig {
+        return ownStrings(allocator, .{});
+    }
+
+    fn ownStrings(allocator: std.mem.Allocator, source: SettingsConfig) !SettingsConfig {
+        var result = source;
+        result.theme = try allocator.dupe(u8, source.theme);
+        errdefer allocator.free(result.theme);
+        result.line_numbers = try allocator.dupe(u8, source.line_numbers);
+        errdefer allocator.free(result.line_numbers);
+        result.colorcolumn = try allocator.dupe(u8, source.colorcolumn);
+        errdefer allocator.free(result.colorcolumn);
+        result.split_separator = try allocator.dupe(u8, source.split_separator);
+        errdefer allocator.free(result.split_separator);
+        result.mode = try allocator.dupe(u8, source.mode);
+        errdefer allocator.free(result.mode);
+        result.keybindings = try source.keybindings.clone(allocator);
+        return result;
+    }
+
     pub fn deinit(self: *SettingsConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.theme);
         allocator.free(self.line_numbers);
         allocator.free(self.colorcolumn);
         allocator.free(self.split_separator);
         allocator.free(self.mode);
-        allocator.free(self.keybindings.toggle_terminal);
-        allocator.free(self.keybindings.toggle_explorer);
-        allocator.free(self.keybindings.toggle_zen);
-        allocator.free(self.keybindings.new_file);
-        allocator.free(self.keybindings.find_file);
-        allocator.free(self.keybindings.quit);
+        self.keybindings.deinit(allocator);
         self.* = undefined;
     }
 
@@ -108,103 +256,184 @@ pub const SettingsConfig = struct {
         const path_z = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(path_z);
 
-        const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY }, 0) catch |err| {
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0) catch |err| {
             if (err == error.FileNotFound) {
-                var config = SettingsConfig{};
-                config.theme = try allocator.dupe(u8, config.theme);
-                config.line_numbers = try allocator.dupe(u8, config.line_numbers);
-                config.colorcolumn = try allocator.dupe(u8, config.colorcolumn);
-                config.split_separator = try allocator.dupe(u8, config.split_separator);
-                config.keybindings.toggle_terminal = try allocator.dupe(u8, config.keybindings.toggle_terminal);
-                config.keybindings.toggle_explorer = try allocator.dupe(u8, config.keybindings.toggle_explorer);
-                config.keybindings.toggle_zen = try allocator.dupe(u8, config.keybindings.toggle_zen);
-                config.keybindings.new_file = try allocator.dupe(u8, config.keybindings.new_file);
-                config.keybindings.find_file = try allocator.dupe(u8, config.keybindings.find_file);
-                config.keybindings.quit = try allocator.dupe(u8, config.keybindings.quit);
-                config.mode = try allocator.dupe(u8, config.mode);
-                return config;
+                return ownedDefaults(allocator);
             }
             return err;
         };
         defer _ = std.posix.system.close(fd);
 
-        var buf: [4096]u8 = undefined;
-        const read_rc = std.posix.system.read(fd, &buf, buf.len);
-        if (std.posix.errno(read_rc) != .SUCCESS) return error.ReadFailed;
-        const len: usize = @intCast(read_rc);
+        var bytes: std.ArrayList(u8) = .empty;
+        defer bytes.deinit(allocator);
+        var chunk: [4096]u8 = undefined;
+        while (true) {
+            const read_rc = std.posix.system.read(fd, &chunk, chunk.len);
+            switch (std.posix.errno(read_rc)) {
+                .SUCCESS => {},
+                .INTR => continue,
+                else => return error.ReadFailed,
+            }
+            const len: usize = @intCast(read_rc);
+            if (len == 0) break;
+            if (bytes.items.len + len > max_document_bytes) return error.SettingsDocumentTooLarge;
+            try bytes.appendSlice(allocator, chunk[0..len]);
+        }
 
-        const parsed = try std.json.parseFromSlice(SettingsConfig, allocator, buf[0..len], .{ .ignore_unknown_fields = true });
+        const header = try std.json.parseFromSlice(VersionHeader, allocator, bytes.items, .{ .ignore_unknown_fields = true });
+        defer header.deinit();
+        const source_version = header.value.version orelse 0;
+        if (source_version > current_version) return error.UnsupportedSettingsVersion;
+
+        const parsed = try std.json.parseFromSlice(SettingsConfig, allocator, bytes.items, .{ .ignore_unknown_fields = true });
         defer parsed.deinit();
 
-        var config = parsed.value;
+        var config = try migrateToCurrent(parsed.value, source_version);
         const valid_colorcolumn = config.colorcolumn.len == 0 or
             std.mem.eql(u8, config.colorcolumn, "80") or
             std.mem.eql(u8, config.colorcolumn, "100") or
             std.mem.eql(u8, config.colorcolumn, "120") or
             std.mem.eql(u8, config.colorcolumn, "80,120");
         if (!valid_colorcolumn) config.colorcolumn = "";
-        // Backward compatibility mapping
-        if (config.zen) {
-            config.mode = "zen";
-        } else if (config.ide) {
-            config.mode = "ide";
-        } else if (std.mem.eql(u8, config.mode, "normal")) {
-            config.zen = false;
-            config.ide = false;
-        } else if (std.mem.eql(u8, config.mode, "zen")) {
-            config.zen = true;
-            config.ide = false;
-        } else if (std.mem.eql(u8, config.mode, "ide")) {
-            config.zen = false;
-            config.ide = true;
-        }
-
-        // Ctrl+Z was Vide's original Zen binding, but it masks the standard
-        // undo shortcut. Migrate that legacy default while preserving every
-        // other user-selected Zen binding.
-        if (std.mem.eql(u8, config.keybindings.toggle_zen, "<C-z>")) {
-            config.keybindings.toggle_zen = "<F11>";
-        }
-
-        config.theme = try allocator.dupe(u8, config.theme);
-        config.line_numbers = try allocator.dupe(u8, config.line_numbers);
-        config.colorcolumn = try allocator.dupe(u8, config.colorcolumn);
-        config.split_separator = try allocator.dupe(u8, config.split_separator);
-        config.keybindings.toggle_terminal = try allocator.dupe(u8, config.keybindings.toggle_terminal);
-        config.keybindings.toggle_explorer = try allocator.dupe(u8, config.keybindings.toggle_explorer);
-        config.keybindings.toggle_zen = try allocator.dupe(u8, config.keybindings.toggle_zen);
-        config.keybindings.new_file = try allocator.dupe(u8, config.keybindings.new_file);
-        config.keybindings.find_file = try allocator.dupe(u8, config.keybindings.find_file);
-        config.keybindings.quit = try allocator.dupe(u8, config.keybindings.quit);
-        config.mode = try allocator.dupe(u8, config.mode);
-        return config;
+        return ownStrings(allocator, config);
     }
 
     pub fn save(self: *const SettingsConfig, path: []const u8) !void {
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer arena.deinit();
-        const alloc = arena.allocator();
+        return self.saveWithFailure(path, .none);
+    }
 
-        const path_z = try alloc.dupeSentinel(u8, path, 0);
-        const fd = try std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-        defer _ = std.posix.system.close(fd);
+    /// Publish the binding only after its atomic settings save succeeds.
+    pub fn saveBinding(self: *SettingsConfig, allocator: std.mem.Allocator, path: []const u8, field: Keybindings.Field, key: []const u8) !void {
+        if (self.keybindings.conflict(field, key)) return error.DuplicateShortcut;
+        const owned = try allocator.dupe(u8, key);
+        errdefer allocator.free(owned);
+        var updated = self.*;
+        updated.keybindings.ptr(field).* = owned;
+        try updated.save(path);
+        allocator.free(self.keybindings.get(field));
+        self.keybindings.ptr(field).* = owned;
+    }
 
-        var buf: std.ArrayList(u8) = .empty;
-        defer buf.deinit(alloc);
-
-        var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &buf);
-        try std.json.Stringify.value(self.*, .{}, &aw.writer);
-        var out_buf = aw.toArrayList();
-        defer out_buf.deinit(alloc);
+    fn writeAll(fd: std.posix.fd_t, data: []const u8) !void {
         var written: usize = 0;
-        while (written < out_buf.items.len) {
-            const write_rc = std.posix.system.write(fd, out_buf.items.ptr + written, out_buf.items.len - written);
+        while (written < data.len) {
+            const write_rc = std.posix.system.write(fd, data.ptr + written, data.len - written);
             switch (std.posix.errno(write_rc)) {
                 .SUCCESS => written += @intCast(write_rc),
                 .INTR => continue,
                 else => return error.WriteFailed,
             }
         }
+    }
+
+    fn unlinkBestEffort(path_z: [*:0]const u8) void {
+        _ = std.posix.system.unlink(path_z);
+    }
+
+    fn renameAtomic(old_z: [*:0]const u8, new_z: [*:0]const u8) !void {
+        while (true) switch (std.posix.errno(std.posix.system.rename(old_z, new_z))) {
+            .SUCCESS => return,
+            .INTR => continue,
+            else => return error.AtomicReplaceFailed,
+        };
+    }
+
+    fn syncDirectory(allocator: std.mem.Allocator, path: []const u8) !void {
+        const parent = std.fs.path.dirname(path) orelse ".";
+        const parent_z = try allocator.dupeSentinel(u8, parent, 0);
+        defer allocator.free(parent_z);
+        const dir_fd = try std.posix.openatZ(std.posix.AT.FDCWD, parent_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
+        defer _ = std.posix.system.close(dir_fd);
+        switch (std.posix.errno(std.posix.system.fsync(dir_fd))) {
+            .SUCCESS, .INVAL, .OPNOTSUPP, .ROFS => {}, // unsupported by this filesystem
+            else => return error.DirectorySyncFailed,
+        }
+    }
+
+    /// POSIX policy: reject symlink destinations, use same-directory O_EXCL
+    /// temporaries with mode 0600, validate before rename, fsync data and the
+    /// parent directory, and use atomic last-writer-wins replacement. The
+    /// resulting file is deliberately private and owned by the saving user.
+    fn saveWithFailure(self: *const SettingsConfig, path: []const u8, fail_at: SaveFailurePoint) !void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const path_z = try alloc.dupeSentinel(u8, path, 0);
+
+        // Opening with NOFOLLOW rejects a destination symlink. A missing file
+        // is expected; any other error must abort before creating a temporary.
+        const existing_fd = std.posix.openatZ(std.posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        if (existing_fd) |fd| _ = std.posix.system.close(fd);
+
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(alloc);
+
+        var canonical = self.*;
+        canonical.version = current_version;
+        var aw: std.Io.Writer.Allocating = .fromArrayList(alloc, &buf);
+        try std.json.Stringify.value(canonical, .{}, &aw.writer);
+        var out_buf = aw.toArrayList();
+        defer out_buf.deinit(alloc);
+        if (out_buf.items.len > max_document_bytes) return error.SettingsDocumentTooLarge;
+        const validation = try std.json.parseFromSlice(SettingsConfig, alloc, out_buf.items, .{ .ignore_unknown_fields = false });
+        validation.deinit();
+
+        const nonce = @atomicRmw(usize, &save_nonce, .Add, 1, .monotonic);
+        const temp_path = try std.fmt.allocPrint(alloc, "{s}.tmp.{d}.{d}", .{ path, std.posix.system.getpid(), nonce });
+        const temp_z = try alloc.dupeSentinel(u8, temp_path, 0);
+        var temp_exists = false;
+        defer {
+            if (temp_exists) unlinkBestEffort(temp_z);
+        }
+
+        const fd = try std.posix.openatZ(std.posix.AT.FDCWD, temp_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true }, 0o600);
+        temp_exists = true;
+        var open = true;
+        defer {
+            if (open) _ = std.posix.system.close(fd);
+        }
+        if (fail_at == .after_create) return error.InjectedSaveFailure;
+        try writeAll(fd, out_buf.items);
+        if (fail_at == .after_write) return error.InjectedSaveFailure;
+        try std.posix.fdatasync(fd);
+        if (fail_at == .after_sync) return error.InjectedSaveFailure;
+        _ = std.posix.system.close(fd);
+        open = false;
+        if (fail_at == .before_replace) return error.InjectedSaveFailure;
+
+        try renameAtomic(temp_z, path_z);
+        temp_exists = false;
+        if (fail_at == .after_replace) return error.InjectedSaveFailure;
+        try syncDirectory(alloc, path);
+
+        // A backup is a separate best-effort transaction after the new primary
+        // is known to parse. Failure here can never invalidate the primary.
+        const backup_path = try std.fmt.allocPrint(alloc, "{s}.bak", .{path});
+        self.writeBackupBestEffort(alloc, backup_path, out_buf.items);
+    }
+
+    fn writeBackupBestEffort(self: *const SettingsConfig, allocator: std.mem.Allocator, path: []const u8, data: []const u8) void {
+        _ = self;
+        const nonce = @atomicRmw(usize, &save_nonce, .Add, 1, .monotonic);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{d}.{d}", .{ path, std.posix.system.getpid(), nonce }) catch return;
+        const temp_z = allocator.dupeSentinel(u8, temp_path, 0) catch return;
+        const path_z = allocator.dupeSentinel(u8, path, 0) catch return;
+        const fd = std.posix.openatZ(std.posix.AT.FDCWD, temp_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true }, 0o600) catch return;
+        var exists = true;
+        defer {
+            if (exists) unlinkBestEffort(temp_z);
+        }
+        defer _ = std.posix.system.close(fd);
+        writeAll(fd, data) catch return;
+        std.posix.fdatasync(fd) catch return;
+        const parsed = std.json.parseFromSlice(SettingsConfig, allocator, data, .{ .ignore_unknown_fields = false }) catch return;
+        parsed.deinit();
+        renameAtomic(temp_z, path_z) catch return;
+        exists = false;
     }
 };
 
@@ -230,6 +459,7 @@ pub const SettingsWidget = struct {
 
     open_mason: bool = false,
     open_lazy: bool = false,
+    open_installed: bool = false,
     software_update_requested: bool = false,
     software_update_status: SoftwareUpdateStatus = .idle,
     software_update_progress: u8 = 0,
@@ -291,12 +521,9 @@ pub const SettingsWidget = struct {
             cfg.line_numbers = allocator.dupe(u8, cfg.line_numbers) catch cfg.line_numbers;
             cfg.colorcolumn = allocator.dupe(u8, cfg.colorcolumn) catch cfg.colorcolumn;
             cfg.split_separator = allocator.dupe(u8, cfg.split_separator) catch cfg.split_separator;
-            cfg.keybindings.toggle_terminal = allocator.dupe(u8, cfg.keybindings.toggle_terminal) catch cfg.keybindings.toggle_terminal;
-            cfg.keybindings.toggle_explorer = allocator.dupe(u8, cfg.keybindings.toggle_explorer) catch cfg.keybindings.toggle_explorer;
-            cfg.keybindings.toggle_zen = allocator.dupe(u8, cfg.keybindings.toggle_zen) catch cfg.keybindings.toggle_zen;
-            cfg.keybindings.new_file = allocator.dupe(u8, cfg.keybindings.new_file) catch cfg.keybindings.new_file;
-            cfg.keybindings.find_file = allocator.dupe(u8, cfg.keybindings.find_file) catch cfg.keybindings.find_file;
-            cfg.keybindings.quit = allocator.dupe(u8, cfg.keybindings.quit) catch cfg.keybindings.quit;
+            inline for (std.meta.fields(Keybindings)) |field| {
+                @field(cfg.keybindings, field.name) = allocator.dupe(u8, @field(cfg.keybindings, field.name)) catch @field(cfg.keybindings, field.name);
+            }
             cfg.mode = allocator.dupe(u8, cfg.mode) catch cfg.mode;
             break :blk cfg;
         };
@@ -439,6 +666,7 @@ pub const SettingsWidget = struct {
         const vim_defaults = [_][]const u8{ "default", "blue", "darkblue", "desert", "elflord", "habamax", "industry", "koehler", "lunaperche", "minischeme", "morning", "murphy", "peachpuff", "quiet", "randomhue", "retrobox", "ron", "shine", "slate", "sorbet", "torte", "wildcharm", "zaibatsu" };
 
         for (raw_list) |t| {
+            if (std.mem.eql(u8, t, "system")) continue;
             var is_vide = false;
             for (supported_themes) |st| {
                 if (std.mem.eql(u8, t, st)) {
@@ -466,8 +694,10 @@ pub const SettingsWidget = struct {
             try user_list.append(t);
         }
 
+        // System is built in, so it remains available without theme plugins.
+        try self.themes.append(try self.allocator.dupe(u8, "--- Vide Themes ---"));
+        try self.themes.append(try self.allocator.dupe(u8, "system"));
         if (vide_list.items.len > 0) {
-            try self.themes.append(try self.allocator.dupe(u8, "--- Vide Themes ---"));
             for (vide_list.items) |t| {
                 try self.themes.append(try self.allocator.dupe(u8, t));
             }
@@ -515,19 +745,31 @@ pub const SettingsWidget = struct {
         params[0] = .{ .string = "return vim.fn.getcompletion('', 'color')" };
         params[1] = .{ .array = &[_]Value{} };
 
+        if (rpc.isAsyncEnabled()) {
+            _ = rpc.requestAsyncWithHandler("nvim_exec_lua", params, self, asyncThemesComplete) catch return;
+            return;
+        }
+
         if (rpc.call("nvim_exec_lua", params) catch null) |res| {
             defer msgpack.freeValue(res, self.allocator);
-            if (res == .array and res.array.len > 0) {
-                var raw_list = std.array_list.Managed([]const u8).init(self.allocator);
-                defer raw_list.deinit();
-                for (res.array) |item| {
-                    if (item == .string) {
-                        raw_list.append(item.string) catch {};
-                    }
-                }
-                self.setThemesAndGroup(raw_list.items) catch {};
-            }
+            self.applyThemesResult(res);
         }
+    }
+
+    fn asyncThemesComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+        const self: *SettingsWidget = @ptrCast(@alignCast(context.?));
+        switch (completion.outcome) {
+            .response => |response| if (response.error_value == .nil) self.applyThemesResult(response.result),
+            .failed => {},
+        }
+    }
+
+    fn applyThemesResult(self: *SettingsWidget, res: @import("../../nvim/msgpack.zig").Value) void {
+        if (res != .array or res.array.len == 0) return;
+        var raw_list = std.array_list.Managed([]const u8).init(self.allocator);
+        defer raw_list.deinit();
+        for (res.array) |item| if (item == .string) raw_list.append(item.string) catch {};
+        self.setThemesAndGroup(raw_list.items) catch {};
     }
 
     fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
@@ -556,81 +798,6 @@ pub const SettingsWidget = struct {
             self.allocator.free(p.description);
         }
         self.installed_plugins.clearRetainingCapacity();
-
-        const user_plugins_path = std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "user_plugins.json" }) catch return;
-        defer self.allocator.free(user_plugins_path);
-
-        const user_plugins_data = readFileAlloc(self.allocator, user_plugins_path) catch |err| {
-            std.log.err("Failed to read user_plugins.json: {}", .{err});
-            return;
-        };
-        defer self.allocator.free(user_plugins_data);
-
-        const parsed_plugins = std.json.parseFromSlice([]const []const u8, self.allocator, user_plugins_data, .{ .ignore_unknown_fields = true }) catch |err| {
-            std.log.err("Failed to parse user_plugins.json: {}", .{err});
-            return;
-        };
-        defer parsed_plugins.deinit();
-
-        if (parsed_plugins.value.len == 0) return;
-
-        const store_db_path = std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "store_db.json" }) catch return;
-        defer self.allocator.free(store_db_path);
-
-        const DBItem = struct {
-            name: []const u8,
-            full_name: []const u8,
-            stars: struct {
-                curr: usize = 0,
-            } = .{},
-            description: ?[]const u8 = null,
-        };
-        const DB = struct {
-            items: []DBItem,
-        };
-
-        const store_db_data = readFileAlloc(self.allocator, store_db_path) catch null;
-        defer {
-            if (store_db_data) |data| self.allocator.free(data);
-        }
-
-        var db_items: ?std.json.Parsed(DB) = null;
-        if (store_db_data) |data| {
-            db_items = std.json.parseFromSlice(DB, self.allocator, data, .{ .ignore_unknown_fields = true }) catch null;
-        }
-        defer {
-            if (db_items) |db| db.deinit();
-        }
-
-        for (parsed_plugins.value) |repo_name| {
-            var stars: usize = 0;
-            var description: []const u8 = "";
-            var name: []const u8 = "";
-
-            if (std.mem.lastIndexOfScalar(u8, repo_name, '/')) |idx| {
-                name = repo_name[idx + 1 ..];
-            } else {
-                name = repo_name;
-            }
-
-            if (db_items) |db| {
-                for (db.value.items) |item| {
-                    if (std.mem.eql(u8, item.full_name, repo_name)) {
-                        stars = item.stars.curr;
-                        description = item.description orelse "";
-                        name = item.name;
-                        break;
-                    }
-                }
-            }
-
-            self.installed_plugins.append(.{
-                .full_name = self.allocator.dupe(u8, repo_name) catch continue,
-                .name = self.allocator.dupe(u8, name) catch continue,
-                .stars = stars,
-                .description = self.allocator.dupe(u8, description) catch continue,
-            }) catch {};
-        }
     }
 
     fn editConfig(self: *SettingsWidget, p: InstalledPlugin) !void {
@@ -700,15 +867,20 @@ pub const SettingsWidget = struct {
         const title = std.fmt.bufPrint(&settings_title_buf, " Vide Settings v{s} ", .{build_options.version}) catch " Vide Settings ";
         ren.drawText(x + 2, y, title, theme.fg_accent, theme.bg_sidebar, true, false);
 
+        const pointer = ren.pointer_position;
+        defer ren.pointer_position = pointer;
+        if (self.active_dropdown != .none or self.popup_active or self.duplicate_warning or self.selected_plugin != null)
+            ren.pointer_position = null;
+
         // Close button
-        ren.drawText(x + w - 4, y, if (self.config.nerd_fonts) " 󰅖 " else " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
+        ren.drawControlText(x + w - 4, y, if (self.config.nerd_fonts) " 󰅖 " else " x ", .{ .rgb = .{ .r = 255, .g = 85, .b = 85 } }, theme.bg_sidebar, false, false);
 
         // Save button
         const save_button = primitives.Button{
             .rect = .{ .x = x + w - 18, .y = y + h - 2, .w = 16, .h = 1 },
             .state = if (self.has_unsaved_changes) .selected else .normal,
         };
-        save_button.draw(ren, "Save & Close", .{
+        save_button.draw(ren, "Save Ctrl+S", .{
             .fg = theme.fg_secondary,
             .bg = theme.bg_sidebar,
             .accent_fg = theme.fg_primary,
@@ -728,6 +900,7 @@ pub const SettingsWidget = struct {
                 }
             }
             ren.drawText(x + 4, tab_y, tab, fg, theme.bg_sidebar, is_active, false);
+            ren.highlightHover(.{ .x = x + 1, .y = tab_y, .w = 18, .h = 2 }, theme.bg_sidebar, theme.fg_primary);
             tab_y += 2;
         }
 
@@ -747,21 +920,21 @@ pub const SettingsWidget = struct {
 
                 const clip_t = if (self.config.clip) "[x]" else "[ ]";
                 const clip_str = std.fmt.bufPrint(&buf, "{s} System Clipboard", .{clip_t}) catch "System Clipboard";
-                ren.drawText(content_x, content_y + 2, clip_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 2, clip_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const mode_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Mode:  [ {s} ▾ ]", .{self.config.mode}) catch "Mode: normal"
                 else
                     std.fmt.bufPrint(&buf, "Mode:  [ {s} v ]", .{self.config.mode}) catch "Mode: normal";
-                ren.drawText(content_x, content_y + 4, mode_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 4, mode_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const auto_t = if (self.config.autocomplete) "[x]" else "[ ]";
                 const auto_str = std.fmt.bufPrint(&buf, "{s} Autocomplete", .{auto_t}) catch "Autocomplete";
-                ren.drawText(content_x, content_y + 6, auto_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 6, auto_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const indent_t = if (self.config.autoindent) "[x]" else "[ ]";
                 const indent_str = std.fmt.bufPrint(&buf, "{s} Autoindent", .{indent_t}) catch "Autoindent";
-                ren.drawText(content_x, content_y + 8, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 8, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 ren.drawText(content_x, content_y + 11, "Normal: full Vim-style editing and modes", theme.fg_secondary, theme.bg_sidebar, false, false);
                 ren.drawText(content_x, content_y + 12, "IDE: familiar modeless text editing", theme.fg_secondary, theme.bg_sidebar, false, false);
@@ -771,20 +944,20 @@ pub const SettingsWidget = struct {
                 ren.drawText(content_x, content_y, "Appearance", theme.fg_primary, theme.bg_sidebar, true, false);
 
                 const theme_str = if (self.config.nerd_fonts)
-                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{self.config.theme}) catch "Theme: kanagawa"
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} ▾ ]", .{themeLabel(self.config.theme)}) catch "Theme: VS Code Dark Modern"
                 else
-                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{self.config.theme}) catch "Theme: kanagawa";
-                ren.drawText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                    std.fmt.bufPrint(&buf, "Theme:  [ {s} v ]", .{themeLabel(self.config.theme)}) catch "Theme: VS Code Dark Modern";
+                ren.drawControlText(content_x, content_y + 2, theme_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const sep_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Split Separator:  [ {s} ▾ ]", .{self.config.split_separator}) catch "Split Separator: │"
                 else
                     std.fmt.bufPrint(&buf, "Split Separator:  [ {s} v ]", .{self.config.split_separator}) catch "Split Separator: │";
-                ren.drawText(content_x, content_y + 4, sep_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 4, sep_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const nf_t = if (self.config.nerd_fonts) "[x]" else "[ ]";
                 const nf_str = std.fmt.bufPrint(&buf, "{s} Use Nerd Fonts (Icons)", .{nf_t}) catch "Use Nerd Fonts (Icons)";
-                ren.drawText(content_x, content_y + 6, nf_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 6, nf_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             2 => {
                 ren.drawText(content_x, content_y, "Editor", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -793,30 +966,30 @@ pub const SettingsWidget = struct {
                     std.fmt.bufPrint(&buf, "Indent Type:  [ {s} ▾ ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces"
                 else
                     std.fmt.bufPrint(&buf, "Indent Type:  [ {s} v ]", .{if (self.config.use_tabs) "tabs" else "spaces"}) catch "Indent Type: spaces";
-                ren.drawText(content_x, content_y + 2, type_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 2, type_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const indent_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Indent Size:  [ {d} ▾ ]", .{self.config.indent_size}) catch "Indent Size: 4"
                 else
                     std.fmt.bufPrint(&buf, "Indent Size:  [ {d} v ]", .{self.config.indent_size}) catch "Indent Size: 4";
-                ren.drawText(content_x, content_y + 4, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 4, indent_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const wrap_t = if (self.config.wrap) "[x]" else "[ ]";
                 const wrap_str = std.fmt.bufPrint(&buf, "{s} Text Wrap", .{wrap_t}) catch "Text Wrap";
-                ren.drawText(content_x, content_y + 6, wrap_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 6, wrap_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const line_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} ▾ ]", .{self.config.line_numbers}) catch "Line Numbers: relative"
                 else
                     std.fmt.bufPrint(&buf, "Line Numbers:  [ {s} v ]", .{self.config.line_numbers}) catch "Line Numbers: relative";
-                ren.drawText(content_x, content_y + 8, line_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 8, line_str, theme.fg_primary, theme.bg_sidebar, false, false);
 
                 const ruler_value = if (self.config.colorcolumn.len == 0) "off" else self.config.colorcolumn;
                 const ruler_str = if (self.config.nerd_fonts)
                     std.fmt.bufPrint(&buf, "Column Ruler:  [ {s} ▾ ]", .{ruler_value}) catch "Column Ruler: off"
                 else
                     std.fmt.bufPrint(&buf, "Column Ruler:  [ {s} v ]", .{ruler_value}) catch "Column Ruler: off";
-                ren.drawText(content_x, content_y + 10, ruler_str, theme.fg_primary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 10, ruler_str, theme.fg_primary, theme.bg_sidebar, false, false);
             },
             3 => {
                 ren.drawText(content_x, content_y, "Plugins", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -824,48 +997,21 @@ pub const SettingsWidget = struct {
                 // Mason Button
                 const mason_btn = " [ Mason Settings... ] ";
                 const is_mason_hover = (self.keyboard_focus == .content and self.hover_row == 0);
-                ren.drawText(content_x, content_y + 2, mason_btn, if (is_mason_hover) theme.fg_primary else theme.bg_sidebar, if (is_mason_hover) theme.fg_accent else theme.fg_accent, true, false);
+                ren.drawControlText(content_x, content_y + 2, mason_btn, if (is_mason_hover) theme.fg_primary else theme.bg_sidebar, if (is_mason_hover) theme.fg_accent else theme.fg_accent, true, false);
 
                 // Plugin Manager Button
                 const lazy_btn = " [ Plugin Manager... ] ";
                 const is_lazy_hover = (self.keyboard_focus == .content and self.hover_row == 1);
-                ren.drawText(content_x, content_y + 4, lazy_btn, if (is_lazy_hover) theme.fg_primary else theme.bg_sidebar, if (is_lazy_hover) theme.fg_accent else theme.fg_accent, true, false);
+                ren.drawControlText(content_x, content_y + 4, lazy_btn, if (is_lazy_hover) theme.fg_primary else theme.bg_sidebar, if (is_lazy_hover) theme.fg_accent else theme.fg_accent, true, false);
 
-                // Installed Plugins Title
-                ren.drawText(content_x, content_y + 6, "Installed Plugins:", theme.fg_primary, theme.bg_sidebar, true, false);
-
-                const max_visible_plugins = 6;
-                const start_idx = self.plugin_scroll_offset;
-                const end_idx = @min(self.installed_plugins.items.len, start_idx + max_visible_plugins);
-
-                var idx = start_idx;
-                var py_offset: u16 = 8;
-                while (idx < end_idx) : (idx += 1) {
-                    const p = self.installed_plugins.items[idx];
-                    const is_hovered = (self.keyboard_focus == .content and self.hover_row == 2 + idx);
-
-                    var plugin_line_buf: [128]u8 = undefined;
-                    const plugin_line = std.fmt.bufPrint(&plugin_line_buf, "  • {s}", .{p.full_name}) catch p.full_name;
-
-                    ren.drawText(content_x, content_y + py_offset, plugin_line, if (is_hovered) theme.fg_accent else theme.fg_secondary, theme.bg_sidebar, is_hovered, false);
-                    py_offset += 1;
-                }
-
-                if (self.installed_plugins.items.len == 0) {
-                    ren.drawText(content_x + 2, content_y + 8, "No installed plugins found.", theme.fg_secondary, theme.bg_sidebar, false, false);
-                }
-
-                if (self.plugin_scroll_offset > 0) {
-                    ren.drawText(content_x + 35, content_y + 8, "▲", theme.fg_accent, theme.bg_sidebar, false, false);
-                }
-                if (self.plugin_scroll_offset + max_visible_plugins < self.installed_plugins.items.len) {
-                    ren.drawText(content_x + 35, content_y + 8 + @as(u16, @intCast(max_visible_plugins)) - 1, "▼", theme.fg_accent, theme.bg_sidebar, false, false);
-                }
+                ren.drawControlText(content_x, content_y + 6, " [ Installed Plugins... ] ", theme.bg_sidebar, theme.fg_accent, true, false);
+                ren.drawText(content_x, content_y + 9, "Configure, enable, disable, or uninstall.", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawText(content_x, content_y + 11, "Changes apply after restarting Vide.", theme.fg_secondary, theme.bg_sidebar, false, false);
             },
             4 => {
-                ren.drawText(content_x, content_y, "Keybindings (Click to edit)", theme.fg_primary, theme.bg_sidebar, true, false);
+                ren.drawText(content_x, content_y, "Keybindings / Enter or click to record", theme.fg_primary, theme.bg_sidebar, true, false);
 
-                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Explorer", "Toggle Zen Mode", "New File", "Find File", "Quit" };
+                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Sidebar", "Toggle Zen Mode", "New File", "Find File", "Quit", "Save File", "Commands", "Next Region" };
                 const current_keys = [_][]const u8{
                     self.config.keybindings.toggle_terminal,
                     self.config.keybindings.toggle_explorer,
@@ -873,6 +1019,9 @@ pub const SettingsWidget = struct {
                     self.config.keybindings.new_file,
                     self.config.keybindings.find_file,
                     self.config.keybindings.quit,
+                    self.config.keybindings.save_file,
+                    self.config.keybindings.commands,
+                    self.config.keybindings.focus_next,
                 };
 
                 for (actions, 0..) |action, i| {
@@ -884,24 +1033,13 @@ pub const SettingsWidget = struct {
 
                     const draw_str = std.fmt.bufPrint(&buf, "{s}:  [ {s} ]", .{ action, key_str }) catch action;
                     const color = if (self.active_binding == i) theme.fg_accent else theme.fg_primary;
-                    ren.drawText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
+                    ren.drawControlText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
                 }
 
-                const static_actions = [_][]const u8{
-                    "Split Vertically:        [ Alt+V ]",
-                    "Split Horizontally:      [ Alt+S ]",
-                    "Close Split Window:      [ Alt+C ]",
-                    "Move Focus Left/Right:   [ Alt+H / Alt+L ]",
-                    "Move Focus Up/Down:      [ Alt+K / Alt+J ]",
-                    "Cycle Window Focus:      [ Alt+O ]",
-                    "Resize Sidebar/Panel:    [ Alt+Arrow ]",
-                    "Toggle Panel Bottom/Right:[ Alt+P ]",
-                };
-
-                ren.drawText(content_x, content_y + 9, "Window Splits & Layout (Static):", theme.fg_primary, theme.bg_sidebar, true, false);
-                for (static_actions, 0..) |sa, sa_idx| {
-                    ren.drawText(content_x, content_y + 10 + @as(u16, @intCast(sa_idx)), sa, theme.fg_secondary, theme.bg_sidebar, false, false);
-                }
+                ren.drawControlText(content_x, content_y + 12, "v Vim-safe", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x + 13, content_y + 12, "p Familiar", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x + 26, content_y + 12, "r Reset selected", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawText(content_x, content_y + 13, "Presets replace bindings; Ctrl+S saves", theme.fg_secondary, theme.bg_sidebar, false, false);
             },
             5 => {
                 ren.drawText(content_x, content_y, "About Vide", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -965,10 +1103,7 @@ pub const SettingsWidget = struct {
                 } else if (self.hover_row == 1) {
                     row_y = content_y + 4;
                 } else {
-                    const plugin_idx = self.hover_row - 2;
-                    if (plugin_idx >= self.plugin_scroll_offset and plugin_idx < self.plugin_scroll_offset + 6) {
-                        row_y = content_y + 8 + @as(u16, @intCast(plugin_idx - self.plugin_scroll_offset));
-                    }
+                    row_y = content_y + 6;
                 }
             } else {
                 const step = if (self.active_tab == 4) @as(u16, 1) else @as(u16, 2);
@@ -979,6 +1114,7 @@ pub const SettingsWidget = struct {
             }
         }
 
+        ren.pointer_position = pointer;
         // Draw active dropdown if any
         if (self.active_dropdown != .none) {
             const drop_x = content_x + 10;
@@ -988,7 +1124,7 @@ pub const SettingsWidget = struct {
 
             if (self.active_dropdown == .theme) {
                 items_len = self.themes.items.len;
-                drop_w = 22;
+                drop_w = 32;
                 drop_y = content_y + 3;
             } else if (self.active_dropdown == .split_separator) {
                 items_len = supported_split_seps.len;
@@ -1031,9 +1167,10 @@ pub const SettingsWidget = struct {
                     } else {
                         const is_sel = std.mem.eql(u8, self.config.theme, t);
                         const prefix = if (is_sel) " * " else "   ";
-                        const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, t }) catch " error";
+                        const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, themeLabel(t) }) catch " error";
                         ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                         if (i == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                        ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     }
                     item_y += 1;
                 }
@@ -1053,6 +1190,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, s }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .indent_size) {
@@ -1063,6 +1201,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{d}", .{ prefix, i }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .indent_type) {
@@ -1073,6 +1212,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, t }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .line_numbers) {
@@ -1083,6 +1223,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, ln }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .colorcolumn) {
@@ -1094,6 +1235,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, label }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             } else if (self.active_dropdown == .mode) {
@@ -1104,6 +1246,7 @@ pub const SettingsWidget = struct {
                     const str = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, m }) catch " error";
                     ren.drawText(drop_x + 1, item_y, str, if (is_sel) theme.fg_accent else theme.fg_primary, theme.bg_sidebar, false, false);
                     if (idx == self.hover_dropdown_idx) ren.drawText(drop_x + 1, item_y, "▋", theme.fg_accent, theme.bg_sidebar, true, false);
+                    ren.highlightHover(.{ .x = drop_x + 1, .y = item_y, .w = drop_w - 2, .h = 1 }, theme.bg_sidebar, theme.fg_primary);
                     item_y += 1;
                 }
             }
@@ -1294,13 +1437,11 @@ pub const SettingsWidget = struct {
                 return true;
             }
 
-            const is_duplicate =
-                (idx != 0 and std.mem.eql(u8, self.config.keybindings.toggle_terminal, key)) or
-                (idx != 1 and std.mem.eql(u8, self.config.keybindings.toggle_explorer, key)) or
-                (idx != 2 and std.mem.eql(u8, self.config.keybindings.toggle_zen, key)) or
-                (idx != 3 and std.mem.eql(u8, self.config.keybindings.new_file, key)) or
-                (idx != 4 and std.mem.eql(u8, self.config.keybindings.find_file, key)) or
-                (idx != 5 and std.mem.eql(u8, self.config.keybindings.quit, key));
+            var binding: Keybindings.Field = undefined;
+            inline for (binding_fields, 0..) |field, i| {
+                if (idx == i) binding = @field(Keybindings.Field, field);
+            }
+            const is_duplicate = self.config.keybindings.conflict(binding, key);
 
             if (is_duplicate) {
                 self.duplicate_warning = true;
@@ -1308,30 +1449,17 @@ pub const SettingsWidget = struct {
                 return true;
             }
 
-            const duped = self.allocator.dupe(u8, key) catch key;
-            if (idx == 0) {
-                self.allocator.free(self.config.keybindings.toggle_terminal);
-                self.config.keybindings.toggle_terminal = duped;
-            } else if (idx == 1) {
-                self.allocator.free(self.config.keybindings.toggle_explorer);
-                self.config.keybindings.toggle_explorer = duped;
-            } else if (idx == 2) {
-                self.allocator.free(self.config.keybindings.toggle_zen);
-                self.config.keybindings.toggle_zen = duped;
-            } else if (idx == 3) {
-                self.allocator.free(self.config.keybindings.new_file);
-                self.config.keybindings.new_file = duped;
-            } else if (idx == 4) {
-                self.allocator.free(self.config.keybindings.find_file);
-                self.config.keybindings.find_file = duped;
-            } else if (idx == 5) {
-                self.allocator.free(self.config.keybindings.quit);
-                self.config.keybindings.quit = duped;
-            }
+            const duped = self.allocator.dupe(u8, key) catch return true;
+            self.allocator.free(self.config.keybindings.get(binding));
+            self.config.keybindings.ptr(binding).* = duped;
 
             self.active_binding = null;
             self.has_unsaved_changes = true;
             return true;
+        }
+
+        if (std.mem.eql(u8, key, "<C-s>") or std.mem.eql(u8, key, "\x13")) {
+            return self.saveAndClose();
         }
 
         if (self.keyboard_focus == .tabs) {
@@ -1353,6 +1481,33 @@ pub const SettingsWidget = struct {
                 return true;
             }
         } else if (self.keyboard_focus == .content) {
+            if (self.active_tab == 4 and (std.mem.eql(u8, key, "v") or std.mem.eql(u8, key, "p"))) {
+                var updated = self.config;
+                const preset: Keybindings = if (std.mem.eql(u8, key, "v"))
+                    .{ .toggle_explorer = "<M-e>", .toggle_terminal = "<M-t>", .new_file = "<M-n>", .find_file = "<M-p>" }
+                else
+                    .{ .toggle_explorer = "<C-b>" };
+                inline for (binding_fields) |field| @field(updated.keybindings, field) = @field(preset, field);
+                inline for (binding_fields) |field| {
+                    if (updated.keybindings.conflict(@field(Keybindings.Field, field), @field(updated.keybindings, field))) {
+                        self.duplicate_warning = true;
+                        return true;
+                    }
+                }
+                const owned = SettingsConfig.ownStrings(self.allocator, updated) catch return true;
+                self.config.deinit(self.allocator);
+                self.config = owned;
+                self.has_unsaved_changes = true;
+                return true;
+            }
+            if (self.active_tab == 4 and std.mem.eql(u8, key, "r")) {
+                inline for (binding_fields, 0..) |field, i| {
+                    if (self.hover_row == i) {
+                        self.active_binding = i;
+                        return self.handleKey(@field(Keybindings{}, field));
+                    }
+                }
+            }
             if (std.mem.eql(u8, key, "h") or std.mem.eql(u8, key, "<Left>") or std.mem.eql(u8, key, "<Esc>")) {
                 self.keyboard_focus = .tabs;
                 return true;
@@ -1362,8 +1517,8 @@ pub const SettingsWidget = struct {
                 0 => 4,
                 1 => 3,
                 2 => 5,
-                3 => 2 + self.installed_plugins.items.len,
-                4 => 6,
+                3 => 3,
+                4 => binding_fields.len,
                 5 => 1,
                 else => 0,
             };
@@ -1435,15 +1590,10 @@ pub const SettingsWidget = struct {
                 } else if (self.active_tab == 3) {
                     if (self.hover_row == 0) self.open_mason = true;
                     if (self.hover_row == 1) self.open_lazy = true;
-                    if (self.hover_row >= 2) {
-                        const plugin_idx = self.hover_row - 2;
-                        if (plugin_idx < self.installed_plugins.items.len) {
-                            self.selected_plugin = self.installed_plugins.items[plugin_idx];
-                            self.popup_btn_idx = 0;
-                        }
-                    }
+                    if (self.hover_row == 2) self.open_installed = true;
                 } else if (self.active_tab == 4) {
                     self.active_binding = self.hover_row;
+                    return true;
                 } else if (self.active_tab == 5) {
                     if (self.software_update_status != .running) self.software_update_requested = true;
                     return true;
@@ -1462,6 +1612,20 @@ pub const SettingsWidget = struct {
             return true;
         }
         return false;
+    }
+
+    fn saveAndClose(self: *SettingsWidget) bool {
+        if (self.has_unsaved_changes) {
+            self.config.save(self.settings_path) catch {
+                self.save_failed = true;
+                return true;
+            };
+            self.save_failed = false;
+            self.has_unsaved_changes = false;
+            self.needs_apply = true;
+        }
+        self.is_open = false;
+        return true;
     }
 
     pub fn handleMouse(self: *SettingsWidget, m: input.MouseEvent, screen_w: u16, screen_h: u16) bool {
@@ -1517,12 +1681,7 @@ pub const SettingsWidget = struct {
                             self.allocator.free(old_cfg.colorcolumn);
                             self.allocator.free(old_cfg.split_separator);
                             self.allocator.free(old_cfg.mode);
-                            self.allocator.free(old_cfg.keybindings.toggle_terminal);
-                            self.allocator.free(old_cfg.keybindings.toggle_explorer);
-                            self.allocator.free(old_cfg.keybindings.toggle_zen);
-                            self.allocator.free(old_cfg.keybindings.new_file);
-                            self.allocator.free(old_cfg.keybindings.find_file);
-                            self.allocator.free(old_cfg.keybindings.quit);
+                            old_cfg.keybindings.deinit(self.allocator);
                         } else |_| {}
                         self.has_unsaved_changes = false;
                         self.popup_active = false;
@@ -1548,7 +1707,7 @@ pub const SettingsWidget = struct {
 
             if (self.active_dropdown == .theme) {
                 items_len = self.themes.items.len;
-                drop_w = 22;
+                drop_w = 32;
                 drop_y = content_y + 3;
             } else if (self.active_dropdown == .split_separator) {
                 items_len = supported_split_seps.len;
@@ -1679,17 +1838,7 @@ pub const SettingsWidget = struct {
             // Save button
             const save_button = primitives.Button{ .rect = .{ .x = x + w - 18, .y = y + h - 2, .w = 16, .h = 1 } };
             if (save_button.hit(mx, my)) {
-                if (self.has_unsaved_changes) {
-                    self.config.save(self.settings_path) catch {
-                        self.save_failed = true;
-                        return true;
-                    };
-                    self.save_failed = false;
-                    self.has_unsaved_changes = false;
-                    self.needs_apply = true;
-                }
-                self.is_open = false; // Save & Close
-                return true;
+                return self.saveAndClose();
             }
 
             // Tabs
@@ -1763,17 +1912,18 @@ pub const SettingsWidget = struct {
                             self.open_mason = true;
                         } else if (my == content_y + 4) {
                             self.open_lazy = true;
-                        } else if (my >= content_y + 8 and my < content_y + 14) {
-                            const click_idx = self.plugin_scroll_offset + (my - (content_y + 8));
-                            if (click_idx < self.installed_plugins.items.len) {
-                                self.selected_plugin = self.installed_plugins.items[click_idx];
-                                self.popup_btn_idx = 0;
-                            }
+                        } else if (my == content_y + 6) {
+                            self.open_installed = true;
                         }
                     },
                     4 => {
-                        for (0..6) |i| {
+                        if (my == content_y + 12) {
+                            self.keyboard_focus = .content;
+                            return self.handleKey(if (mx < content_x + 13) "v" else if (mx < content_x + 26) "p" else "r");
+                        }
+                        for (0..binding_fields.len) |i| {
                             if (my == content_y + 2 + @as(u16, @intCast(i))) {
+                                self.hover_row = i;
                                 self.active_binding = i;
                                 changed = true;
                             }
@@ -1796,6 +1946,29 @@ pub const SettingsWidget = struct {
         return false;
     }
 };
+
+test "saved command shortcuts reject conflicts and preserve live state on failed saves" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer allocator.free(path);
+    const missing_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/missing/settings.json", .{tmp.sub_path});
+    defer allocator.free(missing_path);
+    var config = try SettingsConfig.ownedDefaults(allocator);
+    defer config.deinit(allocator);
+    try config.saveBinding(allocator, path, .close_buffer, "<C-k>");
+    try config.saveBinding(allocator, path, .switch_buffers, "<F4>");
+    try std.testing.expectError(error.DuplicateShortcut, config.saveBinding(allocator, path, .save_file, "<C-k>"));
+    try std.testing.expectError(error.DuplicateShortcut, config.saveBinding(allocator, path, .close_buffer, "<F1>"));
+    try std.testing.expectError(error.FileNotFound, config.saveBinding(allocator, missing_path, .close_buffer, "<F3>"));
+    try std.testing.expectEqualStrings("<C-k>", config.keybindings.close_buffer);
+    try std.testing.expectEqualStrings("<C-s>", config.keybindings.save_file);
+    var loaded = try SettingsConfig.load(allocator, path);
+    defer loaded.deinit(allocator);
+    try std.testing.expectEqualStrings("<C-k>", loaded.keybindings.close_buffer);
+    try std.testing.expectEqualStrings("<F4>", loaded.keybindings.switch_buffers);
+}
 
 test "settings roundtrip preserves canonical mode defaults" {
     var tmp = std.testing.tmpDir(.{});
@@ -1831,6 +2004,113 @@ test "legacy Ctrl+Z Zen binding migrates to F11" {
     try std.testing.expectEqualStrings("<F11>", loaded.keybindings.toggle_zen);
 }
 
+test "settings migrations are deterministic and idempotent" {
+    var legacy = SettingsConfig{ .version = 0, .zen = true, .ide = true, .mode = "normal" };
+    legacy.keybindings.toggle_zen = "<C-z>";
+
+    const first = try SettingsConfig.migrateToCurrent(legacy, 0);
+    const second = try SettingsConfig.migrateToCurrent(first, first.version);
+    const repeated = try SettingsConfig.migrateToCurrent(legacy, 0);
+
+    try std.testing.expectEqual(SettingsConfig.current_version, first.version);
+    try std.testing.expectEqualStrings("zen", first.mode);
+    try std.testing.expect(first.zen);
+    try std.testing.expect(!first.ide);
+    try std.testing.expectEqualStrings("<F11>", first.keybindings.toggle_zen);
+    try std.testing.expectEqualDeep(first, second);
+    try std.testing.expectEqualDeep(first, repeated);
+}
+
+test "legacy ide boolean migrates to canonical mode" {
+    const migrated = try SettingsConfig.migrateToCurrent(.{ .version = 0, .ide = true }, 0);
+    try std.testing.expectEqualStrings("ide", migrated.mode);
+    try std.testing.expect(migrated.ide);
+    try std.testing.expect(!migrated.zen);
+}
+
+test "corrupt and truncated settings preserve source and widget uses defaults" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(data_dir);
+    const path = try std.fs.path.join(std.testing.allocator, &.{ data_dir, "settings.json" });
+    defer std.testing.allocator.free(path);
+
+    for ([_][]const u8{ "not-json", "{\"version\":1,\"theme\":\"broken" }, [_]anyerror{ error.SyntaxError, error.UnexpectedEndOfInput }) |invalid, expected_error| {
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = invalid });
+        try std.testing.expectError(expected_error, SettingsConfig.load(std.testing.allocator, path));
+
+        var widget = SettingsWidget.init(std.testing.allocator, path, std.testing.io, data_dir);
+        defer widget.deinit();
+        try std.testing.expect(widget.load_failed);
+        try std.testing.expectEqualStrings("vscode", widget.config.theme);
+
+        const preserved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(SettingsConfig.max_document_bytes));
+        defer std.testing.allocator.free(preserved);
+        try std.testing.expectEqualStrings(invalid, preserved);
+    }
+}
+
+test "oversized settings are rejected without modification" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+    const oversized = try std.testing.allocator.alloc(u8, SettingsConfig.max_document_bytes + 1);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized, 'x');
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = oversized });
+
+    try std.testing.expectError(error.SettingsDocumentTooLarge, SettingsConfig.load(std.testing.allocator, path));
+    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, path, .{});
+    try std.testing.expectEqual(@as(u64, oversized.len), stat.size);
+}
+
+test "unknown fields load but future schemas are left intact" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+
+    const with_unknown = "{\"version\":1,\"theme\":\"nord\",\"ui_v2_future_field\":{\"kept\":true}}";
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = with_unknown });
+    var loaded = try SettingsConfig.load(std.testing.allocator, path);
+    defer loaded.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("nord", loaded.theme);
+
+    const future = "{\"version\":2,\"ui_v2_future_field\":true}";
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = future });
+    try std.testing.expectError(error.UnsupportedSettingsVersion, SettingsConfig.load(std.testing.allocator, path));
+    const preserved = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(SettingsConfig.max_document_bytes));
+    defer std.testing.allocator.free(preserved);
+    try std.testing.expectEqualStrings(future, preserved);
+}
+
+test "atomic save failure leaves old or new valid primary and cleans temporaries" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/settings.json", .{tmp.sub_path});
+    defer std.testing.allocator.free(path);
+
+    var old = SettingsConfig{ .theme = "kanagawa" };
+    try old.save(path);
+    var replacement = SettingsConfig{ .theme = "nord" };
+    const failure_points = [_]SettingsConfig.SaveFailurePoint{ .after_create, .after_write, .after_sync, .before_replace, .after_replace };
+    for (failure_points) |point| {
+        try std.testing.expectError(error.InjectedSaveFailure, replacement.saveWithFailure(path, point));
+        var loaded = try SettingsConfig.load(std.testing.allocator, path);
+        defer loaded.deinit(std.testing.allocator);
+        try std.testing.expect(std.mem.eql(u8, loaded.theme, "kanagawa") or std.mem.eql(u8, loaded.theme, "nord"));
+        old.theme = loaded.theme;
+    }
+
+    var dir = try std.Io.Dir.cwd().openDir(std.testing.io, std.fs.path.dirname(path).?, .{ .iterate = true });
+    defer dir.close(std.testing.io);
+    var iterator = dir.iterate();
+    while (try iterator.next(std.testing.io)) |entry|
+        try std.testing.expect(std.mem.indexOf(u8, entry.name, ".tmp.") == null);
+}
+
 test "software updater uses the official release installer" {
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "https://raw.githubusercontent.com/Rouboufy/vide/main/setup.sh") != null);
     try std.testing.expect(std.mem.indexOf(u8, SettingsWidget.software_updater, "--no-plugins") != null);
@@ -1864,6 +2144,20 @@ test "software updater polls and clamps atomic progress state" {
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = progress_path, .data = "250\n" });
     widget.pollSoftwareUpdateProgress();
     try std.testing.expectEqual(@as(u8, 100), widget.software_update_progress);
+}
+
+test "system theme stays available once when installed themes refresh" {
+    var widget = SettingsWidget.init(std.testing.allocator, "/tmp/vide-no-system-theme-settings.json", std.testing.io, "/tmp");
+    defer widget.deinit();
+    try widget.setThemesAndGroup(&.{ "default", "system", "custom" });
+    try std.testing.expectEqualStrings("system", widget.themes.items[1]);
+    var count: usize = 0;
+    for (widget.themes.items) |name| {
+        if (std.mem.eql(u8, name, "system")) count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try widget.setThemesAndGroup(&.{});
+    try std.testing.expectEqualStrings("system", widget.themes.items[1]);
 }
 
 test "theme dropdown mouse scrolling keeps the highlight visible" {

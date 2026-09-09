@@ -6,7 +6,7 @@ pub const NvimProcess = struct {
     stdout: std.Io.File,
 
     pub fn spawn(io: std.Io, environ_map: *const std.process.Environ.Map) !NvimProcess {
-        const argv = [_][]const u8{ "nvim", "--clean", "--embed", "--headless" };
+        const argv = [_][]const u8{ "nvim", "--clean", "--cmd", "set shortmess+=I", "--embed", "--headless" };
         var child = try std.process.spawn(io, .{
             .argv = &argv,
             .environ_map = environ_map,

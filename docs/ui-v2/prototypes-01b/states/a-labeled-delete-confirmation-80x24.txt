@@ -1,0 +1,24 @@
+VIDE | VideNormal | compact | [FOCUS: Delete dialog]                            
+[E]|[src/main.zig*]  src/tui/events.zig  !1 Problem  Lo|[DIALOG Delete]         
+ S | 1  ~                                              |fixture-delete.txt      
+!1 | 2  const app = Vide.init();                       |cannot be undone        
+ G | 3  ~                                              |[Cancel] [Delete]       
+ T | 4  ~                                              |Default: Cancel         
+[] | 5  ~                                              |restore Explorer        
+ ? | 6  ~                                              |                        
+   | 7  ~                                              |                        
+   | 8  ~                                              |                        
+   | 9  ~                                              |                        
+   |10  ~                                              |                        
+   |11  ~                                              |                        
+   |12  ~                                              |                        
+   |13  ~                                              |                        
+   |14  ~                                              |                        
+   |15  ~                                              |                        
+   |16  ~                                              |                        
+   |17  ~                                              |                        
+   |18  ~                                              |                        
+   |19  ~                                              |                        
+   |20  ~                                              |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       

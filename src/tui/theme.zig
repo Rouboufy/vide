@@ -4,6 +4,15 @@ const nvim = @import("../nvim/msgpack.zig");
 pub const Color = @import("renderer.zig").Color;
 
 pub const Theme = struct {
+    pub fn chrome(self: Theme) Theme {
+        var result = self;
+        result.bg_sidebar = self.bg_editor;
+        result.bg_tab_inactive = blend(self.bg_editor, self.fg_primary, 8);
+        result.fg_secondary = readableForeground(blend(self.bg_editor, self.fg_primary, 65), self.bg_editor, 4.5);
+        result.border_color = blend(self.bg_editor, self.fg_primary, 30);
+        result.fg_accent = self.fg_primary;
+        return result;
+    }
     bg_editor: Color = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } },
     bg_sidebar: Color = Color{ .rgb = .{ .r = 37, .g = 37, .b = 38 } },
     bg_tab_active: Color = Color{ .rgb = .{ .r = 30, .g = 30, .b = 30 } },
@@ -58,6 +67,17 @@ pub const Theme = struct {
         self.fg_statusbar = readableForeground(self.fg_statusbar, self.bg_statusbar, 4.5);
     }
 };
+
+fn blend(background: Color, foreground: Color, percent: u16) Color {
+    if (background != .rgb or foreground != .rgb) return foreground;
+    const bg = background.rgb;
+    const fg = foreground.rgb;
+    return .{ .rgb = .{
+        .r = @intCast((@as(u16, bg.r) * (100 - percent) + @as(u16, fg.r) * percent) / 100),
+        .g = @intCast((@as(u16, bg.g) * (100 - percent) + @as(u16, fg.g) * percent) / 100),
+        .b = @intCast((@as(u16, bg.b) * (100 - percent) + @as(u16, fg.b) * percent) / 100),
+    } };
+}
 
 fn linearChannel(value: u8) f32 {
     const channel = @as(f32, @floatFromInt(value)) / 255.0;

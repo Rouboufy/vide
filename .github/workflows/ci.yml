@@ -30,6 +30,15 @@ jobs:
         run: |
           zig build
           python3 tests/pty_integration.py
+          python3 tests/default_runtime.py
+      - name: Test plugin management and Extensions UI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          mkdir -p "$HOME/.local/share/vide/lazy"
+          git clone --depth 1 --branch stable https://github.com/folke/lazy.nvim.git "$HOME/.local/share/vide/lazy/lazy.nvim"
+          python3 tests/plugin_manager.py
+          python3 tests/plugins_ui.py
       - name: Check shell scripts
         run: shellcheck setup.sh update.sh uninstall.sh build_appimage.sh src/software_update.sh packaging/vide-launcher scripts/plugin_smoke.sh scripts/capture_media.sh tests/setup_plans.sh tests/launcher_smoke.sh tests/ide_mode.sh tests/onboarding.sh tests/appimage_smoke.sh tests/media_assets.sh tests/terminal_compat.sh
       - name: Validate generated media
@@ -39,7 +48,9 @@ jobs:
       - name: Validate recorded performance profile
         run: python3 tests/performance_profile.py
       - name: Test installer package-manager plans
-        run: bash tests/setup_plans.sh
+        run: |
+          bash tests/setup_plans.sh
+          python3 tests/setup_install.py
       - name: Test symlinked release launcher
         run: sh tests/launcher_smoke.sh
 

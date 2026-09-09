@@ -11,6 +11,7 @@ const RpcContext = @import("../tui/app.zig").RpcContext;
 const theme = @import("../tui/theme.zig");
 const Rect = @import("../tui/layout.zig").Rect;
 const settings = @import("../tui/widgets/settings.zig");
+const metrics = @import("../metrics.zig");
 
 pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseEvent, rel_col: u16, rel_row: u16) void {
     const button_str: []const u8 = switch (m.button) {
@@ -42,12 +43,21 @@ pub fn sendMouseEvent(rpc: *RpcClient, alloc: std.mem.Allocator, m: input.MouseE
 }
 
 pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) anyerror!void {
+    var state_timer = metrics.ScopedTimer.start(&metrics.global, &metrics.global.state_update);
+    defer state_timer.stop();
     const rpc_ctx: *RpcContext = @ptrCast(@alignCast(ctx orelse return));
     const ui_state = rpc_ctx.ui_state;
     const app = rpc_ctx.app;
 
     if (std.mem.eql(u8, method, "redraw") and params == .array) {
-        try ui_state.handleRedraw(params.array);
+        const previous_mode = ui_state.editor_mode;
+        const damage = try ui_state.handleRedraw(params.array);
+        if (ui_state == app.ui_state and previous_mode != ui_state.editor_mode) app.invalidations.damage(.chrome);
+        if (damage.grid or damage.lifecycle or damage.composition_uncertain) {
+            // Mapping happens after handleRedraw has applied the whole batch.
+            app.invalidations.damage(if (ui_state == app.ui_state) .editor else .drawer);
+        }
+        if (damage.cursor) app.invalidations.cursor = true;
     } else if (std.mem.eql(u8, method, "vide_buffers") and ui_state == app.ui_state and params == .array and params.array.len >= 2 and params.array[0] == .array) {
         for (app.tabs.items) |tab| {
             app.allocator.free(tab.name);
@@ -76,7 +86,7 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             const name_copy = try app.allocator.dupe(u8, display_name);
             errdefer app.allocator.free(name_copy);
             const path_copy = if (path.len == 0) null else try app.allocator.dupe(u8, path);
-            try app.tabs.append(.{ .bufnr = bufnr, .name = name_copy, .path = path_copy });
+            try app.tabs.append(.{ .bufnr = bufnr, .name = name_copy, .path = path_copy, .modified = changed });
             if (changed and relative_path.len > 0) {
                 const modified_path = try app.allocator.dupe(u8, relative_path);
                 errdefer app.allocator.free(modified_path);
@@ -85,8 +95,11 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             if (bufnr == active_bufnr) app.active_tab = app.tabs.items.len - 1;
         }
         if (app.tabs.items.len == 0) app.active_tab = 0;
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_telescope_rect")) {
+        ui_state.native_picker_chrome = params == .array and params.array.len >= 4 and params.array[3] == .bool and params.array[3].bool;
+        app.invalidations.damage(.overlay);
+        app.invalidations.damage(.chrome);
         if (params == .array and params.array.len >= 2) {
             for (params.array[0..2], 0..) |p, i| {
                 if (p == .array and p.array.len == 4) {
@@ -132,8 +145,9 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
     } else if (std.mem.eql(u8, method, "vide_ai_status") and params == .array and params.array.len >= 2 and
         params.array[0] == .string and params.array[1] == .string)
     {
-        app.ai_panel.updateSession(params.array[0].string, params.array[1].string);
-        app.needs_resize = true;
+        const active = params.array.len < 3 or params.array[2] != .bool or params.array[2].bool;
+        app.ai_panel.updateSession(params.array[0].string, params.array[1].string, active);
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_settings_changed")) {
         var old_cfg = app.settings_widget.config;
         if (settings.SettingsConfig.load(app.settings_widget.allocator, app.settings_widget.settings_path)) |new_cfg| {
@@ -159,11 +173,11 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             app.notify(.failure, "Settings reload failed; keeping the current settings.", .{});
             std.log.err("Settings reload failed: {}", .{err});
         }
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_win_count") and params == .array and params.array.len > 0) {
         if (params.array[0] == .integer) {
             app.editor_win_count = @as(usize, @intCast(@max(1, params.array[0].integer)));
-            app.needs_resize = true;
+            app.invalidations.damageAll();
         }
     } else if (std.mem.eql(u8, method, "vide_win_positions") and params == .array and params.array.len > 0) {
         const wins = if (ui_state == app.ui_state) &app.editor_wins else &app.terminal_wins;
@@ -209,24 +223,24 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             app.terminal_win_count = app.terminal_wins.items.len;
         }
 
-        app.needs_resize = true;
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_boundary_hit") and params == .array and params.array.len > 0) {
         if (params.array[0] == .string) {
             const dir = params.array[0].string;
             if (std.mem.eql(u8, dir, "j")) {
                 if (app.show_terminal_panel and app.panel_position == .bottom) {
                     app.terminal_focus = true;
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 }
             } else if (std.mem.eql(u8, dir, "l")) {
                 if (app.show_terminal_panel and app.panel_position == .right) {
                     app.terminal_focus = true;
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 }
             } else if (std.mem.eql(u8, dir, "h")) {
                 if (app.show_file_tree) {
                     app.sidebar_focus = true;
-                    app.needs_resize = true;
+                    app.invalidations.damageAll();
                 }
             }
         }

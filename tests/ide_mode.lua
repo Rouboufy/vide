@@ -79,6 +79,47 @@ assert(_G.vide_close_buffer(disposable_buffer) == true)
 assert(not vim.api.nvim_buf_is_valid(disposable_buffer))
 assert(vim.api.nvim_get_current_buf() == first_buffer)
 
+-- First-save naming works without plugins and protects existing files.
+local original_input, original_notice = vim.ui.input, _G.vide_native_notice
+local callback, notice
+vim.ui.input = function(opts, done)
+  assert(opts.completion == 'file')
+  callback = done
+end
+_G.vide_native_notice = function(_, message) notice = message end
+vim.cmd('enew!')
+local unnamed = vim.api.nvim_get_current_buf()
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'new file content' })
+_G.vide_save_file()
+callback(nil)
+assert(vim.api.nvim_buf_get_name(unnamed) == '')
+assert(vim.bo[unnamed].modified)
+_G.vide_save_file()
+callback('')
+assert(vim.api.nvim_buf_get_name(unnamed) == '')
+_G.vide_save_file()
+callback(vim.fn.tempname() .. '/missing-parent/file.txt')
+assert(vim.api.nvim_buf_get_name(unnamed) == '', 'Failed first save must allow choosing another name')
+assert(vim.bo[unnamed].modified)
+local target = vim.fn.tempname() .. ' with spaces.txt'
+vim.fn.writefile({ 'existing content' }, target)
+_G.vide_save_file()
+callback(target)
+assert(vim.fn.readfile(target)[1] == 'existing content')
+assert(vim.api.nvim_buf_get_name(unnamed) == '')
+assert(notice:find('already exists', 1, true))
+vim.fn.delete(target)
+_G.vide_save_file()
+callback(target)
+assert(vim.fn.readfile(target)[1] == 'new file content')
+assert(not vim.bo[unnamed].modified)
+vim.ui.input = function() error('Named files must not prompt') end
+vim.api.nvim_buf_set_lines(unnamed, 0, -1, false, { 'updated content' })
+_G.vide_ide_action('save')
+assert(vim.fn.readfile(target)[1] == 'updated content')
+vim.fn.delete(target)
+vim.ui.input, _G.vide_native_notice = original_input, original_notice
+
 _G.vide_disable_ide_mode()
 assert(vim.g.vide_ide_mode == false)
 assert(vim.fn.maparg('<S-Left>', 'i') == '')

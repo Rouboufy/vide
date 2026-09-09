@@ -22,6 +22,7 @@ const GitDetailedWidget = @import("widgets/git_detailed.zig").GitDetailedWidget;
 const ExtensionShop = @import("widgets/extension_shop.zig").ExtensionShop;
 const BugReportWidget = @import("widgets/bug_report.zig").BugReportWidget;
 const EditorContextMenu = @import("widgets/editor_context_menu.zig").EditorContextMenu;
+const Invalidations = @import("invalidation.zig").Invalidations;
 
 pub const Mode = enum { ide, zen, normal };
 pub const PanelPosition = enum { bottom, right };
@@ -42,6 +43,7 @@ pub const TabInfo = struct {
     bufnr: i64 = 0,
     name: []const u8,
     path: ?[]const u8,
+    modified: bool = false,
 };
 
 pub const RpcContext = struct {
@@ -67,7 +69,6 @@ pub const App = struct {
     active_tab: usize,
 
     terminal_focus: bool,
-    terminal_started: bool,
     notice_text: [256]u8,
     notice_len: usize,
     notice_level: NoticeLevel,
@@ -75,7 +76,7 @@ pub const App = struct {
     show_file_tree: bool,
     show_terminal_panel: bool,
 
-    needs_resize: bool,
+    invalidations: Invalidations,
     terminal_panel_height: u16,
     terminal_panel_width: u16, // For right-side panel
     active_terminal_panel_idx: u8, // 0=Terminal, 1=Debug, 2=Output
@@ -101,12 +102,11 @@ pub const App = struct {
     is_resizing_panel: bool = false,
     last_click_x: u16 = 0,
     last_click_y: u16 = 0,
-    file_tree_width: u16 = 30,
+    file_tree_width: u16 = 24,
     was_settings_open: bool = false,
     last_explorer_refresh: i64 = 0,
 
     show_split_menu: bool = false,
-    ide_menu: ?u8 = null, // 0=File, 1=Edit, 2=Selection, 3=Buffer
     quit_requested: bool = false,
     split_menu_dir: enum { right, bottom } = .right,
     split_menu_x: u16 = 0,
@@ -114,14 +114,25 @@ pub const App = struct {
 
     editor_win_count: usize = 1,
     terminal_win_count: usize = 1,
+    deferred_exit: @import("../nvim/call_sites_05c.zig").DeferredExit = .none,
 
     sidebar_focus: bool = false,
+    workspace: @import("workspace.zig").State = .{},
+    zen_sidebar_focus: bool = false,
+    zen_terminal_focus: bool = false,
 
     editor_wins: std.array_list.Managed(WinInfo),
     terminal_wins: std.array_list.Managed(WinInfo),
 
     layout_arena: std.heap.ArenaAllocator,
     root_split: *SplitNode,
+
+    pub fn layout(self: *const App, cols: u16, rows: u16) Layout {
+        return if (self.mode != .zen)
+            Layout.workspace(cols, rows, self.show_file_tree, self.file_tree_width, self.root_split)
+        else
+            Layout.compute(cols, rows, self.mode == .zen, self.show_file_tree, self.file_tree_width, self.root_split);
+    }
 
     pub fn init(allocator: std.mem.Allocator, term: *Terminal, ren: *renderer.Renderer, rpc: *rpc_client.RpcClient, rpc_term: *rpc_client.RpcClient, ui_state: *ui.UiState, ui_term: *ui.UiState) App {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -146,7 +157,6 @@ pub const App = struct {
             .tabs = std.array_list.Managed(TabInfo).init(allocator),
             .active_tab = 0,
             .terminal_focus = false,
-            .terminal_started = false,
             .notice_text = undefined,
             .notice_len = 0,
             .notice_level = .info,
@@ -154,7 +164,7 @@ pub const App = struct {
             .sidebar_focus = false,
             .show_file_tree = true,
             .show_terminal_panel = false,
-            .needs_resize = true,
+            .invalidations = .{},
             .terminal_panel_height = 8,
             .terminal_panel_width = 50,
             .active_terminal_panel_idx = 0,
@@ -198,7 +208,7 @@ pub const App = struct {
         var ts: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         self.notice_deadline = ts.sec + 5;
-        self.needs_resize = true;
+        self.invalidations.damage(.overlay);
     }
 
     pub fn activeNotice(self: *App) ?[]const u8 {
@@ -207,6 +217,7 @@ pub const App = struct {
         _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
         if (ts.sec >= self.notice_deadline) {
             self.notice_len = 0;
+            self.invalidations.damage(.overlay);
             return null;
         }
         return self.notice_text[0..self.notice_len];
@@ -237,8 +248,10 @@ pub const App = struct {
                     .child2 = panel_node,
                 } } };
             } else {
-                const tree_w = if (self.show_file_tree) self.file_tree_width else 0;
-                const content_w = if (total_w > 5 + tree_w) total_w - 5 - tree_w else 1;
+                const content_w = if (self.mode != .zen)
+                    Layout.workspace(total_w, total_h, self.show_file_tree, self.file_tree_width, null).editor.w
+                else
+                    Layout.compute(total_w, total_h, false, self.show_file_tree, self.file_tree_width, null).editor.w;
                 const panel_w = @as(f32, @floatFromInt(self.terminal_panel_width));
                 const content_w_f = @as(f32, @floatFromInt(content_w));
                 const ratio = if (content_w_f > panel_w) (content_w_f - panel_w) / content_w_f else 0.7;

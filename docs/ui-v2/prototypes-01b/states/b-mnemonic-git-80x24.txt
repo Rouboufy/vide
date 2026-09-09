@@ -1,0 +1,24 @@
+VIDE | VideNormal | compact | [FOCUS: Source Control]                           
+[E]|[src/main.zig*]  src/tui/events.zig  !1 Problem  Lo|[Source Control]        
+ S | 1  ~                                              |> fixture.txt           
+!1 | 2  const app = Vide.init();                       |[Stage]                 
+ G | 3  ~                                              |Commit: fixture         
+ T | 4  ~                                              |[Commit] [Cancel]       
+ C | 5  ~                                              |Cancel keeps stage      
+ ? | 6  ~                                              |[Return to editor]      
+   | 7  ~                                              |                        
+   | 8  ~                                              |                        
+   | 9  ~                                              |                        
+   |10  ~                                              |                        
+   |11  ~                                              |                        
+   |12  ~                                              |                        
+   |13  ~                                              |                        
+   |14  ~                                              |                        
+   |15  ~                                              |                        
+   |16  ~                                              |                        
+   |17  ~                                              |                        
+   |18  ~                                              |                        
+   |19  ~                                              |                        
+   |20  ~                                              |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       

@@ -59,6 +59,10 @@ maps to:
 The user's `~/.config/nvim` and corresponding Neovim data directories are not
 loaded or modified.
 
+The System theme reads the desktop's declarative theme spec and may reuse its
+installed colorscheme and parser/query assets read-only. It does not load the
+user's Neovim init or LazyVim configuration. Other themes stay Vide-local.
+
 ## Source layout
 
 - `src/main.zig`: process orchestration and the poll-based application loop.
@@ -72,8 +76,10 @@ loaded or modified.
 
 ## Dependencies
 
-At runtime VIDE requires Neovim. Git and network access are needed when
-installing or updating plugins. Zig is required only when building from source.
+At runtime VIDE requires Neovim 0.12 or newer; releases bundle it. Git and network access are needed when
+installing or updating plugins. Zig is required only when building from source. The installer provisions missing
+source toolchains and parser tools and installs the default Treesitter parsers.
+New settings default to the VS Code Dark Modern theme.
 Nerd Fonts are recommended and their icons are enabled by default; portable
 text symbols remain available from Settings.
 

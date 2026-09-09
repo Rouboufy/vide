@@ -33,48 +33,55 @@ pub fn LogConsole(comptime get_lines_script: []const u8, comptime highlight_erro
             params[0] = .{ .string = get_lines_script };
             params[1] = .{ .array = &[_]Value{} };
 
+            if (rpc.isAsyncEnabled()) {
+                _ = rpc.requestAsyncWithHandler("nvim_exec_lua", params, self, asyncRefreshComplete) catch return;
+                return;
+            }
+
             if (rpc.call("nvim_exec_lua", params)) |res| {
                 defer @import("../../nvim/msgpack.zig").freeValue(res, self.allocator);
-                if (res == .string) {
-                    // Clear old lines
-                    for (self.lines.items) |line| {
-                        self.allocator.free(line);
-                    }
-                    self.lines.clearRetainingCapacity();
-
-                    var it = std.mem.splitSequence(u8, res.string, "\n");
-                    while (it.next()) |line| {
-                        if (self.allocator.dupe(u8, line)) |dup| {
-                            self.lines.append(self.allocator, dup) catch {};
-                        } else |_| {}
-                    }
-                    
-                    // Auto scroll to bottom
-                    if (self.lines.items.len > 0) {
-                        self.scroll_y = self.lines.items.len;
-                    }
-                }
+                self.applyRefresh(res);
             } else |_| {}
+        }
+
+        fn asyncRefreshComplete(context: ?*anyopaque, completion: *@import("../../nvim/async_transport.zig").Completion) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(context.?));
+            switch (completion.outcome) {
+                .response => |response| if (response.error_value == .nil) self.applyRefresh(response.result),
+                .failed => {},
+            }
+        }
+
+        fn applyRefresh(self: *Self, res: Value) void {
+            if (res != .string) return;
+            for (self.lines.items) |line| self.allocator.free(line);
+            self.lines.clearRetainingCapacity();
+            var it = std.mem.splitSequence(u8, res.string, "\n");
+            while (it.next()) |line| if (self.allocator.dupe(u8, line)) |dup| self.lines.append(self.allocator, dup) catch {} else |_| {};
+            if (self.lines.items.len > 0) self.scroll_y = self.lines.items.len;
         }
 
         pub fn draw(self: *Self, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
             rend.drawRect(rect, " ", colors.fg_primary, colors.bg_terminal);
-            
+
             const max_scroll = if (self.lines.items.len > rect.h) self.lines.items.len - rect.h else 0;
             if (self.scroll_y > max_scroll) self.scroll_y = max_scroll;
 
             var y: u16 = 0;
             var i: usize = self.scroll_y;
-            while (y < rect.h and i < self.lines.items.len) : ({y += 1; i += 1;}) {
+            while (y < rect.h and i < self.lines.items.len) : ({
+                y += 1;
+                i += 1;
+            }) {
                 const line = self.lines.items[i];
-                
+
                 var fg = colors.fg_secondary;
                 if (highlight_errors) {
                     if (std.mem.indexOf(u8, line, "error") != null or std.mem.indexOf(u8, line, "Error") != null) {
                         fg = colors.fg_accent; // usually red/orange
                     }
                 }
-                
+
                 // Basic wrapping for extremely long lines
                 var drawn_len: usize = 0;
                 if (line.len > rect.w) {
@@ -82,7 +89,7 @@ pub fn LogConsole(comptime get_lines_script: []const u8, comptime highlight_erro
                 } else {
                     drawn_len = line.len;
                 }
-                
+
                 rend.drawText(rect.x, rect.y + y, line[0..drawn_len], fg, colors.bg_terminal, false, false);
             }
         }

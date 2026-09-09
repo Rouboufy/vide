@@ -11,6 +11,9 @@ pub const StorePlugin = struct {
     stars: usize,
     description: []const u8,
     installed: bool,
+    enabled: bool = true,
+    protected: bool = false,
+    status: []const u8 = "Not installed",
 };
 
 pub const Category = enum(u8) {
@@ -73,15 +76,15 @@ pub const ExtensionShop = struct {
     scroll_offset: usize = 0,
     is_searching: bool = false,
     message: ?[]const u8 = null,
-    message_timer: i64 = 0,
-    selected_category: Category = .all,
-    is_popup_open: bool = false,
-    sidebar_selected_idx: usize = 0,
+    selected_category: Category = .installed,
+    is_open: bool = false,
     show_reload_confirm: bool = false,
-    reload_confirm_yes: bool = true,
     is_detail_open: bool = false,
-    detail_plugin_idx: usize = 0,
     edit_config_path: ?[]const u8 = null,
+    confirm_remove: bool = false,
+
+    panel_rect: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    sidebar_rect: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, data_dir: []const u8) ExtensionShop {
         return .{
@@ -90,13 +93,10 @@ pub const ExtensionShop = struct {
             .data_dir = data_dir,
             .plugins = std.array_list.Managed(StorePlugin).init(allocator),
             .search_query = std.array_list.Managed(u8).init(allocator),
-            .selected_category = .all,
-            .is_popup_open = false,
-            .sidebar_selected_idx = 0,
+            .selected_category = .installed,
+            .is_open = false,
             .show_reload_confirm = false,
-            .reload_confirm_yes = true,
             .is_detail_open = false,
-            .detail_plugin_idx = 0,
             .edit_config_path = null,
         };
     }
@@ -114,6 +114,7 @@ pub const ExtensionShop = struct {
             self.allocator.free(p.name);
             self.allocator.free(p.full_name);
             self.allocator.free(p.description);
+            self.allocator.free(p.status);
         }
         self.plugins.clearAndFree();
     }
@@ -121,9 +122,6 @@ pub const ExtensionShop = struct {
     pub fn setMessage(self: *ExtensionShop, msg: []const u8) void {
         if (self.message) |m| self.allocator.free(m);
         self.message = self.allocator.dupe(u8, msg) catch null;
-        var ts: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
-        self.message_timer = ts.sec;
     }
 
     pub fn triggerSearch(self: *ExtensionShop) !void {
@@ -171,8 +169,16 @@ pub const ExtensionShop = struct {
             stars: usize,
             description: []const u8,
             installed: bool,
+            enabled: bool = true,
+            protected: bool = false,
+            status: []const u8 = "Not installed",
         }, self.allocator, json_str, .{ .ignore_unknown_fields = true }) catch {
-            self.setMessage("Failed to parse search results");
+            const failure = std.json.parseFromSlice(struct { message: []const u8 }, self.allocator, json_str, .{ .ignore_unknown_fields = true }) catch {
+                self.setMessage("Failed to parse search results");
+                return;
+            };
+            defer failure.deinit();
+            self.setMessage(failure.value.message);
             return;
         };
         defer parsed.deinit();
@@ -184,6 +190,9 @@ pub const ExtensionShop = struct {
                 .stars = p.stars,
                 .description = try self.allocator.dupe(u8, p.description),
                 .installed = p.installed,
+                .enabled = p.enabled,
+                .protected = p.protected,
+                .status = try self.allocator.dupe(u8, p.status),
             });
         }
 
@@ -191,579 +200,294 @@ pub const ExtensionShop = struct {
         self.scroll_offset = 0;
     }
 
-    pub fn draw(self: *ExtensionShop, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
-        // Clear background
-        rend.drawRect(rect, " ", colors.fg_secondary, colors.bg_sidebar);
+    const filters = [_]Category{ .all, .colorscheme, .lsp, .git, .ai, .treesitter, .telescope };
 
-        // Header
-        rend.drawText(rect.x + 1, rect.y, " EXTENSION SHOP ", colors.bg_sidebar, colors.fg_accent, true, false);
-
-        // Render instruction hint
-        rend.drawText(rect.x + 1, rect.y + 2, "Select category:", colors.fg_secondary, colors.bg_sidebar, false, false);
-
-        const categories = [_]Category{ .all, .colorscheme, .lsp, .git, .ai, .treesitter, .telescope, .installed };
-        const list_start_y = rect.y + 4;
-
-        for (categories, 0..) |cat, i| {
-            const cy = list_start_y + @as(u16, @intCast(i)) * 2;
-            if (cy >= rect.y + rect.h) break;
-
-            const is_selected = (i == self.sidebar_selected_idx);
-            const row_bg = if (is_selected) colors.bg_editor else colors.bg_sidebar;
-            const name_fg = if (is_selected) colors.fg_primary else colors.fg_secondary;
-
-            // Highlight full selected block
-            const highlight_rect = Rect{ .x = rect.x, .y = cy, .w = rect.w - 1, .h = 1 };
-            rend.drawRect(highlight_rect, " ", colors.fg_secondary, row_bg);
-
-            if (is_selected) {
-                rend.drawText(rect.x, cy, "▋", colors.fg_accent, row_bg, true, false);
-            }
-
-            // Category Name/Label
-            rend.drawText(rect.x + 2, cy, cat.label(), name_fg, row_bg, is_selected, false);
-        }
-
-        // Draw right border
-        var by: u16 = 0;
-        while (by < rect.h) : (by += 1) {
-            var cell = renderer.Cell{
-                .fg = colors.border_color,
-                .bg = colors.bg_sidebar,
-            };
-            cell.setChar("│");
-            rend.setCell(rect.x + rect.w - 1, rect.y + by, cell);
-        }
+    pub fn open(self: *ExtensionShop) !void {
+        self.is_open = true;
+        self.is_detail_open = false;
+        self.confirm_remove = false;
+        self.is_searching = false;
+        try self.triggerSearch();
     }
 
-    pub fn drawPopup(self: *ExtensionShop, rend: *renderer.Renderer, screen_w: u16, screen_h: u16, colors: anytype) void {
-        const modal = primitives.Modal.centered(screen_w, screen_h, 80, 24, 5);
-        const x = modal.rect.x;
-        const y = modal.rect.y;
-        const w = modal.rect.w;
-        const h = modal.rect.h;
-        if (!primitives.usable(modal, 45, 15)) {
-            primitives.drawSizeWarning(rend, "Extension Shop", colors.fg_primary, colors.bg_sidebar);
+    fn selectCategory(self: *ExtensionShop, category: Category) !void {
+        self.selected_category = category;
+        self.search_query.clearRetainingCapacity();
+        self.is_detail_open = false;
+        self.is_searching = false;
+        self.confirm_remove = false;
+        self.show_reload_confirm = false;
+        self.is_open = true;
+        try self.triggerSearch();
+    }
+
+    fn split(self: *ExtensionShop) bool {
+        return self.panel_rect.w >= 76;
+    }
+    fn visibleRows(self: *ExtensionShop) usize {
+        return @max(1, (self.panel_rect.h -| 9) / 3);
+    }
+    fn select(self: *ExtensionShop, index: usize) void {
+        self.selected_idx = @min(index, self.plugins.items.len -| 1);
+        self.confirm_remove = false;
+        if (self.selected_idx < self.scroll_offset) self.scroll_offset = self.selected_idx;
+        if (self.selected_idx >= self.scroll_offset + self.visibleRows()) self.scroll_offset = self.selected_idx - self.visibleRows() + 1;
+    }
+
+    pub fn draw(self: *ExtensionShop, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
+        self.sidebar_rect = rect;
+        if (rect.w < 4 or rect.h < 2) return;
+        rend.drawRect(rect, " ", colors.fg_primary, colors.bg_sidebar);
+        rend.drawTextClipped(rect.x + 2, rect.y, rect.w -| 4, "EXTENSIONS", colors.fg_primary, colors.bg_sidebar, true, false);
+        const labels = [_][]const u8{ "Installed", "Discover" };
+        for (labels, 0..) |label, i| {
+            const y = rect.y + 2 + @as(u16, @intCast(i)) * 2;
+            if (y >= rect.y + rect.h) break;
+            const active = (i == 0) == (self.selected_category == .installed);
+            rend.drawButtonText(rect.x + 1, y, rect.w -| 3, label, if (active) @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5) else colors.fg_primary, if (active) colors.bg_accent else colors.bg_sidebar, active, false);
+        }
+        if (self.selected_category != .installed) {
+            for (filters, 0..) |category, i| {
+                const y = rect.y + 7 + @as(u16, @intCast(i));
+                if (y >= rect.y + rect.h -| 2) break;
+                const active = self.selected_category == category;
+                rend.drawButtonText(rect.x + 2, y, rect.w -| 4, category.label(), if (active) colors.fg_accent else colors.fg_secondary, colors.bg_sidebar, active, false);
+            }
+        } else if (rect.h > 11) {
+            rend.drawTextClipped(rect.x + 2, rect.y + 7, rect.w -| 4, "Make Vide yours.", colors.fg_accent, colors.bg_sidebar, true, false);
+            rend.drawTextClipped(rect.x + 2, rect.y + 9, rect.w -| 4, "Manage your plugins", colors.fg_secondary, colors.bg_sidebar, false, false);
+            rend.drawTextClipped(rect.x + 2, rect.y + 10, rect.w -| 4, "Explore new tools.", colors.fg_secondary, colors.bg_sidebar, false, false);
+        }
+        if (rect.h > 4) rend.drawTextClipped(rect.x + 2, rect.y + rect.h - 1, rect.w -| 4, "1 Installed / 2 Find", colors.fg_secondary, colors.bg_sidebar, false, false);
+    }
+
+    pub fn drawPanel(self: *ExtensionShop, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
+        self.panel_rect = rect;
+        rend.drawRect(rect, " ", colors.fg_primary, colors.bg_editor);
+        if (rect.w < 34 or rect.h < 12) {
+            rend.drawTextClipped(rect.x, rect.y, rect.w, "Extensions: enlarge to browse", colors.fg_accent, colors.bg_editor, true, false);
+            if (rect.h > 1) rend.drawTextClipped(rect.x, rect.y + 1, rect.w, "Esc returns to your file", colors.fg_secondary, colors.bg_editor, false, false);
             return;
         }
-        primitives.drawModalFrame(rend, modal, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
+        const x = rect.x + 2;
+        const y = rect.y;
+        const width = rect.w - 4;
+        rend.drawTextClipped(x, y + 1, width -| 10, if (self.selected_category == .installed) "Your plugins" else "Discover extensions", colors.fg_primary, colors.bg_editor, true, false);
+        rend.drawButtonText(rect.x + rect.w - 10, y + 1, 8, "Esc Back", colors.fg_secondary, colors.bg_editor, false, false);
+        rend.drawButtonText(x, y + 3, 15, "1 Installed", if (self.selected_category == .installed) @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5) else colors.fg_secondary, if (self.selected_category == .installed) colors.bg_accent else colors.bg_sidebar, true, false);
+        rend.drawButtonText(x + 16, y + 3, 13, "2 Discover", if (self.selected_category != .installed) @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5) else colors.fg_secondary, if (self.selected_category != .installed) colors.bg_accent else colors.bg_sidebar, true, false);
+        var count_buf: [72]u8 = undefined;
+        const count = std.fmt.bufPrint(&count_buf, "{d} plugins  /  {s}", .{ self.plugins.items.len, if (self.selected_category == .installed) @as([]const u8, "local library") else self.selected_category.shortLabel() }) catch "";
+        if (width > 52) rend.drawTextClipped(x + 32, y + 3, width - 32, count, colors.fg_secondary, colors.bg_editor, false, false);
+        var query_buf: [256]u8 = undefined;
+        const query = std.fmt.bufPrint(&query_buf, "{s}{s}{s}", .{ if (self.is_searching) @as([]const u8, "Search: ") else "/ Search: ", if (self.search_query.items.len == 0 and !self.is_searching) @as([]const u8, "name or description") else self.search_query.items, if (self.is_searching) @as([]const u8, "_") else "" }) catch "/ Search";
+        rend.drawButtonText(x, y + 5, width, query, colors.fg_secondary, colors.bg_sidebar, false, false);
 
-        // Draw close cross (Top Right)
-        rend.drawText(x + w - 4, y, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
-
-        // Title
-        var title_buf: [128]u8 = undefined;
-        const title = std.fmt.bufPrint(&title_buf, " Explore: {s} ", .{self.selected_category.label()}) catch " Explore Plugins ";
-        rend.drawText(x + 2, y, title, colors.fg_accent, colors.bg_sidebar, true, false);
-
-        // Check for active message
-        var ts: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts);
-        const now = ts.sec;
-        if (self.message) |msg| {
-            if (now - self.message_timer < 5) {
-                rend.drawText(x + 2, y + 1, msg, colors.fg_accent, colors.bg_sidebar, false, false);
+        const list_width = if (self.split()) width * 45 / 100 else width;
+        if (!self.is_detail_open or self.split()) {
+            if (self.plugins.items.len == 0) {
+                rend.drawTextClipped(x, y + 8, list_width, if (self.search_query.items.len > 0) "No matching plugins." else if (self.selected_category == .installed) "Your plugin library is empty." else "Catalog unavailable. Press R to retry.", colors.fg_primary, colors.bg_editor, true, false);
+                rend.drawTextClipped(x, y + 10, list_width, if (self.selected_category == .installed) "Choose Discover to add your first plugin." else "Check your connection, or try another search.", colors.fg_secondary, colors.bg_editor, false, false);
+            }
+            const end = @min(self.plugins.items.len, self.scroll_offset + self.visibleRows());
+            for (self.scroll_offset..@max(self.scroll_offset, end)) |i| {
+                const p = self.plugins.items[i];
+                const py = y + 7 + @as(u16, @intCast(i - self.scroll_offset)) * 3;
+                const active = self.selected_idx == i;
+                const bg = if (active) colors.bg_accent else colors.bg_editor;
+                const fg = @import("../theme.zig").readableForeground(colors.fg_primary, bg, 4.5);
+                const card = Rect{ .x = x, .y = py, .w = list_width, .h = 2 };
+                rend.drawRect(card, " ", colors.fg_primary, bg);
+                rend.drawTextClipped(x + 1, py, list_width -| 2, p.name, fg, bg, true, false);
+                rend.drawTextClipped(x + 1, py + 1, list_width -| 2, if (self.selected_category == .installed) p.status else p.description, if (active) fg else colors.fg_secondary, bg, false, false);
+                if (active) rend.drawTextClipped(x, py, 1, "▎", fg, bg, true, false);
+                rend.highlightHover(card, bg, colors.fg_primary);
             }
         }
-
-        // Search Input Box inside popup
-        const input_y = y + 2;
-        rend.drawText(x + 2, input_y, "🔍", colors.fg_secondary, colors.bg_sidebar, false, false);
-
-        var sx = x + 5;
-        const box_w = if (w > 10) w - 10 else 10;
-        while (sx < x + 5 + box_w) : (sx += 1) {
-            rend.drawText(sx, input_y, "_", colors.border_color, colors.bg_sidebar, false, false);
+        if (self.plugins.items.len > 0 and (self.split() or self.is_detail_open)) {
+            const dx = if (self.split()) x + list_width + 3 else x;
+            const dw = if (self.split()) width - list_width - 3 else width;
+            if (self.split()) rend.drawRect(.{ .x = dx - 2, .y = y + 7, .w = 1, .h = rect.h -| 10 }, "│", colors.border_color, colors.bg_editor);
+            self.drawDetails(rend, .{ .x = dx, .y = y + 7, .w = dw, .h = rect.h -| 10 }, colors);
         }
+        const foot_y = y + rect.h - 2;
+        const hint = if (self.confirm_remove) "Uninstall?  Y Confirm  N Cancel  (config kept)" else if (self.show_reload_confirm) "Saved. Restart Vide?  Y Restart  N Later" else if (self.is_searching) "Enter Search   Esc Cancel" else if (width < 60) "Enter Details  E Config  D Toggle  U Remove" else "Enter Details   E Config   D Enable/Disable   U Uninstall";
+        rend.drawButtonText(x, foot_y, width, hint, if (self.confirm_remove or self.show_reload_confirm) colors.fg_accent else colors.fg_secondary, colors.bg_sidebar, false, false);
+        if (self.message) |msg| rend.drawTextClipped(x, foot_y + 1, width, msg, colors.fg_accent, colors.bg_editor, false, false);
+    }
 
-        if (self.search_query.items.len > 0) {
-            const display_query = self.search_query.items;
-            const truncated = if (display_query.len > box_w) display_query[display_query.len - box_w ..] else display_query;
-            rend.drawText(x + 5, input_y, truncated, colors.fg_primary, colors.bg_sidebar, false, false);
-        } else if (!self.is_searching) {
-            rend.drawText(x + 5, input_y, "Search in category...", colors.fg_secondary, colors.bg_sidebar, false, false);
+    fn drawDetails(self: *ExtensionShop, rend: *renderer.Renderer, rect: Rect, colors: anytype) void {
+        if (rect.h < 3) return;
+        const p = self.plugins.items[self.selected_idx];
+        rend.drawTextClipped(rect.x, rect.y, rect.w, p.name, colors.fg_primary, colors.bg_editor, true, false);
+        rend.drawTextClipped(rect.x, rect.y + 1, rect.w, p.full_name, colors.fg_secondary, colors.bg_editor, false, false);
+        if (rect.h > 3) rend.drawTextClipped(rect.x, rect.y + 3, rect.w, p.status, colors.fg_accent, colors.bg_editor, true, false);
+        if (rect.h > 5) rend.drawButtonText(rect.x, rect.y + 5, rect.w, if (p.protected) "Managed by Vide / local source" else if (p.installed) "E  Configure plugin" else "Enter  Install plugin", @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5), colors.bg_accent, true, false);
+        if (p.installed and !p.protected) {
+            if (rect.h > 7) rend.drawButtonText(rect.x, rect.y + 7, rect.w, if (p.enabled) "D  Disable plugin" else "D  Enable plugin", colors.fg_primary, colors.bg_sidebar, false, false);
+            if (rect.h > 9) rend.drawButtonText(rect.x, rect.y + 9, rect.w, "U  Uninstall plugin", colors.fg_secondary, colors.bg_sidebar, false, false);
         }
-
-        if (self.is_searching) {
-            const cursor_pos = if (self.search_query.items.len > box_w) box_w else self.search_query.items.len;
-            rend.drawText(x + 5 + @as(u16, @intCast(cursor_pos)), input_y, "_", colors.fg_primary, colors.bg_sidebar, true, false);
-        }
-
-        // Instruction Hint
-        rend.drawText(x + 2, input_y + 1, "[/] to type, <Esc> to list/close, <Enter> to toggle install", colors.fg_secondary, colors.bg_sidebar, false, false);
-
-        // Separator
-        const sep_y = y + 4;
-        var sx_sep = x + 1;
-        while (sx_sep < x + w - 1) : (sx_sep += 1) {
-            rend.drawText(sx_sep, sep_y, "─", colors.border_color, colors.bg_sidebar, false, false);
-        }
-
-        const list_start_y = y + 5;
-        if (self.plugins.items.len == 0) {
-            const message = if (self.search_query.items.len > 0) "No extensions match this search." else "Extension catalog unavailable. Retry search or check the Vide log.";
-            rend.drawTextClipped(x + 2, list_start_y, w -| 4, message, colors.fg_secondary, colors.bg_sidebar, false, false);
-            return;
-        }
-
-        const max_visible_items = (h - 6) / 3;
-        var rendered_count: usize = 0;
-        for (self.plugins.items, 0..) |p, i| {
-            if (i < self.scroll_offset) continue;
-            if (rendered_count >= max_visible_items) break;
-
-            const py = list_start_y + @as(u16, @intCast(rendered_count)) * 3;
-            const is_selected = (i == self.selected_idx);
-
-            const row_bg = if (is_selected) colors.bg_editor else colors.bg_sidebar;
-            const name_fg = colors.fg_primary;
-
-            // Highlight full selected block
-            const highlight_rect = Rect{ .x = x + 1, .y = py, .w = w - 2, .h = 3 };
-            rend.drawRect(highlight_rect, " ", colors.fg_secondary, row_bg);
-            if (is_selected) {
-                rend.drawText(x + 1, py, "▋", colors.fg_accent, row_bg, true, false);
-            }
-
-            // Line 1: Name + Star + [Status]
-            var title_buf2: [128]u8 = undefined;
-            const star_char = if (colors.nerd_fonts) "⭐" else "*";
-            const title2 = std.fmt.bufPrint(&title_buf2, "{s} {s}{d}", .{ p.name, star_char, p.stars }) catch p.name;
-            rend.drawText(x + 3, py, title2, name_fg, row_bg, is_selected, false);
-
-            if (p.installed) {
-                rend.drawText(x + w - 15, py, "[Installed]", colors.fg_accent, row_bg, false, false);
-            }
-
-            // Line 2: Description (truncated to popup width)
-            const desc = p.description;
-            const max_desc_w = if (w > 6) w - 6 else 10;
-            const display_desc = if (desc.len > max_desc_w) desc[0..max_desc_w] else desc;
-            rend.drawText(x + 3, py + 1, display_desc, colors.fg_secondary, row_bg, false, false);
-
-            // Line 3: Separator line between items
-            var sx_item_sep = x + 3;
-            while (sx_item_sep < x + w - 3) : (sx_item_sep += 1) {
-                rend.drawText(sx_item_sep, py + 2, "─", colors.border_color, row_bg, false, false);
-            }
-
-            rendered_count += 1;
-        }
-
-        if (self.is_detail_open) {
-            const detail = primitives.Modal.centered(screen_w, screen_h, 60, 14, 7);
-            const dx = detail.rect.x;
-            const dy = detail.rect.y;
-            const dw = detail.rect.w;
-            const dh = detail.rect.h;
-            primitives.drawModalFrame(rend, detail, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
-
-            // Red cross (Top Right)
-            rend.drawText(dx + dw - 4, dy, " ✖ ", .{ .rgb = .{ .r = 255, .g = 80, .b = 80 } }, colors.bg_sidebar, true, false);
-
-            const p = self.plugins.items[self.detail_plugin_idx];
-
-            // Title (Plugin Name)
-            var title_buf_det: [128]u8 = undefined;
-            const title_det = std.fmt.bufPrint(&title_buf_det, " {s} ", .{p.name}) catch " Plugin Details ";
-            rend.drawText(dx + 2, dy, title_det, colors.fg_accent, colors.bg_sidebar, true, false);
-
-            // Full Name / Repo
-            rend.drawText(dx + 3, dy + 2, "Repository:", colors.fg_secondary, colors.bg_sidebar, false, false);
-            rend.drawText(dx + 16, dy + 2, p.full_name, colors.fg_primary, colors.bg_sidebar, false, false);
-
-            // Stars
-            var stars_buf: [64]u8 = undefined;
-            const star_char = if (colors.nerd_fonts) "⭐" else "*";
-            const stars_str = std.fmt.bufPrint(&stars_buf, "{s} {d}", .{ star_char, p.stars }) catch "";
-            rend.drawText(dx + 3, dy + 3, "Rating:", colors.fg_secondary, colors.bg_sidebar, false, false);
-            rend.drawText(dx + 16, dy + 3, stars_str, colors.fg_primary, colors.bg_sidebar, false, false);
-
-            // Description (wrap nicely)
-            rend.drawText(dx + 3, dy + 5, "Description:", colors.fg_secondary, colors.bg_sidebar, false, false);
-
-            // Simple line wrapping for description
-            var desc_y = dy + 6;
-            const max_desc_w = dw -| 8;
+        if (rect.h > 12) {
             var words = std.mem.tokenizeAny(u8, p.description, " \t\n\r");
-            var line_buf = std.array_list.Managed(u8).init(self.allocator);
-            defer line_buf.deinit();
-
+            var row: u16 = 12;
+            var col: u16 = 0;
             while (words.next()) |word| {
-                if (desc_y >= dy + dh - 4) break; // Don't overflow the box
-
-                if (line_buf.items.len + word.len + 1 > max_desc_w) {
-                    if (line_buf.items.len > 0) {
-                        rend.drawText(dx + 4, desc_y, line_buf.items, colors.fg_primary, colors.bg_sidebar, false, false);
-                        line_buf.clearRetainingCapacity();
-                        desc_y += 1;
-                    }
+                if (col > 0 and col + word.len + 1 > rect.w) {
+                    row += 1;
+                    col = 0;
                 }
-                if (line_buf.items.len > 0) {
-                    line_buf.appendSlice(" ") catch {};
-                }
-                line_buf.appendSlice(word) catch {};
+                if (row >= rect.h) break;
+                const n: u16 = @intCast(@min(word.len, rect.w -| col));
+                rend.drawTextClipped(rect.x + col, rect.y + row, n, word, colors.fg_secondary, colors.bg_editor, false, false);
+                col += n + 1;
             }
-            if (line_buf.items.len > 0 and desc_y < dy + dh - 4) {
-                rend.drawText(dx + 4, desc_y, line_buf.items, colors.fg_primary, colors.bg_sidebar, false, false);
-            }
-
-            // Install/Uninstall/Edit Config Buttons at bottom
-            if (p.installed) {
-                const btn1_w: u16 = 17;
-                const btn1_x: u16 = dx + (dw / 2) -| btn1_w -| 2;
-                const btn_y: u16 = dy + dh - 3;
-                for (btn1_x..btn1_x + btn1_w) |bx| {
-                    rend.drawText(@intCast(bx), btn_y, " ", colors.fg_primary, colors.bg_editor, false, false);
-                }
-                rend.drawText(btn1_x + 1, btn_y, "[ Edit Config ]", colors.fg_accent, colors.bg_editor, true, false);
-
-                const btn2_w: u16 = 22;
-                const btn2_x: u16 = dx + (dw / 2) + 2;
-                for (btn2_x..btn2_x + btn2_w) |bx| {
-                    rend.drawText(@intCast(bx), btn_y, " ", colors.fg_primary, colors.bg_editor, false, false);
-                }
-                rend.drawText(btn2_x + 1, btn_y, "[ Uninstall Plugin ]", colors.fg_accent, colors.bg_editor, true, false);
-            } else {
-                const btn_w: u16 = 22;
-                const btn_x: u16 = dx + (dw -| btn_w) / 2;
-                const btn_y: u16 = dy + dh - 3;
-                for (btn_x..btn_x + btn_w) |bx| {
-                    rend.drawText(@intCast(bx), btn_y, " ", colors.fg_primary, colors.bg_editor, false, false);
-                }
-                rend.drawText(btn_x + 1, btn_y, "[ Install Plugin ]", colors.fg_accent, colors.bg_editor, true, false);
-            }
-        }
-
-        if (self.show_reload_confirm) {
-            const confirm = primitives.Modal.centered(screen_w, screen_h, 36, 7, 0);
-            const px = confirm.rect.x;
-            const py = confirm.rect.y;
-            primitives.drawModalFrame(rend, confirm, .rounded, colors.fg_primary, colors.bg_sidebar, colors.border_color, colors.bg_editor);
-
-            rend.drawText(px + 2, py + 1, " Reload Required ", colors.fg_accent, colors.bg_sidebar, true, false);
-            rend.drawText(px + 4, py + 3, "Reload Vide to apply changes?", colors.fg_primary, colors.bg_sidebar, false, false);
-
-            // Yes / No buttons
-            const palette = primitives.Palette{ .fg = colors.fg_secondary, .bg = colors.bg_sidebar, .accent_fg = colors.fg_primary, .accent_bg = colors.bg_accent, .muted_fg = colors.fg_secondary };
-            (primitives.Button{ .rect = .{ .x = px + 7, .y = py + 5, .w = 8, .h = 1 }, .state = if (self.reload_confirm_yes) .focused else .normal }).draw(rend, "Yes", palette);
-            (primitives.Button{ .rect = .{ .x = px + 19, .y = py + 5, .w = 8, .h = 1 }, .state = if (!self.reload_confirm_yes) .focused else .normal }).draw(rend, "No", palette);
         }
     }
 
     pub fn handleKey(self: *ExtensionShop, key: []const u8) !bool {
-        if (self.is_popup_open) return false;
-
-        const categories = [_]Category{ .all, .colorscheme, .lsp, .git, .ai, .treesitter, .telescope, .installed };
-
-        if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
-            if (self.sidebar_selected_idx < categories.len - 1) {
-                self.sidebar_selected_idx += 1;
-            } else {
-                self.sidebar_selected_idx = 0;
-            }
-            return true;
-        } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
-            if (self.sidebar_selected_idx > 0) {
-                self.sidebar_selected_idx -= 1;
-            } else {
-                self.sidebar_selected_idx = categories.len - 1;
-            }
-            return true;
-        } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "o")) {
-            self.selected_category = categories[self.sidebar_selected_idx];
-            self.search_query.clearRetainingCapacity();
-            self.selected_idx = 0;
-            self.scroll_offset = 0;
-            self.is_searching = false;
-            self.is_popup_open = true;
-            try self.triggerSearch();
+        if (!self.is_open) {
+            try self.open();
             return true;
         }
-
-        return false;
+        return self.handlePanelKey(key);
     }
 
-    pub fn handlePopupKey(self: *ExtensionShop, key: []const u8, screen_h: u16) !bool {
-        if (!self.is_popup_open) return false;
-
-        if (self.show_reload_confirm) {
-            if (std.mem.eql(u8, key, "h") or std.mem.eql(u8, key, "<Left>") or std.mem.eql(u8, key, "l") or std.mem.eql(u8, key, "<Right>")) {
-                self.reload_confirm_yes = !self.reload_confirm_yes;
-                return true;
-            } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
-                if (self.reload_confirm_yes) {
-                    self.show_reload_confirm = false;
-                    return error.ReloadApplication;
+    pub fn handlePanelKey(self: *ExtensionShop, key: []const u8) !bool {
+        if (self.is_searching) {
+            if (std.mem.eql(u8, key, "<Esc>")) self.is_searching = false else if (std.mem.eql(u8, key, "<Enter>")) {
+                self.is_searching = false;
+                try self.triggerSearch();
+            } else if (std.mem.eql(u8, key, "<BS>") or std.mem.eql(u8, key, "<Backspace>")) {
+                _ = self.search_query.pop();
+            } else if (key.len > 0 and (key.len == 1 or key[0] != '<')) {
+                for (key) |c| {
+                    if (c >= 32 and c < 127) try self.search_query.append(c);
+                }
+            }
+            return true;
+        }
+        if (self.confirm_remove or self.show_reload_confirm) {
+            if (std.mem.eql(u8, key, "y") or std.mem.eql(u8, key, "Y")) {
+                if (self.confirm_remove) {
+                    self.confirm_remove = false;
+                    try self.changePlugin(self.selected_idx, "remove");
                 } else {
                     self.show_reload_confirm = false;
-                }
-                return true;
-            } else if (std.mem.eql(u8, key, "<Esc>")) {
-                self.show_reload_confirm = false;
-                return true;
-            }
-            return true; // Consume other keys
-        }
-
-        if (self.is_detail_open) {
-            if (std.mem.eql(u8, key, "<Esc>")) {
-                self.is_detail_open = false;
-                return true;
-            } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "<CR>") or std.mem.eql(u8, key, "o") or std.mem.eql(u8, key, "<Space>")) {
-                try self.toggleInstall(self.detail_plugin_idx);
-                return true;
-            }
-            return true; // Consume other keys
-        }
-
-        if (self.is_searching) {
-            if (std.mem.eql(u8, key, "<Esc>") or std.mem.eql(u8, key, "<Enter>")) {
-                self.is_searching = false;
-                try self.triggerSearch();
-                return true;
-            } else if (std.mem.eql(u8, key, "<Backspace>")) {
-                if (self.search_query.items.len > 0) {
-                    _ = self.search_query.pop();
-                }
-                return true;
-            } else if (key.len == 1) {
-                try self.search_query.append(key[0]);
-                return true;
-            }
-            return false;
-        }
-
-        if (std.mem.eql(u8, key, "<Esc>")) {
-            self.is_popup_open = false;
-            return true;
-        } else if (std.mem.eql(u8, key, "/")) {
-            self.is_searching = true;
-            return true;
-        } else if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) {
-            if (self.plugins.items.len > 0) {
-                const h = @min(24, screen_h -| 10);
-                const max_visible = (h - 6) / 3;
-                if (self.selected_idx < self.plugins.items.len - 1) {
-                    self.selected_idx += 1;
-                    if (self.selected_idx >= self.scroll_offset + max_visible) {
-                        self.scroll_offset = self.selected_idx - (max_visible - 1);
-                    }
-                }
-            }
-            return true;
-        } else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) {
-            if (self.selected_idx > 0) {
-                self.selected_idx -= 1;
-                if (self.selected_idx < self.scroll_offset) {
-                    self.scroll_offset = self.selected_idx;
-                }
-            }
-            return true;
-        } else if (std.mem.eql(u8, key, "<Enter>") or std.mem.eql(u8, key, "o")) {
-            if (self.plugins.items.len > 0 and self.selected_idx < self.plugins.items.len) {
-                self.is_detail_open = true;
-                self.detail_plugin_idx = self.selected_idx;
-            }
-            return true;
-        }
-
-        return false;
-    }
-
-    pub fn handleMouse(self: *ExtensionShop, mx: u16, my: u16, rect: Rect) !bool {
-        if (self.is_popup_open) return false;
-
-        _ = mx;
-        const list_start_y = rect.y + 4;
-        if (my < list_start_y) return false;
-
-        const categories = [_]Category{ .all, .colorscheme, .lsp, .git, .ai, .treesitter, .telescope, .installed };
-        const diff_y = my - list_start_y;
-        if (diff_y % 2 == 0) {
-            const idx = diff_y / 2;
-            if (idx < categories.len) {
-                self.sidebar_selected_idx = idx;
-                self.selected_category = categories[idx];
-                self.search_query.clearRetainingCapacity();
-                self.selected_idx = 0;
-                self.scroll_offset = 0;
-                self.is_searching = false;
-                self.is_popup_open = true;
-                try self.triggerSearch();
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    pub fn handlePopupMouse(self: *ExtensionShop, m: input.MouseEvent, screen_w: u16, screen_h: u16) !bool {
-        if (!self.is_popup_open) return false;
-
-        if (self.show_reload_confirm) {
-            const confirm = primitives.Modal.centered(screen_w, screen_h, 36, 7, 0);
-            const px = confirm.rect.x;
-            const py = confirm.rect.y;
-
-            if (m.row == py + 5) {
-                if ((primitives.Button{ .rect = .{ .x = px + 7, .y = py + 5, .w = 8, .h = 1 } }).hit(m.col, m.row)) {
-                    self.show_reload_confirm = false;
                     return error.ReloadApplication;
-                } else if ((primitives.Button{ .rect = .{ .x = px + 19, .y = py + 5, .w = 8, .h = 1 } }).hit(m.col, m.row)) {
-                    self.show_reload_confirm = false;
-                    return true;
                 }
-            }
-            if (!confirm.contains(m.col, m.row)) {
+            } else if (std.mem.eql(u8, key, "n") or std.mem.eql(u8, key, "<Esc>") or std.mem.eql(u8, key, "<Enter>")) {
+                self.confirm_remove = false;
                 self.show_reload_confirm = false;
-                return true;
             }
             return true;
         }
-
-        if (self.is_detail_open) {
-            const detail = primitives.Modal.centered(screen_w, screen_h, 60, 14, 7);
-            const dx = detail.rect.x;
-            const dy = detail.rect.y;
-            const dw = detail.rect.w;
-            const dh = detail.rect.h;
-
-            if (primitives.containsRect(detail.closeButton(), m.col, m.row)) {
-                self.is_detail_open = false;
-                return true;
-            }
-
-            const p = self.plugins.items[self.detail_plugin_idx];
-            const btn_y = dy + dh - 3;
-            if (p.installed) {
-                const btn1_w: u16 = 17;
-                const btn1_x = dx + (dw / 2) -| btn1_w -| 2;
-                const btn2_w: u16 = 22;
-                const btn2_x = dx + (dw / 2) + 2;
-
-                if (m.row == btn_y) {
-                    if (m.col >= btn1_x and m.col < btn1_x + btn1_w) {
-                        try self.editConfig(p);
-                        return true;
-                    } else if (m.col >= btn2_x and m.col < btn2_x + btn2_w) {
-                        try self.toggleInstall(self.detail_plugin_idx);
-                        return true;
-                    }
-                }
-            } else {
-                const btn_w: u16 = 22;
-                const btn_x = dx + (dw -| btn_w) / 2;
-                if (m.row == btn_y and m.col >= btn_x and m.col < btn_x + btn_w) {
-                    try self.toggleInstall(self.detail_plugin_idx);
-                    return true;
+        if (std.mem.eql(u8, key, "<Esc>")) {
+            if (self.is_detail_open and !self.split()) self.is_detail_open = false else self.is_open = false;
+        } else if (std.mem.eql(u8, key, "1")) try self.selectCategory(.installed) else if (std.mem.eql(u8, key, "2")) try self.selectCategory(.all) else if (std.mem.eql(u8, key, "/")) self.is_searching = true else if (std.mem.eql(u8, key, "<Tab>")) try self.selectCategory(if (self.selected_category == .installed) .all else .installed) else if (std.mem.eql(u8, key, "c") and self.selected_category != .installed) {
+            for (filters, 0..) |category, i| {
+                if (category == self.selected_category) {
+                    try self.selectCategory(filters[(i + 1) % filters.len]);
+                    break;
                 }
             }
-
-            if (!detail.contains(m.col, m.row)) {
-                self.is_detail_open = false;
-                return true;
-            }
-
-            return true;
-        }
-
-        const modal = primitives.Modal.centered(screen_w, screen_h, 80, 24, 5);
-        const x = modal.rect.x;
-        const y = modal.rect.y;
-        const w = modal.rect.w;
-        const h = modal.rect.h;
-
-        if (!primitives.usable(modal, 45, 15)) {
-            if (m.action == .press) self.is_popup_open = false;
-            return true;
-        }
-
-        if (!modal.contains(m.col, m.row)) {
-            return false; // outside bounds -> will close popup
-        }
-
-        // Check if clicked the red cross
-        if (primitives.containsRect(modal.closeButton(), m.col, m.row)) {
-            self.is_popup_open = false;
-            return true;
-        }
-
-        if (m.button == .wheel_up) {
-            if (self.selected_idx > 0) {
-                self.selected_idx -= 1;
-                if (self.selected_idx < self.scroll_offset) {
-                    self.scroll_offset = self.selected_idx;
-                }
-            }
-            return true;
-        }
-
-        if (m.button == .wheel_down) {
-            if (self.plugins.items.len > 0) {
-                const max_visible = (h - 6) / 3;
-                if (self.selected_idx < self.plugins.items.len - 1) {
-                    self.selected_idx += 1;
-                    if (self.selected_idx >= self.scroll_offset + max_visible) {
-                        self.scroll_offset = self.selected_idx - (max_visible - 1);
-                    }
-                }
-            }
-            return true;
-        }
-
-        const input_y = y + 2;
-        const box_w = if (w > 10) w - 10 else 10;
-        if (m.row == input_y and m.col >= x + 5 and m.col < x + 5 + box_w) {
-            self.is_searching = true;
-            return true;
-        }
-
-        const list_start_y = y + 5;
-        if (m.row >= list_start_y) {
-            const max_visible = (h - 6) / 3;
-            const row = (m.row - list_start_y) / 3;
-            if (row < max_visible) {
-                const clicked_idx = self.scroll_offset + row;
-                if (clicked_idx < self.plugins.items.len) {
-                    self.selected_idx = clicked_idx;
-                    self.is_detail_open = true;
-                    self.detail_plugin_idx = clicked_idx;
-                    return true;
-                }
+        } else if (std.mem.eql(u8, key, "r")) try self.triggerSearch() else if (std.mem.eql(u8, key, "j") or std.mem.eql(u8, key, "<Down>")) self.select(self.selected_idx + 1) else if (std.mem.eql(u8, key, "k") or std.mem.eql(u8, key, "<Up>")) self.select(self.selected_idx -| 1) else if (std.mem.eql(u8, key, "<Home>")) self.select(0) else if (std.mem.eql(u8, key, "<End>")) self.select(self.plugins.items.len -| 1) else if (self.plugins.items.len > 0) {
+            const p = self.plugins.items[self.selected_idx];
+            if (std.mem.eql(u8, key, "<Enter>")) {
+                if (!p.installed and (self.is_detail_open or self.split())) try self.changePlugin(self.selected_idx, "add") else self.is_detail_open = true;
+            } else if (!p.protected) {
+                if (std.mem.eql(u8, key, "e") and p.installed) try self.editConfig(p) else if (std.mem.eql(u8, key, "d") and p.installed) try self.changePlugin(self.selected_idx, if (p.enabled) "disable" else "enable") else if (std.mem.eql(u8, key, "u") and p.installed) self.confirm_remove = true;
             }
         }
-
         return true;
     }
 
-    pub fn toggleInstall(self: *ExtensionShop, idx: usize) !void {
-        if (self.plugins.items.len == 0 or idx >= self.plugins.items.len) return;
-        const p = &self.plugins.items[idx];
-        const script_path = try std.fs.path.join(self.allocator, &[_][]const u8{ self.data_dir, "store_search.py" });
-        defer self.allocator.free(script_path);
+    pub fn handleMouse(self: *ExtensionShop, mx: u16, my: u16, rect: Rect) !bool {
+        if (!primitives.containsRect(rect, mx, my)) return false;
+        if (my == rect.y + 2) try self.selectCategory(.installed) else if (my == rect.y + 4) try self.selectCategory(.all) else if (self.selected_category != .installed and my >= rect.y + 7 and my < rect.y + 7 + filters.len) try self.selectCategory(filters[my - rect.y - 7]);
+        return true;
+    }
 
-        const action = if (p.installed) "remove" else "add";
-        const argv = &[_][]const u8{ "python3", script_path, action, p.full_name };
+    pub fn handlePanelMouse(self: *ExtensionShop, m: input.MouseEvent) !bool {
+        const rect = self.panel_rect;
+        if (primitives.containsRect(self.sidebar_rect, m.col, m.row)) return self.handleMouse(m.col, m.row, self.sidebar_rect);
+        if (!primitives.containsRect(rect, m.col, m.row)) return false;
+        if (m.button == .wheel_up) {
+            self.select(self.selected_idx -| 1);
+            return true;
+        }
+        if (m.button == .wheel_down) {
+            self.select(self.selected_idx + 1);
+            return true;
+        }
+        if (m.action != .press or m.button != .left) return true;
+        if (rect.w < 34 or rect.h < 12) return true;
+        const x = rect.x + 2;
+        const y = rect.y;
+        if (m.row == y + rect.h - 2 and (self.confirm_remove or self.show_reload_confirm)) {
+            const yes_start: u16 = if (self.confirm_remove) 12 else 26;
+            if (m.col >= x + yes_start and m.col < x + yes_start + 9) return self.handlePanelKey("y");
+            return self.handlePanelKey("n");
+        }
+        if (self.confirm_remove or self.show_reload_confirm) return true;
+        if (m.row == y + 1 and m.col >= rect.x + rect.w - 10) return self.handlePanelKey("<Esc>");
+        if (m.row == y + 3) {
+            if (m.col < x + 15) try self.selectCategory(.installed) else if (m.col < x + 29) try self.selectCategory(.all);
+            return true;
+        }
+        if (m.row == y + 5) {
+            self.is_searching = true;
+            return true;
+        }
+        const width = rect.w - 4;
+        const list_width = if (self.split()) width * 45 / 100 else width;
+        if ((!self.is_detail_open or self.split()) and m.col < x + list_width and m.row >= y + 7 and m.row < y + rect.h - 2) {
+            const idx = self.scroll_offset + (m.row - y - 7) / 3;
+            if (idx < self.plugins.items.len) {
+                self.select(idx);
+                self.is_detail_open = true;
+            }
+        } else if (self.plugins.items.len > 0 and (self.is_detail_open or self.split())) {
+            if (m.row == y + 12) return self.handlePanelKey(if (self.plugins.items[self.selected_idx].installed) "e" else "<Enter>");
+            if (m.row == y + 14) return self.handlePanelKey("d");
+            if (m.row == y + 16) return self.handlePanelKey("u");
+        }
+        return true;
+    }
 
-        var child = try std.process.spawn(self.io, .{
-            .argv = argv,
-            .stdout = .pipe,
-            .stderr = .ignore,
-        });
-        const term = try child.wait(self.io);
-        const success = switch (term) {
-            .exited => |code| code == 0,
-            else => false,
-        };
-        if (!success) {
-            self.setMessage("Failed to update plugin");
+    pub fn changePlugin(self: *ExtensionShop, idx: usize, action: []const u8) !void {
+        if (idx >= self.plugins.items.len) return;
+        const p = self.plugins.items[idx];
+        if (p.protected) {
+            self.setMessage("This plugin is managed by Vide or its source.");
             return;
         }
-
-        p.installed = !p.installed;
+        const script_path = try std.fs.path.join(self.allocator, &.{ self.data_dir, "store_search.py" });
+        defer self.allocator.free(script_path);
+        var child = try std.process.spawn(self.io, .{ .argv = &.{ "python3", script_path, action, p.full_name }, .stdout = .pipe, .stderr = .ignore });
+        errdefer {
+            if (child.id != null) child.kill(self.io);
+        }
+        var output = std.array_list.Managed(u8).init(self.allocator);
+        defer output.deinit();
+        if (child.stdout) |out| {
+            while (true) {
+                var chunk: [1024]u8 = undefined;
+                const len = std.posix.read(out.handle, &chunk) catch 0;
+                if (len == 0) break;
+                try output.appendSlice(chunk[0..len]);
+            }
+        }
+        const term = try child.wait(self.io);
+        const parsed = std.json.parseFromSlice(struct { success: bool, message: []const u8 }, self.allocator, output.items, .{ .ignore_unknown_fields = true }) catch {
+            self.setMessage("Unable to update plugin. Inspect the Vide log.");
+            return;
+        };
+        defer parsed.deinit();
+        self.setMessage(parsed.value.message);
+        if (!parsed.value.success or term != .exited or term.exited != 0) return;
+        self.is_detail_open = false;
+        try self.triggerSearch();
         self.show_reload_confirm = true;
-        self.reload_confirm_yes = true;
     }
 
     fn editConfig(self: *ExtensionShop, p: StorePlugin) !void {
@@ -792,13 +516,18 @@ pub const ExtensionShop = struct {
             file.close(self.io);
         } else |err| switch (err) {
             error.FileNotFound => {
-                var template_buf: [512]u8 = undefined;
+                var template_buf: [1024]u8 = undefined;
                 const template = try std.fmt.bufPrint(
                     &template_buf,
                     "-- Configuration for {s}\n" ++
-                        "-- This file is loaded automatically by lazy.nvim\n\n" ++
+                        "-- Restart Vide after saving. Return a lazy.nvim spec override.\n" ++
+                        "-- opts configures plugins using automatic setup.\n" ++
+                        "-- For bundled custom setup, override config with a function.\n\n" ++
                         "return {{\n" ++
-                        "  -- Add your custom plugin configuration here\n" ++
+                        "  -- opts = {{ }},\n" ++
+                        "  -- config = function(plugin, opts)\n" ++
+                        "  --   require(\"plugin_module\").setup(opts or {{}})\n" ++
+                        "  -- end,\n" ++
                         "}}\n",
                     .{p.name},
                 );
@@ -807,6 +536,7 @@ pub const ExtensionShop = struct {
             else => return err,
         }
 
+        if (self.edit_config_path) |old| self.allocator.free(old);
         self.edit_config_path = config_file_path;
     }
 };

@@ -49,7 +49,9 @@ pub const ActivityBar = struct {
             const icon_y = rect.y + @as(u16, @intCast(idx)) * 3 + 1;
             if (icon_y >= rect.y + rect.h) break;
             const is_active = (idx == self.active_idx);
-            const fg = if (is_active) theme.fg_primary else theme.fg_secondary;
+            const hovered = renderer.isHovered(.{ .x = rect.x, .y = icon_y - 1, .w = rect.w, .h = @min(3, rect.y + rect.h - (icon_y - 1)) });
+            const bg = if (hovered) theme.bg_accent else theme.bg_sidebar;
+            const fg = if (is_active or hovered) theme.fg_primary else theme.fg_secondary;
             const icon_str = if (theme.nerd_fonts) item.icon else switch (idx) {
                 0 => "E ",
                 1 => "S ",
@@ -62,9 +64,9 @@ pub const ActivityBar = struct {
             if (is_active) {
                 // Vertical blue accent indicator on the left side
                 renderer.drawText(rect.x, icon_y, "▋", theme.bg_accent, theme.bg_sidebar, true, false);
-                renderer.drawText(rect.x + 2, icon_y, icon_str, fg, theme.bg_sidebar, true, false);
+                renderer.drawText(rect.x + 2, icon_y, icon_str, fg, bg, true, false);
             } else {
-                renderer.drawText(rect.x + 2, icon_y, icon_str, fg, theme.bg_sidebar, true, false);
+                renderer.drawText(rect.x + 2, icon_y, icon_str, fg, bg, true, false);
             }
         }
 
@@ -72,7 +74,7 @@ pub const ActivityBar = struct {
         if (rect.h > 2) {
             const settings_y = rect.y + rect.h - 2;
             const settings_icon = if (theme.nerd_fonts) " " else "* ";
-            renderer.drawText(rect.x + 2, settings_y, settings_icon, theme.fg_secondary, theme.bg_sidebar, true, false);
+            renderer.drawButtonText(rect.x + 2, settings_y, 2, settings_icon, theme.fg_secondary, theme.bg_sidebar, true, false);
         }
     }
 

@@ -2,6 +2,28 @@ vim.g.vide_is_terminal = true
 vim.opt.termguicolors = true
 vim.opt.laststatus = 0
 vim.opt.showmode = false
+vim.opt.ruler = false
+vim.opt.showcmd = false
+vim.opt.cmdheight = 0
+vim.opt.number = false
+vim.opt.relativenumber = false
+vim.opt.signcolumn = 'no'
+vim.opt.foldcolumn = '0'
+vim.opt.fillchars:append({ eob = ' ' })
+
+function _G.vide_ensure_terminal()
+    local buf = vim.api.nvim_get_current_buf()
+    local job = vim.bo[buf].buftype == 'terminal' and vim.b[buf].terminal_job_id or nil
+    if not job or vim.fn.jobwait({ job }, 0)[1] ~= -1 then
+        local exited_terminal = vim.bo[buf].buftype == 'terminal'
+        vim.cmd('enew')
+        if exited_terminal and vim.api.nvim_buf_is_valid(buf) then
+            vim.api.nvim_buf_delete(buf, { force = true })
+        end
+        vim.cmd('terminal')
+    end
+    vim.cmd('startinsert')
+end
 
 local function notify_win_positions()
     local windows = {}

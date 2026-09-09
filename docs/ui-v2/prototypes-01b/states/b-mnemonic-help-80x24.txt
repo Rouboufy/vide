@@ -1,0 +1,24 @@
+VIDE | VideNormal | compact | [FOCUS: Help]                                     
+[E]|[src/main.zig*]  src/tui/events.zig  !1 Problem  Lo|[Help]                  
+ S | 1  ~                                              |Invoked by: Editor      
+!1 | 2  const app = Vide.init();                       |> selected              
+ G | 3  ~                                              |! Error: fixture        
+ T | 4  ~                                              |1 unread                
+ C | 5  ~                                              |Loading...              
+ ? | 6  ~                                              |disabled [? why]        
+   | 7  ~                                              |Quit: app.quit          
+   | 8  ~                                              |[Return to editor]      
+   | 9  ~                                              |                        
+   |10  ~                                              |                        
+   |11  ~                                              |                        
+   |12  ~                                              |                        
+   |13  ~                                              |                        
+   |14  ~                                              |                        
+   |15  ~                                              |                        
+   |16  ~                                              |                        
+   |17  ~                                              |                        
+   |18  ~                                              |                        
+   |19  ~                                              |                        
+   |20  ~                                              |                        
+F1 Help | F6/Shift-F6 Regions | Ctrl-Shift-P Commands | Save Ctrl-S             
+Terminal: [Open] | when focused: Ctrl-\ e returns | Escape passes through       
