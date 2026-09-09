@@ -32,7 +32,7 @@ a {
   text-underline-offset: .25em;
 }
 
-a: hover {
+a:hover {
   color: var(--accent);
 }
 
@@ -625,9 +625,11 @@ footer a {
 @media(max-width:700px) {
   .nav {
     min-height: 74px;
+    flex-wrap: wrap;
   }
   .nav nav {
     gap: 1.1rem;
+    flex-wrap: wrap;
   }
   .nav nav a {
     font-size: .8rem;
