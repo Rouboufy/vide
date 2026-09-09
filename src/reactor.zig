@@ -255,7 +255,7 @@ test "poll interests can be added and removed" {
     var reactor = Reactor{};
     const token = try reactor.add(pipe[0], .task_completion, .{ .read = true });
     const byte = "x";
-    try std.testing.expectEqual(@as(usize, 1), posix.system.write(pipe[1], byte.ptr, byte.len));
+    try std.testing.expectEqual(1, posix.system.write(pipe[1], byte.ptr, byte.len));
     const ready = try reactor.collect(0);
     const completion = ready.find(.task_completion) orelse return error.MissingReadiness;
     try std.testing.expect(completion.readable);
