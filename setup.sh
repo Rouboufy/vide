@@ -291,9 +291,9 @@ else
     report_update_progress 72
     if ! $DRY_RUN; then
         expected=$(awk -v asset="$RELEASE_ASSET" '$2 == asset || $2 == "./" asset { print $1; exit }' "$DOWNLOAD_DIR/SHA256SUMS")
-        [ -n "$expected" ] && [ "$(hash_file "$DOWNLOAD_DIR/$RELEASE_ASSET")" = "$expected" ] || {
-            echo "Release checksum missing or invalid for $RELEASE_ASSET." >&2; exit 1;
-        }
+        if [ -z "$expected" ] || [ "$(hash_file "$DOWNLOAD_DIR/$RELEASE_ASSET")" != "$expected" ]; then
+            echo "Release checksum missing or invalid for $RELEASE_ASSET." >&2; exit 1
+        fi
         tar -xzf "$DOWNLOAD_DIR/$RELEASE_ASSET" -C "$DOWNLOAD_DIR"
         BUNDLE_DIR="$DOWNLOAD_DIR/${RELEASE_ASSET%.tar.gz}"
         for executable in bin/vide lib/vide/vide lib/vide/nvim/bin/nvim; do

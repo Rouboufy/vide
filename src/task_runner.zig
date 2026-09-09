@@ -1451,7 +1451,7 @@ test "production notifier writes one byte for a nonempty completion batch" {
     var byte: [1]u8 = undefined;
     const first = posix.system.read(runner.notifierFd(), &byte, 1);
     try std.testing.expectEqual(posix.E.SUCCESS, posix.errno(first));
-    try std.testing.expectEqual(@as(usize, 1), first);
+    try std.testing.expectEqual(1, first);
     const second = posix.system.read(runner.notifierFd(), &byte, 1);
     try std.testing.expectEqual(posix.E.AGAIN, posix.errno(second));
 

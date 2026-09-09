@@ -204,8 +204,8 @@ frontend for the integrated terminal. The shell starts when its panel is first
 opened. The Zig frontend handles input and renders native widgets alongside
 Neovim's UI events over MessagePack-RPC.
 
-See [the project specification](PROJECT.md) and
-[architecture](vide_architecture.md) for component responsibilities.
+See [architecture](docs/architecture.md) for component responsibilities and
+[usage](docs/usage.md) for the current interface.
 [Performance notes](docs/performance.md) contain machine-specific measurements.
 
 ```bash
