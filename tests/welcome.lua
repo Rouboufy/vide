@@ -16,13 +16,18 @@ assert(vim.wait(1000, function() return vim.bo.filetype == 'alpha' end))
 local function content() return table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n') end
 assert(content():find('vide /', 1, true))
 assert(content():find('Ctrl+F', 1, true))
+assert(content():find('Command menu', 1, true))
+assert(content():find('F1', 1, true))
 assert(content():find('recent example.txt', 1, true))
 local dashboard = require('alpha.themes.dashboard')
-local recent_button
+local recent_button, command_button
 for _, item in ipairs(dashboard.section.buttons.val) do
     if item.type == 'button' and item.opts.shortcut == '1' then recent_button = item end
+    if item.type == 'button' and item.opts.shortcut == 'F1' then command_button = item end
 end
 assert(recent_button)
+assert(command_button)
+assert(command_button.opts.keymap[3]:find('vide_open_commands', 1, true))
 recent_button.on_press()
 assert(vim.api.nvim_buf_get_name(0) == recent)
 _G.vide_alpha_start()

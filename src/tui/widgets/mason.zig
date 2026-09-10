@@ -194,6 +194,7 @@ pub const MasonWidget = struct {
 
     fn refreshHealth(self: *MasonWidget, rpc: *RpcClient) void {
         const script =
+            \\if not pcall(require, 'mason-registry') then return 'Language tools unavailable. Enable Mason in Settings > Plugins.' end
             \\local active = {}
             \\for _, client in ipairs(vim.lsp.get_clients()) do table.insert(active, client.name) end
             \\local recommended = vim.g.vide_recommended_servers or {}

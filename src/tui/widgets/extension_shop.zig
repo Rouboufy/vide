@@ -224,6 +224,30 @@ pub const ExtensionShop = struct {
     fn split(self: *ExtensionShop) bool {
         return self.panel_rect.w >= 76;
     }
+
+    const ConfirmLayout = struct {
+        card: Rect,
+        accept: Rect,
+        cancel: Rect,
+    };
+
+    fn confirmLayout(rect: Rect) ConfirmLayout {
+        const card_w = @min(rect.w -| 4, 42);
+        const card_h: u16 = 7;
+        const card = Rect{
+            .x = rect.x + (rect.w -| card_w) / 2,
+            .y = rect.y + (rect.h -| card_h) / 2,
+            .w = card_w,
+            .h = card_h,
+        };
+        const button_w: u16 = 12;
+        return .{
+            .card = card,
+            .accept = .{ .x = card.x + 2, .y = card.y + 4, .w = button_w, .h = 1 },
+            .cancel = .{ .x = card.x + 16, .y = card.y + 4, .w = button_w, .h = 1 },
+        };
+    }
+
     fn visibleRows(self: *ExtensionShop) usize {
         return @max(1, (self.panel_rect.h -| 9) / 3);
     }
@@ -265,6 +289,12 @@ pub const ExtensionShop = struct {
         self.panel_rect = rect;
         rend.drawRect(rect, " ", colors.fg_primary, colors.bg_editor);
         if (rect.w < 34 or rect.h < 12) {
+            if (self.confirm_remove or self.show_reload_confirm) {
+                if (rect.h > 0) rend.drawButtonText(rect.x, rect.y, rect.w, if (self.confirm_remove) "Uninstall?" else "Restart Vide?", @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5), colors.bg_accent, true, false);
+                if (rect.h > 1) rend.drawTextClipped(rect.x, rect.y + 1, rect.w, "Enlarge to confirm", colors.fg_primary, colors.bg_editor, false, false);
+                if (rect.h > 2) rend.drawTextClipped(rect.x, rect.y + 2, rect.w, "N / Esc: cancel", colors.fg_secondary, colors.bg_editor, false, false);
+                return;
+            }
             rend.drawTextClipped(rect.x, rect.y, rect.w, "Extensions: enlarge to browse", colors.fg_accent, colors.bg_editor, true, false);
             if (rect.h > 1) rend.drawTextClipped(rect.x, rect.y + 1, rect.w, "Esc returns to your file", colors.fg_secondary, colors.bg_editor, false, false);
             return;
@@ -310,9 +340,23 @@ pub const ExtensionShop = struct {
             if (self.split()) rend.drawRect(.{ .x = dx - 2, .y = y + 7, .w = 1, .h = rect.h -| 10 }, "│", colors.border_color, colors.bg_editor);
             self.drawDetails(rend, .{ .x = dx, .y = y + 7, .w = dw, .h = rect.h -| 10 }, colors);
         }
+        if (self.confirm_remove or self.show_reload_confirm) {
+            const confirm = confirmLayout(rect);
+            const title_fg = @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5);
+            rend.drawRect(confirm.card, " ", colors.fg_primary, colors.bg_sidebar);
+            rend.drawRect(.{ .x = confirm.card.x, .y = confirm.card.y, .w = confirm.card.w, .h = 1 }, " ", colors.fg_primary, colors.bg_accent);
+            rend.drawTextClipped(confirm.card.x + 1, confirm.card.y, confirm.card.w -| 2, if (self.confirm_remove) "Uninstall?" else "Restart Vide?", title_fg, colors.bg_accent, true, false);
+            rend.drawTextClipped(confirm.card.x + 2, confirm.card.y + 1, confirm.card.w -| 4, if (self.confirm_remove and self.selected_idx < self.plugins.items.len) self.plugins.items[self.selected_idx].name else "Plugin changes saved.", colors.fg_primary, colors.bg_sidebar, false, false);
+            rend.drawTextClipped(confirm.card.x + 2, confirm.card.y + 2, confirm.card.w -| 4, if (self.confirm_remove) "Configuration will be kept." else "Restart to apply them.", colors.fg_secondary, colors.bg_sidebar, false, false);
+            rend.drawButtonText(confirm.accept.x, confirm.accept.y, confirm.accept.w, if (self.confirm_remove) "[Y] Remove" else "[Y] Restart", @import("../theme.zig").readableForeground(colors.fg_primary, colors.bg_accent, 4.5), colors.bg_accent, true, false);
+            rend.drawButtonText(confirm.cancel.x, confirm.cancel.y, confirm.cancel.w, if (self.confirm_remove) "[N] Cancel" else "[N] Later", colors.fg_primary, colors.bg_editor, true, false);
+            rend.drawTextClipped(confirm.card.x + 1, confirm.card.y + 6, confirm.card.w -| 2, if (self.confirm_remove) "Esc  Cancel" else "Esc  Close", colors.fg_secondary, colors.bg_sidebar, false, false);
+        } else {
+            const foot_y = y + rect.h - 2;
+            const hint = if (self.is_searching) "Enter Search   Esc Cancel" else if (width < 60) "Enter Details  E Config  D Toggle  U Remove" else "Enter Details   E Config   D Enable/Disable   U Uninstall";
+            rend.drawButtonText(x, foot_y, width, hint, colors.fg_secondary, colors.bg_sidebar, false, false);
+        }
         const foot_y = y + rect.h - 2;
-        const hint = if (self.confirm_remove) "Uninstall?  Y Confirm  N Cancel  (config kept)" else if (self.show_reload_confirm) "Saved. Restart Vide?  Y Restart  N Later" else if (self.is_searching) "Enter Search   Esc Cancel" else if (width < 60) "Enter Details  E Config  D Toggle  U Remove" else "Enter Details   E Config   D Enable/Disable   U Uninstall";
-        rend.drawButtonText(x, foot_y, width, hint, if (self.confirm_remove or self.show_reload_confirm) colors.fg_accent else colors.fg_secondary, colors.bg_sidebar, false, false);
         if (self.message) |msg| rend.drawTextClipped(x, foot_y + 1, width, msg, colors.fg_accent, colors.bg_editor, false, false);
     }
 
@@ -368,6 +412,7 @@ pub const ExtensionShop = struct {
         }
         if (self.confirm_remove or self.show_reload_confirm) {
             if (std.mem.eql(u8, key, "y") or std.mem.eql(u8, key, "Y")) {
+                if (self.panel_rect.w < 34 or self.panel_rect.h < 12) return true;
                 if (self.confirm_remove) {
                     self.confirm_remove = false;
                     try self.changePlugin(self.selected_idx, "remove");
@@ -409,6 +454,13 @@ pub const ExtensionShop = struct {
 
     pub fn handlePanelMouse(self: *ExtensionShop, m: input.MouseEvent) !bool {
         const rect = self.panel_rect;
+        if (self.confirm_remove or self.show_reload_confirm) {
+            if (m.action != .press or m.button != .left or rect.w < 34 or rect.h < 12) return true;
+            const confirm = confirmLayout(rect);
+            if (primitives.containsRect(confirm.accept, m.col, m.row)) return self.handlePanelKey("y");
+            if (primitives.containsRect(confirm.cancel, m.col, m.row)) return self.handlePanelKey("n");
+            return true;
+        }
         if (primitives.containsRect(self.sidebar_rect, m.col, m.row)) return self.handleMouse(m.col, m.row, self.sidebar_rect);
         if (!primitives.containsRect(rect, m.col, m.row)) return false;
         if (m.button == .wheel_up) {
@@ -423,12 +475,6 @@ pub const ExtensionShop = struct {
         if (rect.w < 34 or rect.h < 12) return true;
         const x = rect.x + 2;
         const y = rect.y;
-        if (m.row == y + rect.h - 2 and (self.confirm_remove or self.show_reload_confirm)) {
-            const yes_start: u16 = if (self.confirm_remove) 12 else 26;
-            if (m.col >= x + yes_start and m.col < x + yes_start + 9) return self.handlePanelKey("y");
-            return self.handlePanelKey("n");
-        }
-        if (self.confirm_remove or self.show_reload_confirm) return true;
         if (m.row == y + 1 and m.col >= rect.x + rect.w - 10) return self.handlePanelKey("<Esc>");
         if (m.row == y + 3) {
             if (m.col < x + 15) try self.selectCategory(.installed) else if (m.col < x + 29) try self.selectCategory(.all);

@@ -137,6 +137,11 @@ fn workspaceAction(a: *App, action: workspace.Action, layout: Layout) anyerror!v
             a.terminal_focus = false;
             workspace.command(a, "_G.vide_close_floating_windows(); local ok = pcall(vim.cmd, 'Telescope find_files'); if not ok then vim.ui.input({prompt='Open file: ', completion='file'}, function(p) if p and p ~= '' then vim.cmd.edit(vim.fn.fnameescape(p)) end end) end");
         },
+        .search_project => {
+            a.sidebar_focus = false;
+            a.terminal_focus = false;
+            workspace.command(a, "_G.vide_close_floating_windows(); local ok, err = pcall(vim.cmd, 'Telescope live_grep'); if not ok then _G.vide_native_notice('error', 'Project search is unavailable: ' .. tostring(err)) end");
+        },
         .explorer, .git, .ai, .extensions => {
             if (a.mode == .zen) _ = try handleKey(a, .{ .char = 0, .raw = kb.toggle_zen }, layout);
             a.workspace.overview = false;
@@ -751,6 +756,12 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
             a.invalidations.damageAll();
             return true;
         }
+        // The assistant chooser owns Escape before the workspace back action.
+        if (a.sidebar_focus and !a.workspace.overview and a.show_file_tree and a.activity_bar.active_idx == 3 and a.ai_panel.choosing and std.mem.eql(u8, nk, "<Esc>")) {
+            _ = a.ai_panel.handleKey(nk);
+            a.invalidations.damageAll();
+            return true;
+        }
         if (a.mode != .zen and a.sidebar_focus and !a.workspace.overview and std.mem.eql(u8, nk, "<Esc>") and a.explorer.action_state == .none and !a.git_panel.is_focus_commit) {
             a.workspace.overview = true;
             a.invalidations.damageAll();
@@ -765,7 +776,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.invalidations.damageAll();
                 return true;
             }
-            if (std.mem.eql(u8, nk, "<Tab>")) {
+            if (std.mem.eql(u8, nk, "<Tab>") and a.activity_bar.active_idx != 3) {
                 a.activity_bar.active_idx = (a.activity_bar.active_idx + 1) % 5;
                 if (a.activity_bar.active_idx == 4) {
                     a.extension_shop.open() catch {};
@@ -773,7 +784,7 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                 a.invalidations.damageAll();
                 return true;
             }
-            if (std.mem.eql(u8, nk, "<S-Tab>")) {
+            if (std.mem.eql(u8, nk, "<S-Tab>") and a.activity_bar.active_idx != 3) {
                 a.activity_bar.active_idx = if (a.activity_bar.active_idx == 0) 4 else a.activity_bar.active_idx - 1;
                 if (a.activity_bar.active_idx == 4) {
                     a.extension_shop.open() catch {};
@@ -856,12 +867,9 @@ pub fn handleKey(a: *App, k: input.KeyEvent, layout: Layout) !bool {
                         a.rpc.notify("nvim_command", cmd_p) catch {};
                         if (aiCommandMovesFocus(cmd)) a.sidebar_focus = false;
                     }
-                    a.invalidations.damageAll();
-                    return true;
-                } else if (std.mem.eql(u8, nk, "j") or std.mem.eql(u8, nk, "k") or std.mem.eql(u8, nk, "<Down>") or std.mem.eql(u8, nk, "<Up>")) {
-                    a.invalidations.damageAll();
-                    return true;
                 }
+                a.invalidations.damageAll();
+                return true; // Panel navigation must never reach the editor or chat.
             } else if (a.show_file_tree and a.activity_bar.active_idx == 4) {
                 if (try a.extension_shop.handleKey(nk)) {
                     a.invalidations.damageAll();

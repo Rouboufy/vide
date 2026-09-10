@@ -47,6 +47,7 @@ pub const Keybindings = struct {
     toggle_zen: []const u8 = "<F11>",
     new_file: []const u8 = "<C-n>", // Ctrl-n
     find_file: []const u8 = "<C-p>", // Quick Open; Ctrl-F remains Neovim's page motion.
+    search_project: []const u8 = "<M-g>", // Portable terminal shortcut for project-wide grep.
     quit: []const u8 = "<C-q>", // Ctrl-q
     save_file: []const u8 = "<C-s>",
     commands: []const u8 = "<F1>",
@@ -108,7 +109,7 @@ pub const Keybindings = struct {
     }
 };
 
-const binding_fields = [_][]const u8{ "toggle_terminal", "toggle_explorer", "toggle_zen", "new_file", "find_file", "quit", "save_file", "commands", "focus_next" };
+const binding_fields = [_][]const u8{ "toggle_terminal", "toggle_explorer", "toggle_zen", "new_file", "find_file", "search_project", "quit", "save_file", "commands", "focus_next" };
 
 pub fn formatKeyName(raw: []const u8, out: []u8) []const u8 {
     if (raw.len == 0) return "None";
@@ -1011,13 +1012,14 @@ pub const SettingsWidget = struct {
             4 => {
                 ren.drawText(content_x, content_y, "Keybindings / Enter or click to record", theme.fg_primary, theme.bg_sidebar, true, false);
 
-                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Sidebar", "Toggle Zen Mode", "New File", "Find File", "Quit", "Save File", "Commands", "Next Region" };
+                const actions = [_][]const u8{ "Toggle Terminal", "Toggle Sidebar", "Toggle Zen Mode", "New File", "Find File", "Search Project", "Quit", "Save File", "Commands", "Next Region" };
                 const current_keys = [_][]const u8{
                     self.config.keybindings.toggle_terminal,
                     self.config.keybindings.toggle_explorer,
                     self.config.keybindings.toggle_zen,
                     self.config.keybindings.new_file,
                     self.config.keybindings.find_file,
+                    self.config.keybindings.search_project,
                     self.config.keybindings.quit,
                     self.config.keybindings.save_file,
                     self.config.keybindings.commands,
@@ -1036,10 +1038,10 @@ pub const SettingsWidget = struct {
                     ren.drawControlText(content_x, content_y + 2 + @as(u16, @intCast(i)), draw_str, color, theme.bg_sidebar, false, false);
                 }
 
-                ren.drawControlText(content_x, content_y + 12, "v Vim-safe", theme.fg_secondary, theme.bg_sidebar, false, false);
-                ren.drawControlText(content_x + 13, content_y + 12, "p Familiar", theme.fg_secondary, theme.bg_sidebar, false, false);
-                ren.drawControlText(content_x + 26, content_y + 12, "r Reset selected", theme.fg_secondary, theme.bg_sidebar, false, false);
-                ren.drawText(content_x, content_y + 13, "Presets replace bindings; Ctrl+S saves", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x, content_y + 13, "v Vim-safe", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x + 13, content_y + 13, "p Familiar", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawControlText(content_x + 26, content_y + 13, "r Reset selected", theme.fg_secondary, theme.bg_sidebar, false, false);
+                ren.drawText(content_x, content_y + 14, "Presets replace bindings; Ctrl+S saves", theme.fg_secondary, theme.bg_sidebar, false, false);
             },
             5 => {
                 ren.drawText(content_x, content_y, "About Vide", theme.fg_primary, theme.bg_sidebar, true, false);
@@ -1484,7 +1486,7 @@ pub const SettingsWidget = struct {
             if (self.active_tab == 4 and (std.mem.eql(u8, key, "v") or std.mem.eql(u8, key, "p"))) {
                 var updated = self.config;
                 const preset: Keybindings = if (std.mem.eql(u8, key, "v"))
-                    .{ .toggle_explorer = "<M-e>", .toggle_terminal = "<M-t>", .new_file = "<M-n>", .find_file = "<M-p>" }
+                    .{ .toggle_explorer = "<M-e>", .toggle_terminal = "<M-t>", .new_file = "<M-n>", .find_file = "<M-p>", .search_project = "<M-g>" }
                 else
                     .{ .toggle_explorer = "<C-b>" };
                 inline for (binding_fields) |field| @field(updated.keybindings, field) = @field(preset, field);
@@ -1917,7 +1919,7 @@ pub const SettingsWidget = struct {
                         }
                     },
                     4 => {
-                        if (my == content_y + 12) {
+                        if (my == content_y + 13) {
                             self.keyboard_focus = .content;
                             return self.handleKey(if (mx < content_x + 13) "v" else if (mx < content_x + 26) "p" else "r");
                         }

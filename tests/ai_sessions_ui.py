@@ -45,7 +45,9 @@ with tempfile.TemporaryDirectory(prefix="vide-ai-ui-") as directory:
 
     env = {
         **{f"XDG_{name.upper()}_HOME": str(base / name) for name in ("config", "data", "state", "cache")},
-        "PATH": str(base / "bin") + os.pathsep + os.environ["PATH"],
+        # Keep availability deterministic: only the fixture CLIs should be
+        # discoverable, even when the host has other assistant commands.
+        "PATH": str(base / "bin") + os.pathsep + "/usr/bin:/bin",
         "VIDE_DISABLE_PLUGINS": "1", "VIDE_SKIP_ONBOARDING": "1", "TERM": "xterm-256color", "SHELL": "/bin/sh",
     }
     command = shlex.join(["env", *(f"{k}={v}" for k, v in env.items()), str(ROOT / "zig-out/bin/vide"), str(sample)])
@@ -53,19 +55,57 @@ with tempfile.TemporaryDirectory(prefix="vide-ai-ui-") as directory:
         tmux("new-session", "-d", "-s", "ui", "-x", "120", "-y", "36", "-c", str(base), command)
         wait_for('sample.py')
         time.sleep(0.3)
+        click("< Workspace")
         click("AI assistants")
         wait_for("AI CHAT")
         assert 'Context' not in screen() and 'Actions' not in screen()
+
+        # The chooser owns Escape and all printable/navigation keys while the
+        # sidebar is focused.  Cancelling must leave the chooser closed and
+        # must not edit the source buffer behind it.
+        click("Codex v")
+        chooser = wait_for("CHOOSE AGENT")
+        assert "Choose an assistant" in chooser, chooser
+        assert "Enter pick  Esc back" in chooser, chooser
+        tmux("send-keys", "-t", "ui", "Escape")
+        wait_for("AI CHAT")
+        assert "CHOOSE AGENT" not in screen()
+        before = sample.read_text()
+        tmux("send-keys", "-l", "-t", "ui", "sidebar-input")
+        time.sleep(0.1)
+        assert sample.read_text() == before, "Sidebar key leaked into the editor"
+        assert "sidebar-input" not in screen(), "Sidebar key edited the visible editor buffer"
+
         click("Open chat")
         wait_for("Return to chat")
         click("Codex v")
         wait_for("CHOOSE AGENT")
-        click("Claude Code")
+        # Keyboard selection must activate the highlighted assistant.  Codex
+        # is initially selected, so one Up selects Claude Code.
+        tmux("send-keys", "-t", "ui", "Up")
+        tmux("send-keys", "-t", "ui", "Enter")
         wait_for("Open chat")
         assert "Send file" not in screen(), "Actions target the previous agent"
         click("Open chat")
         wait_for("Return to chat")
+        # Tab navigation followed by Enter activates the next assistant.
         click("Claude Code v")
+        tmux("send-keys", "-t", "ui", "Tab")
+        tmux("send-keys", "-t", "ui", "Enter")
+        wait_for("Open chat")
+        click("Open chat")
+        wait_for("Return to chat")
+        # Picking an unavailable assistant exposes a single recovery action;
+        # that action must reopen the chooser rather than trying to launch it.
+        click("Codex v")
+        click("Antigravity")
+        wait_for("Choose assistant")
+        assert "Open chat" not in screen()
+        click("Choose assistant")
+        wait_for("CHOOSE AGENT")
+        tmux("send-keys", "-t", "ui", "Escape")
+        wait_for("Choose assistant")
+        click("Antigravity v")
         click("Codex")
         click("Return to chat")
         grid = wait_for("Chat open")
@@ -78,6 +118,10 @@ with tempfile.TemporaryDirectory(prefix="vide-ai-ui-") as directory:
         click("Stop chat")
         grid = wait_for("Chat stopped")
         pathlib.Path('/tmp/vide-ai-compact.txt').write_text(grid)
+        assert "Send selection" not in grid, grid
+        assert "Send file" not in grid, grid
+        assert "Review changes" not in grid, grid
+        assert "Restart chat" in grid, grid
         click("Restart chat")
         wait_for("Chat open")
         tmux("send-keys", "-t", "ui", "F1")
