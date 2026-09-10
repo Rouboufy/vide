@@ -83,10 +83,21 @@ def run():
             command("extensions")
             send("Enter")
             send("d")
-            wait("Restart Vide?")
+            prompt = wait("Restart Vide?")
+            assert "Plugin changes saved." in prompt
+            assert "[Y] Restart" in prompt and "[N] Later" in prompt
+            prompt_rows = prompt.splitlines()
+            assert next(i for i, row in enumerate(prompt_rows) if "Restart Vide?" in row) < len(prompt_rows) - 4
             assert states()["example/alpha-demo"] == "disabled"
-            send("Escape")
+            tmux("resize-window", "-t", "ui", "-x", "60", "-y", "20")
+            time.sleep(.3)
+            prompt = wait("Restart Vide?")
+            assert "[Y] Restart" in prompt and "[N] Later" in prompt
+            assert prompt.count("Restart Vide?") == 1, prompt
+            pathlib.Path("/tmp/vide-plugin-confirmation.txt").write_text(prompt)
+            click("[N] Later")
             wait("Disabled")
+            tmux("resize-window", "-t", "ui", "-x", "110", "-y", "36")
             send("Enter")
             click("D  Enable plugin")
             wait("Restart Vide?")
@@ -94,12 +105,34 @@ def run():
             send("Escape")
             send("Enter")
             click("U  Uninstall plugin")
-            wait("Uninstall?")
-            send("n")
+            prompt = wait("Uninstall?")
+            assert "Configuration will be kept." in prompt, prompt
+            assert "[Y] Remove" in prompt and "[N] Cancel" in prompt, prompt
+            assert next(i for i, row in enumerate(prompt.splitlines()) if "Uninstall?" in row) < len(prompt.splitlines()) - 4
+            tmux("resize-window", "-t", "ui", "-x", "60", "-y", "20")
+            time.sleep(.3)
+            prompt = wait("Uninstall?")
+            assert "[Y] Remove" in prompt and "[N] Cancel" in prompt, prompt
+            pathlib.Path("/tmp/vide-plugin-uninstall.txt").write_text(prompt)
+            tmux("resize-window", "-t", "ui", "-x", "40", "-y", "20")
+            time.sleep(.3)
+            wait("Enlarge to confirm")
+            send("y")
+            assert states()["example/alpha-demo"] == "enabled"
+            tmux("resize-window", "-t", "ui", "-x", "60", "-y", "20")
+            time.sleep(.3)
+            click("[N] Cancel")
+            assert "Uninstall?" not in screen()
+            tmux("resize-window", "-t", "ui", "-x", "110", "-y", "36")
+            time.sleep(.3)
             assert states()["example/alpha-demo"] == "enabled"
             send("u")
             wait("Uninstall?")
-            send("y")
+            send("Escape")
+            assert states()["example/alpha-demo"] == "enabled"
+            send("u")
+            wait("Uninstall?")
+            click("[Y] Remove")
             wait("Restart Vide?")
             assert states()["example/alpha-demo"] == "removed"
             assert config.read_text() == original

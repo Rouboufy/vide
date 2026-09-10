@@ -264,14 +264,17 @@ local plugins_setup = {
                 local kb = state.keybindings or {}
                 local raw_new = kb.new_file or "<C-n>"
                 local raw_find = kb.find_file or "<C-f>"
+                local raw_search = kb.search_project or "<M-g>"
                 local raw_quit = kb.quit or "<C-q>"
                 local raw_recent = "<C-r>"
-                local raw_help = kb.help or "<F1>"
-                if raw_help == "" then raw_help = "<F1>" end
+                local raw_commands = kb.commands or "<F1>"
+                if raw_commands == "" then raw_commands = "<F1>" end
+                local raw_help = kb.help or "?"
+                if raw_help == "" then raw_help = "?" end
                 local width = math.max(12, math.min(44, vim.api.nvim_win_get_width(0) - 6))
                 local height = vim.api.nvim_win_get_height(0)
                 dashboard.config.layout[3].val = height < 18 and 1 or 2
-                local recent_limit = math.max(0, math.min(5, height - 13))
+                local recent_limit = math.max(0, math.min(5, height - 15))
                 local function clip(text, limit)
                     while vim.fn.strdisplaywidth(text) > limit do
                         text = vim.fn.strcharpart(text, 0, vim.fn.strchars(text) - 1)
@@ -293,6 +296,7 @@ local plugins_setup = {
                 local buttons = {
                     button(raw_new, "New file", "<cmd>enew<cr>"),
                     button(raw_find, "Find file", "<cmd>Telescope find_files<cr>"),
+                    button(raw_search, "Search project", "<cmd>Telescope live_grep<cr>"),
                     button(raw_recent, "Recent files", "<cmd>Telescope oldfiles<cr>"),
                     { type = "padding", val = 1 },
                 }
@@ -312,6 +316,7 @@ local plugins_setup = {
                     table.insert(buttons, { type = 'text', val = clip('No recent files in this project', width), opts = { position = 'center', hl = 'VideWelcomeMuted' } })
                 end
                 table.insert(buttons, { type = "padding", val = 1 })
+                table.insert(buttons, button(raw_commands, "Command menu", "<cmd>lua vim.rpcnotify(1, 'vide_open_commands')<cr>", true))
                 table.insert(buttons, button(raw_help, "Help", "<cmd>HelpMenu<cr>", true))
                 table.insert(buttons, button(raw_quit, "Quit", "<cmd>qa<cr>", true))
                 dashboard.section.buttons.val = buttons
@@ -2339,6 +2344,7 @@ local VIDE_KEYS = {
     "  ── TELESCOPE & SEARCH ──────────────────────────────────────────",
     "  <Space> <Space>        Telescope: Show All Commands",
     "  <Space> f f            Telescope: Find Files",
+    "  <Space> f g / Alt+G    Telescope: Search Project (ripgrep)",
     "  <Space> f r            Telescope: Open Recent Files",
     "  Ctrl+F                 Telescope / Search",
     "",
@@ -2493,21 +2499,6 @@ end
 local onboarding = { buf = nil, win = nil }
 local onboarding_marker = vim.fn.stdpath('data') .. '/onboarding-complete'
 
-local function onboarding_capabilities()
-    local term = vim.env.TERM or ''
-    local colorterm = (vim.env.COLORTERM or ''):lower()
-    local true_color = colorterm == 'truecolor' or colorterm == '24bit' or term:find('direct', 1, true) ~= nil
-    local mouse = term ~= '' and term ~= 'dumb' and term ~= 'linux' and vim.o.mouse ~= ''
-    local shell = vim.env.SHELL or vim.o.shell or ''
-    return {
-        { 'True color', true_color, true_color and '24-bit color detected' or 'using portable terminal colors' },
-        { 'Mouse', mouse, mouse and 'click and drag reporting available' or 'keyboard controls remain available' },
-        { 'Nerd Font', vim.g.vide_nerd_fonts == true, vim.g.vide_nerd_fonts == true and 'enabled in Settings' or 'portable symbols enabled' },
-        { 'Clipboard', vim.fn.has('clipboard') == 1, vim.fn.has('clipboard') == 1 and 'system provider detected' or 'uses an editor register until a provider is installed' },
-        { 'Shell', shell ~= '' and vim.fn.executable(shell) == 1, shell ~= '' and shell or 'not detected' },
-    }
-end
-
 local function complete_onboarding()
     vim.fn.mkdir(vim.fn.fnamemodify(onboarding_marker, ':h'), 'p')
     vim.fn.writefile({ 'completed' }, onboarding_marker)
@@ -2531,7 +2522,7 @@ _G.open_vide_onboarding = function()
     if onboarding.win and vim.api.nvim_win_is_valid(onboarding.win) then return end
     if vim.fn.mode() == 'i' then vim.cmd('stopinsert') end
     local width = math.max(1, math.min(76, vim.o.columns - 4))
-    local height = math.max(1, math.min(29, vim.o.lines - 4))
+    local height = math.max(1, math.min(23, vim.o.lines - 4))
     onboarding.buf = vim.api.nvim_create_buf(false, true)
     onboarding.win = vim.api.nvim_open_win(onboarding.buf, true, {
         relative = 'editor', width = width, height = height,
@@ -2544,36 +2535,69 @@ _G.open_vide_onboarding = function()
     vim.bo[onboarding.buf].swapfile = false
     vim.bo[onboarding.buf].filetype = 'vide-onboarding'
     local lines = {
-        '', '  Choose how editing should work:',
-        '    [n] NORMAL  Vim-style modal editing with full command access',
-        '    [i] IDE     Modeless text editing with familiar desktop shortcuts',
-        '', '  Your environment:',
+        '  [ Click to close guide ]  or press Enter / Esc / q',
+        '  Closing this guide keeps Vide open and your current mode.',
+        '',
+        '  Start here',
+        '  1. Open a file: Ctrl+E shows files. Click a file to open it.',
+        '     Or press Ctrl+N to create a new file.',
+        '  2. Edit: in IDE mode, click in the text and start typing.',
+        '     In Normal mode, press i to type; Esc stops typing.',
+        '  3. Save: Ctrl+S. For a new file, enter a name when asked.',
+        '',
+        '  Choose your editing style (press a key to start)',
+        '  [i] IDE - type right away, like a regular text editor.',
+        '  [n] Normal - Vim controls: i to type, Esc for commands.',
+        '  You can change this later in Settings > General.',
+        '',
+        '  A few useful controls',
+        '  Ctrl+F Find   Ctrl+Z Undo   Ctrl+T Open / hide terminal',
+        '  Mouse: click to focus, drag text to select, right-click to copy.',
+        '  F11 hides the panels; press it again to bring them back.',
+        '',
+        '  [l] Optional code tools (language servers for code suggestions)',
+        '  Reopen this guide from Help: press o on the Help page.',
+        '  In Normal mode, you can also type :VideOnboarding then Enter.',
     }
-    for _, capability in ipairs(onboarding_capabilities()) do
-        table.insert(lines, string.format('    [%s] %-11s %s', capability[2] and 'OK' or '--', capability[1], capability[3]))
-    end
-    vim.list_extend(lines, {
-        '', '  Mouse: click to focus, drag in text to select, right-click the editor',
-        '  for copy/paste/edit actions, and drag panel borders to resize.',
-        '', '  Six essentials:',
-        '    Ctrl+S Save     Ctrl+F Find       Ctrl+Z Undo',
-        '    Ctrl+E Files    Ctrl+T Terminal   F11 Zen / previous mode',
-        '', '  [l] Review optional language servers    [q] Dismiss',
-        '  Reopen later with :VideOnboarding or from the Vide Help page.',
-    })
     vim.api.nvim_buf_set_lines(onboarding.buf, 0, -1, false, lines)
     vim.bo[onboarding.buf].modifiable = false
+    vim.wo[onboarding.win].wrap = true
+    vim.wo[onboarding.win].linebreak = true
+    vim.api.nvim_win_set_cursor(onboarding.win, { 1, 0 })
+    local ns = vim.api.nvim_create_namespace('vide_onboarding')
+    vim.api.nvim_buf_add_highlight(onboarding.buf, ns, 'Visual', 0, 2, 26)
+    for _, line in ipairs({ 4, 11, 16 }) do
+        vim.api.nvim_buf_add_highlight(onboarding.buf, ns, 'Title', line - 1, 0, -1)
+    end
     local map = function(key, callback, desc)
         vim.keymap.set({ 'n', 'i' }, key, callback, { buffer = onboarding.buf, silent = true, desc = desc })
     end
     map('n', function() _G.vide_onboarding_choose('normal') end, 'Choose Normal mode')
     map('i', function() _G.vide_onboarding_choose('ide') end, 'Choose IDE mode')
+    map('<CR>', complete_onboarding, 'Close guide and start editing')
+    map('<C-c>', complete_onboarding, 'Dismiss onboarding')
+    map('<LeftMouse>', function()
+        local mouse = vim.fn.getmousepos()
+        if mouse.winid == onboarding.win and mouse.line == 1 then
+            complete_onboarding()
+        else
+            vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<LeftMouse>', true, false, true), 'n', false)
+        end
+    end, 'Click to close guide')
     map('q', complete_onboarding, 'Dismiss onboarding')
     map('<Esc>', complete_onboarding, 'Dismiss onboarding')
     map('l', function()
         complete_onboarding()
-        if vim.fn.exists(':Mason') == 2 then vim.cmd('Mason')
-        else _G.vide_native_notice('warning', 'Language-server setup is optional and unavailable while plugins are disabled; reopen it later from Settings > Plugins.') end
+        -- Use Vide's native package panel, as Settings > Plugins does.
+        -- Opening Mason's Neovim float bypasses that UI and fails when the
+        -- plugin command has not been registered yet.
+        local ok = pcall(vim.rpcnotify, 1, 'vide_open_language_tools')
+        if not ok then
+            local opened, err = pcall(vim.cmd, 'Mason')
+            if not opened then
+                vim.notify('Language tools are unavailable. Open Settings > Plugins to enable Mason. ' .. tostring(err), vim.log.levels.WARN)
+            end
+        end
     end, 'Review language servers')
 end
 

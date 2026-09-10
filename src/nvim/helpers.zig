@@ -127,6 +127,25 @@ pub fn handleNotification(ctx: ?*anyopaque, method: []const u8, params: Value) a
             ui_state.telescope_rects[1] = null;
             ui_state.widget_title_len = 0;
         }
+    } else if (std.mem.eql(u8, method, "vide_open_commands")) {
+        app.workspace.palette = true;
+        app.workspace.buffer_picker = false;
+        app.workspace.editing_shortcut = null;
+        app.workspace.shortcut_message = "";
+        app.workspace.query_len = 0;
+        app.workspace.command_selected = 0;
+        app.workspace.command_scroll = 0;
+        app.invalidations.damageAll();
+    } else if (std.mem.eql(u8, method, "vide_open_language_tools")) {
+        app.settings_widget.is_open = false;
+        app.mason_widget.is_open = true;
+        app.mason_widget.selected_tab = .lsp;
+        app.mason_widget.search_len = 0;
+        app.mason_widget.is_searching = false;
+        app.mason_widget.selected_idx = 0;
+        app.mason_widget.scroll_offset = 0;
+        app.mason_widget.refresh(app.rpc);
+        app.invalidations.damageAll();
     } else if (std.mem.eql(u8, method, "vide_toggle_zen")) {
         ui_state.toggle_zen_requested = true;
     } else if (std.mem.eql(u8, method, "vide_toggle_ide")) {

@@ -30,15 +30,35 @@ open it, and **Space** to stage or unstage it. **s/+** stages and **u/-** unstag
 **Home/End** jumps to the first/last change. Press **c** to write a commit message,
 then **Enter** to commit or **Esc** to return to the list.
 
+## AI assistants
+
+Open **AI assistants** from the workspace list. Select the assistant name to
+change it; the chooser shows which CLIs are installed and which chats are
+running. Choose an assistant, then **Open chat** and type your request in its
+terminal. Install missing assistant CLIs in your terminal and restart Vide to
+refresh detection.
+
+In the AI sidebar, **Up/Down** or **Tab/Shift+Tab** selects an item and **Enter**
+activates it. Click a row or its description for the same action. **Escape**
+cancels the assistant chooser; from the main AI panel it returns to Workspace.
+Use **F6** to move between regions.
+
+With a chat running, **Send selection** and **Send file** paste code into that
+chat for you to use in your next request. **Review changes** sends a request to
+review the working-tree diff. **Return to chat** resumes typing, **Stop chat**
+ends the process, and **Restart chat** starts a fresh session. Actions only
+apply to the assistant whose chat is currently open.
+
 ## First run
 
-On its first launch, Vide opens an offline-capable onboarding guide. Choose
-Normal or IDE editing, review detected color, mouse, Nerd Font preference,
-clipboard, and shell capabilities, and learn the essential mouse actions and
-six core shortcuts. Language-server setup is offered through Mason but remains
-optional. Dismiss the guide with `q` or Escape; reopen it from the Help page by
-pressing `o`, or run `:VideOnboarding`. The choice and completion marker are
-stored only in Vide's isolated data directory.
+On its first launch, Vide explains how to open, edit, and save a file, with
+plain-language choices for IDE and Normal (Vim) editing. Press `i` or `n` to
+choose a style and start editing. Optional language-server setup is available
+with `l`, which opens Vide's built-in package manager on the LSP tab. Close the guide with Enter, Escape, `q`, Ctrl+C, or by clicking
+**Click to close guide** at the top. Closing keeps Vide open and preserves your current
+editing style. Reopen it from the Help page by pressing `o`, or run
+`:VideOnboarding` in Normal mode. The choice and completion marker are stored
+only in Vide's isolated data directory.
 
 ## Default Keybindings
 
@@ -69,7 +89,7 @@ These shipped mappings apply primarily in Normal mode (`Leader = Space`). IDE mo
 | **Force quit Vide** | `Ctrl + Q` |
 | **Open new buffer** | `Ctrl + N` |
 | **Find files (Telescope, with a filename prompt when plugins are unavailable)** | `Space f f` or `Ctrl + P` |
-| **Live grep (Telescope)** | `Space f g` |
+| **Search project text with ripgrep (Telescope)** | `Space f g` or `Alt + G` |
 | **Toggle Neo-tree** | `Space e` |
 | **Toggle bottom terminal split** | `Space o t` |
 | **Toggle vertical terminal split** | `Space o Shift+T` |
@@ -105,7 +125,7 @@ shortcut so you can assign your preferred keys. The buffer list works without
 plugins, including in Zen and narrow terminals.
 
 The shortcut editor also offers `v` for a Vim-safe preset (Alt+E sidebar,
-Alt+T terminal, Alt+N new file, Alt+P files) and `p` for a familiar IDE preset
+Alt+T terminal, Alt+N new file, Alt+P files, Alt+G project search) and `p` for a familiar IDE preset
 (Ctrl+B sidebar, Ctrl+T terminal, Ctrl+N new file, Ctrl+P files). Both use
 Ctrl+S to save, F1 for commands, F6 for region focus, and F11 for Zen. Presets
 replace the core bindings only when selected; save with Ctrl+S. Neovim's leader

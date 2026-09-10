@@ -131,8 +131,9 @@ bundled runtime, cache, and sessions after confirmation. See
 
 ## Getting started
 
-First launch offers an onboarding guide for editing mode, terminal capabilities,
-and basic actions. Reopen it with `:VideOnboarding` in Normal mode.
+First launch offers a simple guide to opening, editing, and saving files,
+with a choice of editing style and an easy-to-find close action. Reopen it with
+`:VideOnboarding` in Normal mode.
 
 | Action | Default shortcut |
 | --- | --- |
@@ -143,6 +144,7 @@ and basic actions. Reopen it with `:VideOnboarding` in Normal mode.
 | Create a file | `Ctrl+N` |
 | Save | `Ctrl+S` |
 | Find a file | `Ctrl+P` |
+| Search project text (ripgrep) | `Alt+G` |
 | Toggle Zen / previous mode | `F11` |
 
 To create a file, press **Ctrl+N**, then type (`i` first in Normal mode). On the
